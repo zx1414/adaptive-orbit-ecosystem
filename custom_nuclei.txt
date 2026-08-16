@@ -1,0 +1,8 @@
+# 手动注入核配置文件
+# 每行字段（空格分隔，共 22 个）：
+# x y energy affinity0 affinity1 affinity2 orbitRadius0 orbitRadius1 orbitRadius2
+# absorbPreference0 absorbPreference1 absorbPreference2 repelStrength0 repelStrength1 repelStrength2
+# attackRange attackStrength avoidRange avoidStrength maxSpeed energyThreshold mutationRate
+#
+# 示例：位于世界中心，orbitRadius 较高，可见其小球在较远轨道环绕。
+500.0 500.0 100.0 0.8 0.1 0.1 180.0 200.0 150.0 1.0 1.0 0.5 2.0 1.0 0.5 100.0 60.0 150.0 40.0 50.0 120.0 0.05

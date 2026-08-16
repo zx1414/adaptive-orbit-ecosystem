@@ -1,0 +1,10 @@
+build/
+*.o
+*.exe
+balls_*.csv
+nuclei_*.csv
+survivors.csv
+trend.csv
+trend_summary.csv
+output/
+__pycache__/

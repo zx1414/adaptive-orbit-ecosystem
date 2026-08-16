@@ -1,0 +1,99 @@
+# ============================================================
+# 自然环境配置文件（key = value，注释以 # 开头，空行忽略）
+# 用法：把本文件放在 simulator.exe 旁边（或当前目录），双击 exe 即自动读取；
+#       也可手动指定：./simulator --env env_config.txt
+# 优先级：默认值 < 本文件 < 显式给出的命令行参数
+# 范围参数写法：lo, hi （例如 30, 200）
+# ============================================================
+
+# ---- 世界与运行 ----
+width = 4000.0        # 世界宽度
+height = 2000.0       # 世界高度
+seed = 42             # 随机种子（相同种子结果可复现）
+balls = 200          # 初始自由小球数量
+nuclei = 10           # 初始随机核数量
+frames = 1000000000       # 总模拟帧数
+visualization = on    # 控制台可视化总开关：on/off
+clear_screen = on     # 每次渲染前清屏：on/off；黑屏时设 off
+grid_cols = 80        # 渲染字符网格列数
+grid_rows = 40        # 渲染字符网格行数
+lock_console = on     # 启动时锁定控制台窗口为合适大小
+pause_on_exit = on    # 结束后等待按键（双击运行时防止窗口闪退）
+render_interval = 3  # 渲染间隔帧数，0 关闭
+sample_interval = 0   # 场状态采样间隔帧数，0 关闭
+trend_interval = 100  # 核参数时间序列采样间隔帧数
+max_fps = 180           # 每秒模拟帧数上限；0 = 不限速（跑满 CPU）
+
+# ---- 环境与资源 ----
+max_nuclei = 0            # 环境承载力（核总数上限）；0 表示按世界面积自动计算
+territory_per_nucleus = 10000.0   # 承载力估算时每个核占用的世界面积
+absorb_radius = 30.0      # 核吸收小球的半径
+ball_spawn_probability = 0.1    # 每帧随机补充自由小球的概率
+base_ball_energy = 1.0    # 吸收单个小球获得的基础能量
+grid_cell_size = 60.0     # 空间哈希网格单元大小
+
+# ---- 小球动力学 ----
+ball_damping = 0.90                   # 小球速度阻尼
+radial_k = 0.03                       # 轨道径向弹簧系数
+tangential_k = 2.0                    # 切向（环绕）驱动系数
+near_repel_radius = 25.0              # 小球近核排斥触发半径
+ball_ball_repel_radius = 10.0         # 小球间短程排斥半径
+ball_ball_repel_k = 1.2               # 小球间排斥强度
+ball_same_owner_attract_radius = 40.0 # 同核小球吸引半径
+ball_same_owner_attract_k = 0.15      # 同核小球吸引强度
+ball_max_speed_shield = 25.0          # 护盾球速度上限
+ball_max_speed_worker = 50.0          # 资源球速度上限
+ball_max_speed_scout = 80.0           # 侦察球速度上限
+ball_vel_range = 2.0                  # 初始/补充小球速度随机范围（±该值）
+bounce_restitution = 0.8              # 边界反弹恢复系数
+follow_boost = 1.5                    # 跟随加速：归属球限速 = max(类型上限, 核速×该值)；0 关闭
+follow_coupling = 15.0                 # 跟随耦合：归属核轨道弹簧加强倍数（越大越甩不掉球，0 关闭）
+detach_radius = 400.0                 # 归属球距核超过该距离即脱附
+ball_loss_cost = 5.0                  # 核失去一个归属球（脱附/被抢）扣除的能量
+
+# ---- 核动力学 ----
+nucleus_damping = 0.85   # 核速度阻尼
+attack_k = 0.5           # 攻击追逐加速度系数
+avoid_k = 0.6            # 避让加速度系数
+combat_rate = 0.05       # 争斗能量转移速率
+influence_margin = 20.0  # 核力场查询半径的额外余量
+forage_k = 1.0           # 核朝小球觅食的加速度系数（0 关闭）
+forage_radius = 300.0    # 核觅食的小球查询半径
+wander_k = 2.0           # 核随机游走（探索）加速度系数（0 关闭）
+wander_turn_rate = 0.1    # 游走方向每帧最大转向角（弧度）；小=路径直，大=原地抖
+basal_cost = 0.01        # 基础代谢：每帧固定能量流逝（v=0 也不为 0）
+speed_cost_k = 0.00001    # 速度代价系数
+speed_cost_exponent = 2.0   # 速度代价指数（>1 超线性：能耗 ∝ 速度^指数）
+reproduction_cost_ratio = 0.5   # 繁殖代价：父核消耗 = 该比例 * 繁殖阈值
+child_energy_ratio = 0.5        # 子核初始能量 = 该比例 * 繁殖阈值
+nucleus_init_energy_ratio = 0.7 # 初始随机核能量 = 该比例 * 繁殖阈值
+reproduction_offset = 20.0      # 繁殖时子核位置随机偏移（±该值）
+nucleus_min_separation = 40.0    # 核最小间距：小于该距离施强斥力且跳过攻击
+nucleus_repel_k = 4.0            # 核贴脸斥力刚度（线性弹簧 F = k × 重叠量）
+newborn_grace_frames = 30        # 新核保护期帧数（期内不攻击、不被攻击）
+
+# ---- 遗传参数：随机初始化范围（lo, hi）----
+affinity_init = 0.1, 1.0
+orbit_radius_init = 30, 200
+absorb_preference_init = 0.5, 1.5
+repel_strength_init = 0.5, 3.0
+attack_range_init = 20, 200
+attack_strength_init = 10, 100
+avoid_range_init = 30, 300
+avoid_strength_init = 10, 80
+max_speed_init = 30, 100
+energy_threshold_init = 80, 200
+mutation_rate_init = 0.01, 0.2
+
+# ---- 遗传参数：变异裁剪范围（lo, hi）----
+affinity_clamp_min = 0.0001
+orbit_radius_clamp = 10, 300
+absorb_preference_clamp = 0.1, 3.0
+repel_strength_clamp = 0.1, 6.0
+attack_range_clamp = 5, 400
+attack_strength_clamp = 1, 300
+avoid_range_clamp = 10, 600
+avoid_strength_clamp = 1, 200
+max_speed_clamp = 5, 300
+energy_threshold_clamp = 20, 1000
+mutation_rate_clamp = 0.001, 0.5
