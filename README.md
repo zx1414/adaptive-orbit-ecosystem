@@ -121,13 +121,13 @@ $$\mathbf{F}_{\mathrm{follow}} = -a_t\, k_r\, c_f\, \bigl(r - R_t\bigr)\, \hat{\
 
 **小球间相互作用**（$d$ 为两球距离）：
 
-$$\mathbf{F}_{bb} = \begin{cases} +k_{\mathrm{rep}}\left(1-\tfrac{d}{d_{\mathrm{rep}}}\right)\hat{\mathbf{e}}, & d < d_{\mathrm{rep}}\\[2pt] -k_{\mathrm{attr}}\left(1-\tfrac{d}{d_{\mathrm{attr}}}\right)\hat{\mathbf{e}}, & d_{\mathrm{rep}} \le d < d_{\mathrm{attr}}\ \text{且同核}\end{cases}$$
+$$\mathbf{F}_{bb} = \begin{cases} +k_{\mathrm{rep}}\left(1-\tfrac{d}{d_{\mathrm{rep}}}\right)\hat{\mathbf{e}}, & d < d_{\mathrm{rep}}\\[2pt] -k_{\mathrm{attr}}\left(1-\tfrac{d}{d_{\mathrm{attr}}}\right)\hat{\mathbf{e}}, & d_{\mathrm{rep}} \le d < d_{\mathrm{attr}}\ \text{same owner}\end{cases}$$
 
 即：短程排斥 + 同核小球吸引（聚成球群）。
 
 **积分（半隐式欧拉 + 阻尼 + 限速）**：
 
-$$\mathbf{v}_b \leftarrow \lambda_b\bigl(\mathbf{v}_b + \mathbf{F}_{\mathrm{total}}\bigr), \qquad \lambda_b = 1 - \text{ball\_damping}$$
+$$\mathbf{v}_b \leftarrow \lambda_b\bigl(\mathbf{v}_b + \mathbf{F}_{\mathrm{total}}\bigr), \qquad \lambda_b = 1 - \text{ball damping}$$
 
 $$\mathbf{v}_b \leftarrow \min\Bigl(1, \tfrac{V_{\max}}{\|\mathbf{v}_b\|}\Bigr)\mathbf{v}_b, \qquad V_{\max} = \max\Bigl(v_t^{\max},\ c_{\mathrm{boost}}\cdot\|\mathbf{v}_{\mathrm{owner}}\|\Bigr)$$
 
@@ -141,7 +141,7 @@ $$\mathbf{x}_b \leftarrow \mathbf{x}_b + \mathbf{v}_b$$
 
 所有权 = 脱附半径内最近的存活核：
 
-$$\mathrm{owner}(b) = \begin{cases}\arg\min_n \|\mathbf{x}_b - \mathbf{x}_n\|, & \min_n \|\mathbf{x}_b - \mathbf{x}_n\| < r_{\mathrm{detach}}\\[2pt] -1\ (\text{自由}), & \text{否则}\end{cases}$$
+$$\mathrm{owner}(b) = \begin{cases}\arg\min_n \|\mathbf{x}_b - \mathbf{x}_n\|, & \min_n \|\mathbf{x}_b - \mathbf{x}_n\| < r_{\mathrm{detach}}\\[2pt] -1\ (\text{free}), & \text{otherwise}\end{cases}$$
 
 维护上一帧归属 $o^-$：若 $o^- \ge 0$ 且 $o^- \neq o$（脱附或被抢），原归属核扣除 $c_{\mathrm{loss}}$（=`ball_loss_cost`）能量；被吸收移除的球不触发惩罚。
 
@@ -157,7 +157,7 @@ $$\Delta E_n \;+=\; E_{\mathrm{base}}\cdot p_t$$
 
 对每对存活核 $(A,B)$，若 $d < \min(D_{\mathrm{attack}}^A, D_{\mathrm{attack}}^B)$、$d \ge D_{\mathrm{sep}}$、双方年龄均 $\ge g$（新生保护期），则攻击强度高者吸取低者：
 
-$$\Delta = \bigl(S_A - S_B\bigr)\, k_c, \qquad E_{\text{强}} \;+=\; \Delta, \quad E_{\text{弱}} \;-=\; \Delta$$
+$$\Delta = \bigl(S_A - S_B\bigr)\, k_c, \qquad E_{\text{strong}} \;+=\; \Delta, \quad E_{\text{weak}} \;-=\; \Delta$$
 
 其中 $S$=`attackStrength`、$k_c$=`combat_rate`。
 
@@ -195,7 +195,7 @@ $$\mathbf{v}_n \leftarrow \lambda_n\bigl(\mathbf{v}_n + \mathbf{F}_{\mathrm{tota
 
 每帧代谢消耗（基础项 + 速度的**超线性**项，$v=0$ 时消耗不为零）：
 
-$$L(v) = c_b + c_s\, v^{\beta}, \qquad \beta > 1\ (\text{默认 } 2)$$
+$$L(v) = c_b + c_s\, v^{\beta}, \qquad \beta > 1\ (\text{default } 2)$$
 
 繁殖：能量满足 $E_n \ge E_{\mathrm{th}}$ 时，
 
