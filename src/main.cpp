@@ -1,23 +1,32 @@
+#include <atomic>
 #include <chrono>
 #include <cstdlib>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <memory>
 #include <set>
 #include <string>
 #include <thread>
 
 #ifdef _WIN32
 #include <windows.h>
+#include <shellapi.h>
 #endif
 
 #include "ConfigLoader.h"
+#include "ConsoleRenderer.h"
 #include "EnvConfig.h"
-#include "Renderer.h"
+#include "IRenderer.h"
+#include "LauncherApp.h"
+#include "ParamSchema.h"
 #include "Sampler.h"
 #include "World.h"
+#include "mods_registry.h"
 
 namespace {
+constexpr const char* kVersion = "1.1.0";  // 发布版本（--version 查看）
+
 struct Args {
     double width = 2000.0;
     double height = 2000.0;
@@ -34,6 +43,13 @@ struct Args {
     int trendInterval = 100;
     bool visualization = true;
     bool clearScreen = true;
+    bool energySummary = false;  // 结束后打印能量收支摘要（调试）
+    bool serve = false;          // 启动器模式：内置 HTTP 服务器 + 浏览器可视化
+    bool console = false;        // 显式控制台模式（默认：无参数=启动器，带参数=控制台）
+    int port = 8765;             // 启动器模式监听端口（占用时自动 +1）
+    bool noBrowser = false;      // 启动器模式下不自动打开浏览器（测试/自动化用）
+    bool schemaCheck = false;    // 只做参数表键覆盖检查后退出
+    bool showVersion = false;    // 打印版本后退出
     std::string env;
     std::set<std::string> provided;  // 记录被显式指定的参数，用于覆盖配置文件
 };
@@ -67,6 +83,13 @@ Args parseArgs(int argc, char** argv) {
         else if (s == "--clear") { a.clearScreen = true; a.provided.insert(s); }
         else if (s == "--no-clear") { a.clearScreen = false; a.provided.insert(s); }
         else if (s == "--env") a.env = next(i, "--env");
+        else if (s == "--serve") a.serve = true;
+        else if (s == "--console") a.console = true;
+        else if (s == "--port") { a.port = std::stoi(next(i, "--port")); }
+        else if (s == "--no-browser") a.noBrowser = true;
+        else if (s == "--schema-check") a.schemaCheck = true;
+        else if (s == "--version") a.showVersion = true;
+        else if (s == "--energy-summary") a.energySummary = true;
         else std::cerr << "未知参数，已忽略: " << s << "\n";
     }
     return a;
@@ -86,6 +109,21 @@ std::string exeDir(const std::string& argv0) {
 }
 
 #ifdef _WIN32
+// 把控制台传入的 ANSI（GBK）参数字符串转成 UTF-8——仅用于打印；
+// 文件操作仍用原串（Windows 窄字符文件 API 按 ANSI 解释路径，两者各司其职）。
+std::string toUtf8ForDisplay(const std::string& s) {
+    if (s.empty()) return s;
+    int wlen = MultiByteToWideChar(CP_ACP, 0, s.c_str(), (int)s.size(), nullptr, 0);
+    if (wlen <= 0) return s;
+    std::wstring w((size_t)wlen, L'\0');
+    MultiByteToWideChar(CP_ACP, 0, s.c_str(), (int)s.size(), &w[0], wlen);
+    int ulen = WideCharToMultiByte(CP_UTF8, 0, w.c_str(), wlen, nullptr, 0, nullptr, nullptr);
+    if (ulen <= 0) return s;
+    std::string u((size_t)ulen, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, w.c_str(), wlen, &u[0], ulen, nullptr, nullptr);
+    return u;
+}
+
 // 锁定控制台窗口为 cols x rows（字符为单位）。
 void lockConsole(int cols, int rows) {
     HANDLE h = GetStdHandle(STD_OUTPUT_HANDLE);
@@ -111,6 +149,36 @@ int main(int argc, char** argv) {
 
     Args a = parseArgs(argc, argv);
 
+    if (a.showVersion) {
+        std::cout << "核-小球生态演化模拟器 v" << kVersion << "\n";
+        return 0;
+    }
+
+    // 参数表键覆盖检查（测试用）：schema 键集合必须覆盖 EnvConfig 的全部键。
+    if (a.schemaCheck) {
+        bool ok = ParamSchema::coverageCheck();
+        std::cout << (ok ? "schema 键覆盖检查通过\n" : "schema 键覆盖检查失败\n");
+        return ok ? 0 : 1;
+    }
+
+#ifdef _WIN32
+    // 模式决定：无参数双击 / --serve → 启动器；--console 或携带其它参数 → 控制台模式。
+    bool launcherMode = a.serve || (argc == 1 && !a.console);
+    if (launcherMode) {
+        // baseDir 统一转 UTF-8（argv 来自 GBK 控制台），文件操作层自行适配。
+        std::string dir = toUtf8ForDisplay(exeDir(argv[0]));
+        LauncherApp app(dir + "/web", dir, a.port);
+        int p = app.start(!a.noBrowser);
+        if (p < 0) {
+            std::cerr << "无法启动 HTTP 服务器（从端口 " << a.port << " 起均被占用）\n";
+            return 1;
+        }
+        app.runMainLoop();
+        app.stop();
+        return 0;
+    }
+#endif  // _WIN32
+
     WorldConfig cfg;  // 默认值
 
     // 1) 读取自然环境配置文件（覆盖默认值）。
@@ -126,10 +194,10 @@ int main(int argc, char** argv) {
     }
     if (!envPath.empty()) {
         if (!EnvConfig::load(envPath, cfg)) {
-            std::cerr << "无法打开环境配置文件: " << envPath << "\n";
+            std::cerr << "无法打开环境配置文件: " << toUtf8ForDisplay(envPath) << "\n";
             return 1;
         }
-        std::cout << "已加载环境配置: " << envPath << "\n";
+        std::cout << "已加载环境配置: " << toUtf8ForDisplay(envPath) << "\n";
     }
 
     // 2) 显式命令行参数覆盖配置文件
@@ -160,6 +228,10 @@ int main(int argc, char** argv) {
         }
     }
 
+    // Mod 接线：按 mods.list（有序 = 优先级）注册启用的 mod；默认不注册任何 mod。
+    ModAPI api{world, world.energy(), world.rng(), world.events()};
+    registerAllMods(api, readModsList(exeDir(argv[0]) + "/mods.list"));
+
     std::cout << "核-小球生态演化模拟器\n"
               << "世界 " << cfg.width << "x" << cfg.height
               << " | 小球 " << cfg.initialBalls
@@ -178,15 +250,16 @@ int main(int argc, char** argv) {
     }
 #endif
 
-    Renderer renderer(cfg.gridCols, cfg.gridRows);
-    renderer.setClear(cfg.clearScreen);
+    auto consoleRenderer = std::make_unique<ConsoleRenderer>(cfg.gridCols, cfg.gridRows);
+    consoleRenderer->setClear(cfg.clearScreen);
+    std::unique_ptr<IRenderer> renderer = std::move(consoleRenderer);
     Sampler sampler(".");
 
     // 趋势 CSV：按采样间隔追加每帧存活核的完整参数（时间 + 参数的时间序列）。
     bool trendEnabled = !a.trendCsv.empty();
     if (trendEnabled) {
         if (!sampler.openTrend(a.trendCsv)) {
-            std::cerr << "无法打开趋势 CSV: " << a.trendCsv << "\n";
+            std::cerr << "无法打开趋势 CSV: " << toUtf8ForDisplay(a.trendCsv) << "\n";
             return 1;
         }
     }
@@ -201,7 +274,7 @@ int main(int argc, char** argv) {
         bool done = world.finished();
 
         if (cfg.visualization && cfg.renderInterval > 0 && world.frame() % cfg.renderInterval == 0) {
-            renderer.render(world);
+            renderer->render(world);
         }
         if (cfg.sampleInterval > 0 && world.frame() % cfg.sampleInterval == 0) {
             sampler.sample(world);
@@ -234,7 +307,10 @@ int main(int argc, char** argv) {
     }
     if (trendEnabled) {
         sampler.closeTrend();
-        std::cout << "核参数时间序列已导出到 " << a.trendCsv << "\n";
+        std::cout << "核参数时间序列已导出到 " << toUtf8ForDisplay(a.trendCsv) << "\n";
+    }
+    if (a.energySummary) {
+        world.energy().printSummary(std::cout);
     }
 
     if (cfg.pauseOnExit) {

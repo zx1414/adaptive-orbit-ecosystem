@@ -11,24 +11,24 @@ width = 4000.0        # 世界宽度
 height = 2000.0       # 世界高度
 seed = 42             # 随机种子（相同种子结果可复现）
 balls = 200          # 初始自由小球数量
-nuclei = 10           # 初始随机核数量
+nuclei = 5           # 初始随机核数量
 frames = 1000000000       # 总模拟帧数
-visualization = on    # 控制台可视化总开关：on/off
+visualization = off    # 控制台可视化总开关：on/off
 clear_screen = on     # 每次渲染前清屏：on/off；黑屏时设 off
 grid_cols = 80        # 渲染字符网格列数
 grid_rows = 40        # 渲染字符网格行数
 lock_console = on     # 启动时锁定控制台窗口为合适大小
 pause_on_exit = on    # 结束后等待按键（双击运行时防止窗口闪退）
-render_interval = 3  # 渲染间隔帧数，0 关闭
+render_interval = 1  # 渲染间隔帧数，0 关闭
 sample_interval = 0   # 场状态采样间隔帧数，0 关闭
 trend_interval = 100  # 核参数时间序列采样间隔帧数
-max_fps = 180           # 每秒模拟帧数上限；0 = 不限速（跑满 CPU）
+max_fps = 30           # 每秒模拟帧数上限；0 = 不限速（跑满 CPU）
 
 # ---- 环境与资源 ----
 max_nuclei = 0            # 环境承载力（核总数上限）；0 表示按世界面积自动计算
 territory_per_nucleus = 10000.0   # 承载力估算时每个核占用的世界面积
 absorb_radius = 30.0      # 核吸收小球的半径
-ball_spawn_probability = 0.1    # 每帧随机补充自由小球的概率
+ball_spawn_probability = 0.3    # 每帧随机补充自由小球的概率
 base_ball_energy = 1.0    # 吸收单个小球获得的基础能量
 grid_cell_size = 60.0     # 空间哈希网格单元大小
 
@@ -36,7 +36,7 @@ grid_cell_size = 60.0     # 空间哈希网格单元大小
 ball_damping = 0.90                   # 小球速度阻尼
 radial_k = 0.03                       # 轨道径向弹簧系数
 tangential_k = 2.0                    # 切向（环绕）驱动系数
-near_repel_radius = 25.0              # 小球近核排斥触发半径
+near_repel_radius = 20.0              # 小球近核排斥触发半径
 ball_ball_repel_radius = 10.0         # 小球间短程排斥半径
 ball_ball_repel_k = 1.2               # 小球间排斥强度
 ball_same_owner_attract_radius = 40.0 # 同核小球吸引半径
@@ -64,7 +64,7 @@ wander_turn_rate = 0.1    # 游走方向每帧最大转向角（弧度）；小=
 basal_cost = 0.01        # 基础代谢：每帧固定能量流逝（v=0 也不为 0）
 speed_cost_k = 0.00001    # 速度代价系数
 speed_cost_exponent = 2.0   # 速度代价指数（>1 超线性：能耗 ∝ 速度^指数）
-reproduction_cost_ratio = 0.5   # 繁殖代价：父核消耗 = 该比例 * 繁殖阈值
+reproduction_cost_ratio = 0.6   # 繁殖代价：父核消耗 = 该比例 * 繁殖阈值
 child_energy_ratio = 0.5        # 子核初始能量 = 该比例 * 繁殖阈值
 nucleus_init_energy_ratio = 0.7 # 初始随机核能量 = 该比例 * 繁殖阈值
 reproduction_offset = 20.0      # 繁殖时子核位置随机偏移（±该值）
@@ -82,7 +82,7 @@ attack_strength_init = 10, 100
 avoid_range_init = 30, 300
 avoid_strength_init = 10, 80
 max_speed_init = 30, 100
-energy_threshold_init = 80, 200
+energy_threshold_init = 80, 150
 mutation_rate_init = 0.01, 0.2
 
 # ---- 遗传参数：变异裁剪范围（lo, hi）----

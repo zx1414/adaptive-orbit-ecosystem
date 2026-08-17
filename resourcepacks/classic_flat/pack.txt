@@ -1,0 +1,4 @@
+name = classic_flat
+desc = 经典扁平配色：按类型固定着色，深色背景
+version = 1.0
+author = 示例材质包

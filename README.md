@@ -25,28 +25,48 @@
 
 - 编译器：g++ / MSVC / clang++，需支持 C++17
 - 构建：CMake ≥ 3.14（或用 g++ 直接编译）
-- 仅标准库，零第三方依赖
+- 仅标准库，零第三方依赖（Windows 下 HTTP 服务器仅用系统自带 WinSock）
 
 ### 编译
 
 ```bash
-# 方式一：g++ 直接编译
-g++ -std=c++17 -O2 -o simulator src/*.cpp
+# 方式一：g++ 直接编译（Windows 需链接系统网络库）
+g++ -std=c++17 -O2 -Isrc -o simulator src/*.cpp mods/*.cpp -lws2_32 -lshell32
 
-# 方式二：CMake
-cmake -B build -DCMAKE_BUILD_TYPE=Release
+# 方式二：CMake（Windows 推荐 Ninja 生成器，见下方说明）
+cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ```
 
+> 注意：项目路径含中文时 MinGW Makefiles 生成器可能报路径错误，改用 Ninja
+> 或 MSVC 即可（CLion 自带 ninja）；纯命令行 g++ 直接编译不受影响。
+
 ### 运行
 
-把 `env_config.txt` 放在 `simulator.exe` 旁边，**双击 exe 即自动读取配置并开始运行**；也可在终端手动运行：
+**双击 `simulator.exe` 直接进入启动器**（浏览器界面）：快速设置 + 启动模拟、逐球实时可视化、参数调节、mod 管理。
 
 ```bash
-./simulator --env env_config.txt --seed 42 --balls 1000 --nuclei 20
+# 启动器模式（默认，无参数即进入；也可显式指定）
+./simulator [--serve] [--port 8765] [--no-browser]
+
+# 控制台模式（原行为：字符渲染 + 批处理）
+./simulator --console --env env_config.txt --seed 42 --balls 1000 --nuclei 20
 ```
 
 控制台画面：`n`/`N` = 核（`N` 表示能量已够繁殖），`s`/`w`/`c` = 护盾球/资源球/侦察球，底部为统计行。
+
+### 启动器（浏览器界面）
+
+双击 exe 自动打开浏览器（`http://127.0.0.1:<端口>/`，端口占用自动 +1），包含四部分：
+
+- **运行页**：快速设置（seed/balls/nuclei/frames）→ 启动模拟；逐球实时渲染（轨迹拖尾、缩放平移、暂停/单步/停止/速度、悬停查看核参数）；运行中可点「保存」把当前世界存为存档；结束后可返回菜单或退出。
+- **参数页**：约 80 个参数按 5 类分组编辑（含范围校验与恢复默认）；「保存为默认」写入 `env_config.txt`，命令行模式同样生效。
+- **Mod 页**：两个标签——「玩法包」：勾选启用、↑↓ 调整优先级（列表中越靠前越先执行）、自动冲突提示（影响相同机制的 mod 给出黄条警告）；「材质包」：勾选启用、↑↓ 调整堆叠顺序（后者覆盖前者），调色板即时生效。配置分别写入 `mods.list` / `packs.list`，下次启动模拟生效。
+- **存档页**：存档列表（缩略图/时间/帧号/种子/存活核），载入/重命名/删除；载入后停在暂停态，继续运行与不中断直跑**逐帧一致**（rng 状态完整往返）。存档文件在 exe 旁的 `saves/<存档名>/`（save.bin + meta.txt + thumb.png）。
+- 材质包制作：在 exe 旁的 `resourcepacks/<包名>/` 放 `pack.txt`（name/desc/version/author）与 `colors.txt`（`mode = type_color` + `background/ball_shield/ball_worker/ball_scout/free_ball/nucleus = r,g,b`）；内置示例 `resourcepacks/classic_flat/`。
+- 前端文件在 exe 旁的 `web/` 目录，开发期直接改文件刷新浏览器即可，无需重编译。
+
+后端接口：`GET /status`（菜单/运行/暂停/结束）、`GET /state`（逐球二进制快照）、`GET /schema`（参数表）、`GET /mods`（mod 清单 + 冲突警告）、`GET /saves`（存档列表）、`GET /packs`（材质包清单）、`POST /run`、`POST /save-config`、`POST /set-mods`、`POST /set-packs`、`POST /save`、`POST /load`、`POST /delete-save`、`POST /rename-save`、`POST /save-thumb`、`POST /control`。
 
 ---
 
@@ -68,6 +88,12 @@ cmake --build build
 | `--trend-interval <int>` | 100 | 时间序列采样间隔 |
 | `--max-nuclei <int>` | 自动 | 环境承载力；0 = 按面积自动 |
 | `--max-fps <float>` | 0 | 帧率上限；0 = 不限速 |
+| `--serve` | 无 | 显式进入启动器模式（无参数双击默认即为启动器） |
+| `--console` | 无 | 显式进入控制台模式（带任何参数时默认即为控制台） |
+| `--port <int>` | 8765 | 启动器模式监听端口（占用时自动 +1 重试） |
+| `--no-browser` | 无 | 启动器模式不自动打开浏览器（测试/自动化用） |
+| `--schema-check` | 无 | 参数表键覆盖检查（测试用），通过则退出码 0 |
+| `--energy-summary` | 无 | 结束后打印按原因汇总的能量收支（调试） |
 | `--env <file>` | 自动 | 环境配置文件 |
 | `--config <file>` | 无 | 注入自定义核（22 字段/行） |
 
@@ -294,12 +320,19 @@ src/
   Nucleus.h             核实体（含 age/wanderAngle 等状态）
   World.h/.cpp          核心模拟（动力学/能量/繁殖/进化）
   SpatialGrid.h/.cpp    空间哈希网格
-  Renderer.h/.cpp       控制台字符渲染
+  EventBus.h            类型化事件总线（mod 订阅入口）
+  EnergySystem.h/.cpp   能量唯一通道（按原因统计 + 统一死亡判定）
+  mod_api.h             ModAPI 接口定义
+  mods_registry.h/.cpp  mod 注册表（启用/添加 mod 的唯一地方）
+  IRenderer.h           渲染器抽象接口
+  ConsoleRenderer.h/.cpp 控制台字符渲染（IRenderer 默认实现）
   Sampler.h/.cpp        CSV 采样与趋势输出
   ConfigLoader.h/.cpp   自定义核配置文件解析
   EnvConfig.h/.cpp      环境配置文件解析
   main.cpp              参数解析与主循环
+mods/                   mod 实现（example_periodic_drain.cpp 示例）
 docs/PLAN.md            分阶段实施计划（Phase 0 / 0.5）
+docs/PLAN_LAUNCHER.md   启动器 + 可视化 Mod 方案（v2）
 scripts/                批量聚类与回归测试脚本
 env_config.txt          环境配置示例（全部参数 + 注释）
 custom_nuclei.txt       自定义核注入示例
@@ -311,4 +344,66 @@ CMakeLists.txt
 ## 许可
 
 本项目为课程/研究用途的演化模拟实验，代码无第三方依赖，可自由修改使用。
+
+---
+
+## Mod 开发者指南
+
+模拟核心通过 **ModAPI** 暴露四个接口，写一个 mod = 一个 `registerXxx(ModAPI&)` 函数 + 注册表一行。
+
+### ModAPI 四个字段
+
+| 字段 | 类型 | 约定 |
+|------|------|------|
+| `api.world` | `World&` | **只读状态**（balls/nuclei/frame/config 等）。要改能量必须走 `energy.apply`；不得直接修改位置/速度/遗传参数 |
+| `api.energy` | `EnergySystem&` | **写能量的唯一通道**：`apply(nucleus, delta, EnergyReason)`；死亡判定与收支统计在这里统一处理 |
+| `api.rng` | `std::mt19937&` | 种子驱动的确定性随机。**mod 内禁止使用未种子随机**（rand/random_device 等），否则破坏可复现性 |
+| `api.events` | `EventBus&` | 事件订阅：`subscribe(EventType, callback)`；回调按订阅顺序触发，回调内实体指针只在 emit 期间有效 |
+
+### 可用事件
+
+| 事件 | 时机 | 载荷 |
+|------|------|------|
+| `FRAME_START` | 每帧 `++frame` 之后 | `frame` |
+| `FRAME_END` | 每帧 step 末尾 | `frame` |
+| `BALL_ABSORBED` | 每帧吸收结束后聚合发射一次 | `value`=本帧吸收总能量，`extra`=吸收球数指针 |
+| `NUCLEUS_BORN` | 子核 push_back 之后 | `nucleus`=子核 |
+| `NUCLEUS_DIED` | `EnergySystem::apply` 内部 | `nucleus`=死亡核 |
+
+### 能量原因（EnergyReason）
+
+`ABSORB / COMBAT / METABOLISM / REPRODUCTION / AGING / CROWDING / PLAGUE / BALL_LOSS`（后两项供 mod 使用；结束后 `--energy-summary` 可打印按原因汇总的收支）。
+
+### 写一个 mod（完整示例）
+
+新建 `mods/example_periodic_drain.cpp`（见仓库同路径示例）：
+
+```cpp
+#include "mod_api.h"
+#include "World.h"
+
+// 示例 mod：每 100 帧对所有存活核扣 10 能量。
+void registerPeriodicDrain(ModAPI& api) {
+    api.events.subscribe(EventType::FRAME_END, [&](const SimEvent& e) {
+        if (e.frame > 0 && e.frame % 100 == 0) {
+            for (auto& n : api.world.nuclei()) {
+                if (n.alive) api.energy.apply(n, -10.0, EnergyReason::PLAGUE);
+            }
+        }
+    });
+}
+```
+
+### 如何启用 / 新建 mod
+
+1. 新建 `mods/xxx.cpp`，写 `void registerXxx(ModAPI&)`。
+2. 在 `src/mods_registry.h` 加声明 `void registerXxx(ModAPI&);`。
+3. 在 `src/mods_registry.cpp` 的 `registerAllMods` 里加一行 `registerXxx(api);`。
+4. 构建：CMakeLists.txt 的 `mods/` 显式文件列表加一行；或 g++ 直接编译 `g++ -std=c++17 -O2 -Isrc -o simulator src/*.cpp mods/*.cpp`。
+
+### 确定性注意事项
+
+- 所有随机一律走 `api.rng`（同种子逐字节可复现）；
+- 事件派发按注册顺序（注册顺序 = `registerAllMods` 中的行顺序），mod 的执行次序是确定的；
+- **不注册任何 mod 时，行为与旧版完全一致**（回归保障）。
 

@@ -1,0 +1,10 @@
+# 材质包调色板（行式 key = r,g,b）
+# mode = type_color  按类型固定颜色（护盾/资源/侦察）
+# mode 缺省 = owner_hue  内置的归属色相模式
+mode = type_color
+background = 8, 12, 20
+ball_shield = 100, 180, 255
+ball_worker = 120, 220, 130
+ball_scout = 255, 190, 90
+free_ball = 190, 190, 200
+nucleus = 255, 245, 220

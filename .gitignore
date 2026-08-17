@@ -8,3 +8,7 @@ trend.csv
 trend_summary.csv
 output/
 __pycache__/
+saves/
+mods.list
+packs.list
+release/

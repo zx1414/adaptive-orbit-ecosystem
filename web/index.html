@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>核-小球生态演化模拟器 · 启动器</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --border: #30363d; --text: #c9d1d9;
+    --accent: #58a6ff; --ok: #3fb950; --warn: #d29922; --err: #f85149;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(--text);
+               font-family: "Segoe UI", "Microsoft YaHei", sans-serif; font-size: 14px; }
+  #app { display: flex; flex-direction: column; height: 100%; }
+
+  /* 顶部 */
+  #topbar { display: flex; align-items: center; gap: 14px; padding: 8px 16px;
+            background: var(--panel); border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+  #topbar .title { font-weight: 700; font-size: 16px; color: #e6edf3; white-space: nowrap; }
+  #badge { font-size: 12px; padding: 3px 10px; border-radius: 12px; background: #21262d;
+           border: 1px solid var(--border); white-space: nowrap; }
+  #badge.menu { color: var(--text); }
+  #badge.running { color: var(--ok); border-color: var(--ok); }
+  #badge.paused { color: var(--warn); border-color: var(--warn); }
+  #badge.finished { color: var(--err); border-color: var(--err); }
+  #tabs { display: flex; gap: 4px; margin-left: 8px; }
+  #tabs button { background: transparent; border: 1px solid transparent; color: var(--text);
+                 padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 14px; }
+  #tabs button.active { background: #21262d; border-color: var(--border); color: #e6edf3; }
+  #tabs button:hover { background: #1c2128; }
+  .spacer { flex: 1; }
+
+  /* 主区 */
+  #main { flex: 1; overflow: hidden; position: relative; }
+  .page { position: absolute; inset: 0; display: none; overflow: auto; }
+  .page.active { display: flex; }
+
+  /* 运行页 */
+  #page-run { flex-direction: row; }
+  #sidebar { width: 260px; min-width: 260px; background: var(--panel); border-right: 1px solid var(--border);
+             display: flex; flex-direction: column; padding: 14px; gap: 12px; overflow-y: auto; }
+  #sidebar h3 { color: #e6edf3; font-size: 13px; margin-bottom: 4px; }
+  .field { display: flex; flex-direction: column; gap: 4px; }
+  .field label { font-size: 12px; color: var(--text); }
+  .field input, .field select { background: #0d1117; color: #e6edf3; border: 1px solid var(--border);
+                                border-radius: 6px; padding: 6px 8px; font-size: 13px; width: 100%; }
+  button { background: #21262d; color: var(--text); border: 1px solid var(--border);
+           border-radius: 6px; padding: 7px 14px; font-size: 13px; cursor: pointer; }
+  button:hover { background: #30363d; }
+  button:disabled { opacity: 0.45; cursor: default; }
+  button.primary { background: #1f6feb; border-color: #1f6feb; color: #fff; font-weight: 600; }
+  button.primary:hover { background: #2f81f7; }
+  #btn-start { font-size: 15px; padding: 10px; }
+  #stage { flex: 1; position: relative; background: #05070b; }
+  canvas { display: block; width: 100%; height: 100%; cursor: grab; }
+  canvas.dragging { cursor: grabbing; }
+  #controlbar { position: absolute; left: 12px; top: 12px; display: flex; gap: 8px; flex-wrap: wrap;
+                background: rgba(22,27,34,0.85); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
+  #hud { position: absolute; right: 12px; top: 12px; font-size: 12px; line-height: 1.8;
+          background: rgba(22,27,34,0.85); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; }
+  #hud b { color: #e6edf3; }
+  #legend { position: absolute; left: 12px; bottom: 12px; font-size: 12px; line-height: 1.7;
+            background: rgba(22,27,34,0.85); border: 1px solid var(--border); border-radius: 8px;
+            padding: 8px 12px; pointer-events: none; user-select: none; }
+  .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 5px; vertical-align: -1px; }
+  #tooltip { position: absolute; display: none; font-size: 12px; line-height: 1.6;
+             background: rgba(22,27,34,0.95); border: 1px solid var(--border); border-radius: 8px;
+             padding: 8px 12px; pointer-events: none; white-space: nowrap; z-index: 5; }
+  #overlay { position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
+             background: rgba(5,7,11,0.72); z-index: 10; }
+  #overlay.show { display: flex; }
+  #overlay .card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+                   padding: 30px 40px; text-align: center; max-width: 440px; }
+  #overlay h2 { font-size: 18px; margin-bottom: 10px; color: #e6edf3; }
+  #overlay p { font-size: 14px; color: var(--text); margin-bottom: 18px; line-height: 1.6; }
+  #overlay .row { display: flex; gap: 10px; justify-content: center; }
+
+  /* 参数页 */
+  #page-params { flex-direction: column; padding: 16px 20px; gap: 14px; }
+  #params-toolbar { display: flex; gap: 10px; align-items: center; position: sticky; top: 0;
+                    background: var(--bg); padding: 8px 0; z-index: 3; border-bottom: 1px solid var(--border); }
+  .pgroup { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+  .pgroup > .phead { padding: 10px 16px; font-weight: 600; color: #e6edf3; cursor: pointer;
+                     background: #1c2128; user-select: none; }
+  .pgroup .grouphint { padding: 6px 16px; font-size: 12px; color: #8b949e;
+                       border-bottom: 1px dashed #21262d; line-height: 1.6; }
+  .pgroup > .pbody { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 0; padding: 6px 12px 12px; }
+  .pitem { padding: 8px 6px; border-bottom: 1px dashed #21262d; display: flex; flex-direction: column; gap: 4px; }
+  .pitem .pk { font-size: 12px; color: var(--accent); font-family: Consolas, monospace; }
+  .pitem .pd { font-size: 11px; color: #8b949e; min-height: 15px; }
+  .pitem .prow { display: flex; gap: 6px; align-items: center; }
+  .pitem input[type=number], .pitem input[type=text] { background: #0d1117; color: #e6edf3;
+       border: 1px solid var(--border); border-radius: 6px; padding: 5px 8px; font-size: 13px; width: 100%; }
+  .pitem input.pair { width: 48%; }
+  .pitem input:invalid { border-color: var(--err); }
+  .pitem button.dflt { padding: 4px 8px; font-size: 12px; white-space: nowrap; }
+  .pitem input[type=checkbox] { width: auto; transform: scale(1.2); margin: 4px; }
+
+  /* Mod 页 */
+  #page-mods { flex-direction: column; padding: 16px 20px; gap: 14px; }
+  #subtab { display: flex; gap: 6px; }
+  #subtab button { background: transparent; border: 1px solid var(--border); color: var(--text);
+                   padding: 5px 14px; border-radius: 6px; cursor: pointer; }
+  #subtab button.active { background: #21262d; color: #e6edf3; }
+  #warnlist:empty { display: none; }
+  #warnlist { display: flex; flex-direction: column; gap: 6px; }
+  .warn { padding: 8px 12px; border-radius: 8px; font-size: 13px; border: 1px solid; }
+  .warn.warn { background: rgba(210,153,34,0.12); border-color: var(--warn); color: #e3b341; }
+  .warn.error { background: rgba(248,81,73,0.12); border-color: var(--err); color: #ff7b72; }
+  .moditem { display: flex; align-items: center; gap: 12px; background: var(--panel);
+             border: 1px solid var(--border); border-radius: 10px; padding: 12px 16px; }
+  .moditem .order { color: #8b949e; font-size: 12px; min-width: 34px; text-align: center; }
+  .moditem .minfo { flex: 1; }
+  .moditem .mname { font-weight: 600; color: #e6edf3; }
+  .moditem .mdesc { font-size: 12px; color: #8b949e; margin-top: 2px; }
+  .moditem .morder-btns { display: flex; flex-direction: column; gap: 4px; }
+  .moditem .morder-btns button { padding: 2px 8px; font-size: 12px; }
+  .moditem input[type=checkbox] { transform: scale(1.25); }
+  #mods-toolbar { display: flex; gap: 10px; align-items: center; position: sticky; top: 0;
+                  background: var(--bg); padding: 8px 0; z-index: 3; border-bottom: 1px solid var(--border); }
+  .hint { font-size: 12px; color: #8b949e; }
+
+  /* 材质包列表 */
+  .packitem { display: flex; align-items: center; gap: 12px; background: var(--panel);
+              border: 1px solid var(--border); border-radius: 10px; padding: 12px 16px; }
+  .packitem .order { color: #8b949e; font-size: 12px; min-width: 34px; text-align: center; }
+  .packitem .pinfo { flex: 1; }
+  .packitem .pname { font-weight: 600; color: #e6edf3; }
+  .packitem .pdesc { font-size: 12px; color: #8b949e; margin-top: 2px; }
+  .packitem .porder-btns { display: flex; flex-direction: column; gap: 4px; }
+  .packitem .porder-btns button { padding: 2px 8px; font-size: 12px; }
+  .packitem input[type=checkbox] { transform: scale(1.25); }
+
+  /* 存档页 */
+  #page-saves { flex-direction: column; padding: 16px 20px; gap: 14px; }
+  #saves-toolbar { display: flex; gap: 10px; align-items: center; position: sticky; top: 0;
+                   background: var(--bg); padding: 8px 0; z-index: 3; border-bottom: 1px solid var(--border); }
+  #saves-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
+  .savecard { background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+              padding: 12px; display: flex; gap: 12px; }
+  .savecard img { width: 132px; height: 74px; object-fit: cover; border-radius: 6px;
+                  background: #05070b; border: 1px solid var(--border); }
+  .savecard .noimg { width: 132px; height: 74px; border-radius: 6px; background: #05070b;
+                     border: 1px solid var(--border); display: flex; align-items: center;
+                     justify-content: center; color: #484f58; font-size: 12px; }
+  .savecard .sinfo { flex: 1; display: flex; flex-direction: column; gap: 3px; }
+  .savecard .sname { font-weight: 600; color: #e6edf3; font-size: 15px; }
+  .savecard .smeta { font-size: 12px; color: #8b949e; line-height: 1.6; }
+  .savecard .sbtns { display: flex; gap: 6px; margin-top: auto; flex-wrap: wrap; }
+  .savecard .sbtns button { padding: 4px 10px; font-size: 12px; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="topbar">
+    <span class="title">核-小球生态演化模拟器 <span style="color:#8b949e;font-size:12px">v1.1.0</span></span>
+    <span id="badge" class="menu">菜单</span>
+    <div id="tabs">
+      <button class="active" data-page="run">运行</button>
+      <button data-page="params">参数</button>
+      <button data-page="mods">Mod</button>
+      <button data-page="saves">存档</button>
+    </div>
+    <span class="spacer"></span>
+    <button id="btn-quit" title="退出程序（关闭模拟进程）">退出</button>
+  </div>
+  <div id="main">
+
+    <div id="page-run" class="page active">
+      <div id="sidebar">
+        <h3>快速设置</h3>
+        <div class="field"><label>随机种子 seed</label><input id="q-seed" type="number" value="42"></div>
+        <div class="field"><label>初始小球 balls</label><input id="q-balls" type="number" value="1000" min="0"></div>
+        <div class="field"><label>初始核 nuclei</label><input id="q-nuclei" type="number" value="20" min="1"></div>
+        <div class="field"><label>总帧数 frames</label><input id="q-frames" type="number" value="100000" min="1"></div>
+        <button id="btn-start" class="primary">▶ 启动模拟</button>
+        <div class="hint">完整参数（物理/遗传/代谢等）在「参数」页调节。</div>
+      </div>
+      <div id="stage">
+        <canvas id="view" width="1280" height="720"></canvas>
+        <div id="controlbar">
+          <button id="btn-pause" disabled>暂停</button>
+          <button id="btn-resume" disabled>继续</button>
+          <button id="btn-step" disabled>单步</button>
+          <button id="btn-stop" disabled>停止</button>
+          <button id="btn-save" disabled title="保存当前状态到「存档」页">保存</button>
+          <select id="speed" disabled>
+            <option value="0" selected>不限速</option>
+            <option value="60">60 FPS</option>
+            <option value="30">30 FPS</option>
+            <option value="15">15 FPS</option>
+            <option value="5">5 FPS</option>
+          </select>
+          <button id="btn-reset-view">重置视图</button>
+        </div>
+        <div id="hud">
+          帧 <b id="st-frame">0</b> · 核 <b id="st-nuclei">0</b> · 球 <b id="st-balls">0</b><br>
+          护盾 <b id="st-shield">0</b> · 资源 <b id="st-worker">0</b> · 侦察 <b id="st-scout">0</b><br>
+          平均能量 <b id="st-energy">0</b> · 渲染 <b id="st-fps">0</b> FPS
+        </div>
+        <div id="legend">
+          <span class="swatch" style="background:#9e9e9e"></span>自由球(灰白)
+          <span class="swatch" style="background:#7ec8f0"></span>有主球(色相=归属核,亮度=类型)
+          <span class="swatch" style="background:#ffffff;border:1px solid #888"></span>核(能量环)
+          <br>滚轮缩放 · 拖拽平移 · 悬停查看核参数
+        </div>
+        <div id="tooltip"></div>
+        <div id="overlay">
+          <div class="card">
+            <h2 id="overlay-title">模拟已结束</h2>
+            <p id="overlay-text"></p>
+            <div class="row">
+              <button id="btn-menu">返回菜单</button>
+              <button id="btn-exit">退出程序</button>
+              <button id="btn-reload" style="display:none">重试连接</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="page-params" class="page">
+      <div id="params-toolbar">
+        <button id="btn-save-config" class="primary">保存为默认</button>
+        <button id="btn-restore-defaults">恢复全部默认</button>
+        <span class="hint">「保存为默认」写入 env_config.txt,之后启动模拟与命令行模式都会使用。</span>
+      </div>
+      <div id="params-groups"></div>
+    </div>
+
+    <div id="page-mods" class="page">
+      <div id="mods-toolbar">
+        <button id="btn-save-mods" class="primary">保存 Mod 配置</button>
+        <button id="btn-save-packs" class="primary" style="display:none">保存材质包配置</button>
+        <span class="hint">玩法包:勾选 = 启用;列表中越靠前优先级越高(先执行)。保存后下次启动模拟生效。</span>
+      </div>
+      <div id="subtab">
+        <button id="subtab-mods" class="active">玩法包</button>
+        <button id="subtab-packs">材质包</button>
+      </div>
+      <div id="warnlist"></div>
+      <div id="mods-list"></div>
+      <div id="packs-list" style="display:none"></div>
+    </div>
+
+    <div id="page-saves" class="page">
+      <div id="saves-toolbar">
+        <button id="btn-refresh-saves">刷新</button>
+        <span class="hint">运行/暂停/结束时点「保存」按钮即可把当前世界存为存档;菜单状态可载入续玩。</span>
+      </div>
+      <div id="saves-list"></div>
+    </div>
+
+  </div>
+</div>
+<script src="app.js"></script>
+</body>
+</html>

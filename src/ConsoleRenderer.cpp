@@ -1,4 +1,4 @@
-#include "Renderer.h"
+#include "ConsoleRenderer.h"
 #include <algorithm>
 #include <climits>
 #include <cstdlib>
@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-Renderer::Renderer(int cols, int rows) : cols_(cols), rows_(rows) {}
+ConsoleRenderer::ConsoleRenderer(int cols, int rows) : cols_(cols), rows_(rows) {}
 
 namespace {
 void clearScreen() {
@@ -19,7 +19,7 @@ void clearScreen() {
 }
 }  // namespace
 
-void Renderer::render(const World& world) {
+void ConsoleRenderer::render(const World& world) {
     const auto& balls = world.balls();
     const auto& nuclei = world.nuclei();
     const WorldConfig& cfg = world.config();

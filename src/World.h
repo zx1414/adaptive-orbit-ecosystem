@@ -1,7 +1,12 @@
 #pragma once
+#include <istream>
+#include <ostream>
+#include <string>
 #include <vector>
 #include <random>
 #include "Ball.h"
+#include "EnergySystem.h"
+#include "EventBus.h"
 #include "Nucleus.h"
 #include "SpatialGrid.h"
 
@@ -96,13 +101,34 @@ public:
     const std::vector<Ball>& balls() const { return balls_; }
     const std::vector<Nucleus>& nuclei() const { return nuclei_; }
 
+    // 非 const 版本仅供 ModAPI 使用：mod 约定只通过 EnergySystem::apply 改能量，
+    // 不得直接修改其它字段（位置/速度/参数等）。
+    std::vector<Nucleus>& nuclei() { return nuclei_; }
+
     int aliveNucleusCount() const;
     double averageNucleusEnergy() const;
 
     bool finished() const { return finished_; }
     const char* finishReason() const { return finishReason_; }
 
+    // 提前终止（启动器"停止"按钮）：标记结束，原因可自定义。
+    void stopNow(const char* reason) {
+        if (!finished_) {
+            finished_ = true;
+            finishReason_ = reason;
+        }
+    }
+
+    // ---- 存档（Phase D）----
+    // 把完整世界状态（配置 + rng + 帧号 + 球 + 核）写入流；失败返回 false。
+    bool writeState(std::ostream& os) const;
+    // 从流恢复状态（配置键值按 ParamSchema 解析，未知键忽略以保持向前兼容）。
+    // 恢复后重建空间网格、finished 复位。失败时 err 给出原因。
+    bool readState(std::istream& is, std::string& err);
+
     std::mt19937& rng() { return rng_; }
+    EnergySystem& energy() { return energy_; }
+    EventBus& events() { return events_; }
 
 private:
     void buildGrid();
@@ -124,8 +150,12 @@ private:
     std::vector<Nucleus> nuclei_;
     SpatialGrid grid_;
     std::mt19937 rng_;
+    EventBus events_;              // 事件总线（mod 订阅入口）
+    EnergySystem energy_{events_}; // 能量唯一通道（依赖 events_，声明顺序不可换）
     int frame_ = 0;
     int nextNucleusId_ = 0;
+    double frameAbsorbEnergy_ = 0.0;  // 本帧吸收总能量（BALL_ABSORBED 聚合事件）
+    int frameAbsorbCount_ = 0;        // 本帧吸收小球数
     bool finished_ = false;
     const char* finishReason_ = "";
 };
