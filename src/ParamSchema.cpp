@@ -1,4 +1,5 @@
 #include "ParamSchema.h"
+#include <cassert>
 #include <cctype>
 #include <cstddef>
 #include <cstdio>
@@ -48,6 +49,8 @@ const std::vector<ParamDef>& buildTable() {
         DEF("grid_rows", GRP_WORLD, "控制台字符网格行数（画面高度，按字符计）", Int, gridRows, 10, 200),
         DEF("lock_console", GRP_WORLD, "启动时锁定控制台窗口为合适大小（字符网格 + 统计行）", Bool, lockConsole, 0, 1),
         DEF("pause_on_exit", GRP_WORLD, "控制台模拟结束后等待按键（双击运行时防止窗口闪退）", Bool, pauseOnExit, 0, 1),
+        DEF("cyano_render_links", GRP_WORLD, "控制台是否绘制蓝细菌节点间连线；默认开，画面更直观但更花", Bool, cyanoRenderLinks, 0, 1),
+        DEF("cyano_render_char", GRP_WORLD, "控制台蓝细菌字符：0='*' 1='o' 2='+'（避免与 n/N/s/w/c 冲突）", Int, cyanoRenderChar, 0, 2),
 
         DEF("max_nuclei", GRP_ENV, "环境承载力（核总数上限）；0 = 按面积自动估算。核数量受此约束，防止无限增长", Int, maxNuclei, 0, 100000),
         DEF("territory_per_nucleus", GRP_ENV, "承载力估算时每个核占用的面积；调小 = 同样的世界容纳更多核", Double, territoryPerNucleus, 100, 100000),
@@ -55,6 +58,45 @@ const std::vector<ParamDef>& buildTable() {
         DEF("ball_spawn_probability", GRP_ENV, "每帧随机补充自由小球的概率；调大食物更充裕、生态更富饶", Double, ballSpawnProbability, 0, 1),
         DEF("base_ball_energy", GRP_ENV, "吸收单个小球获得的基础能量；调大核积累能量更快、更容易繁殖", Double, baseBallEnergy, 0.01, 100),
         DEF("grid_cell_size", GRP_ENV, "空间哈希网格单元大小；影响查询性能，60 附近为宜（太小内存大、太大查询慢）", Double, gridCellSize, 10, 500),
+
+        // ---- 蓝细菌（环境与资源）----
+        DEF("cyano_nodes", GRP_ENV, "初始蓝细菌节点总数；0 = 关闭蓝细菌（退化为原核-小球模拟），调大生产者更多", Int, initialCyanoNodes, 0, 100000),
+        DEF("cyano_colonies", GRP_ENV, "初始聚落（菌落）数量；调大节点更分散、连接更稀疏", Int, cyanoColonies, 0, 1000),
+        DEF("cyano_initial_energy", GRP_ENV, "节点初始能量；调大开局更宽裕、更快繁殖产球", Double, cyanoInitialEnergy, 0, 1000),
+        DEF("cyano_link_distance", GRP_ENV, "节点自动连接距离；调大连接更密、传输更快", Double, cyanoLinkDistance, 1, 2000),
+        DEF("cyano_max_links", GRP_ENV, "每节点连接数上限；调大网络更连通但每节点维护开销更高", Int, cyanoMaxLinks, 0, 64),
+        DEF("cyano_link_check_interval", GRP_ENV, "连接维护间隔帧数；调大显著省 CPU，但网络响应变慢", Int, cyanoLinkCheckInterval, 1, 1000),
+        DEF("cyano_photosynthesis_rate", GRP_ENV, "光合速率；调大节点能量积累更快", Double, cyanoPhotosynthesisRate, 0, 10),
+        DEF("cyano_light_half_saturation", GRP_ENV, "光合半饱和光强；调大需要更强阳光才能接近满速", Double, cyanoLightHalfSaturation, 0, 100),
+        DEF("cyano_metabolism_rate", GRP_ENV, "节点每帧代谢消耗；调大节点易饿死", Double, cyanoMetabolismRate, 0, 10),
+        DEF("cyano_transfer_rate", GRP_ENV, "连接上能量传输速率；调大富节点更快补贴穷节点", Double, cyanoTransferRate, 0, 1),
+        DEF("cyano_transfer_deadband", GRP_ENV, "能量传输死区（差值不超过它就不传输）；调大节点间几乎不互助、菌落边缘更易饿死", Double, cyanoTransferDeadband, 0, 100),
+        DEF("cyano_ball_spawn_cost", GRP_ENV, "产出一个自由小球的能量成本；调大产球更贵", Double, cyanoBallSpawnCost, 0, 1000),
+        DEF("cyano_ball_spawn_probability", GRP_ENV, "每节点每帧产球概率；调大自由小球补给更快", Double, cyanoBallSpawnProbability, 0, 1),
+        DEF("cyano_reproduction_cost", GRP_ENV, "繁殖一个新节点的能量成本；调大扩张更慢", Double, cyanoReproductionCost, 0, 1000),
+        DEF("cyano_reproduction_probability", GRP_ENV, "每节点每帧繁殖概率；调大菌落扩张更快", Double, cyanoReproductionProbability, 0, 1),
+        DEF("cyano_reproduction_offset", GRP_ENV, "子节点相对父节点的散布距离上限；调大菌落更松散", Double, cyanoReproductionOffset, 0, 1000),
+        DEF("cyano_min_node_separation", GRP_ENV, "节点最小间距；小于该距离时繁殖被取消（防重叠）", Double, cyanoMinNodeSeparation, 0, 1000),
+        DEF("cyano_predation_radius", GRP_ENV, "核捕食蓝细菌节点的判定半径；0 = 禁捕食", Double, cyanoPredationRadius, 0, 1000),
+        DEF("cyano_conversion_mode", GRP_ENV, "转化率函数形态：0=常数 1=速度×加速度反比（取舍） 2=幂律 3=仅加速度", Int, cyanoConversionMode, 0, 3),
+        DEF("cyano_conversion_rate", GRP_ENV, "转化率基准系数；调大捕食收益更高", Double, cyanoConversionRate, 0, 100),
+        DEF("cyano_conversion_exponent", GRP_ENV, "模式 2 的幂指数；调大高速高机动核的收益差距更悬殊", Double, cyanoConversionExponent, 0, 5),
+        DEF("cyano_conversion_speed_ref", GRP_ENV, "速度归一化参考值；调大则同等速度被认为更慢、收益更低", Double, cyanoConversionSpeedRef, 1, 10000),
+        DEF("cyano_conversion_accel_ref", GRP_ENV, "加速度归一化参考值；调大则同等机动性被认为更迟钝", Double, cyanoConversionAccelRef, 0.01, 10000),
+        DEF("cyano_conversion_w_speed", GRP_ENV, "转化率中速度项权重；调大机动性对收益影响更强", Double, cyanoConversionWSpeed, 0, 10),
+        DEF("cyano_conversion_w_accel", GRP_ENV, "转化率中加速度项权重；调大加速度对收益影响更强", Double, cyanoConversionWAccel, 0, 10),
+        DEF("cyano_conversion_min_rate", GRP_ENV, "转化率下限；防止捕食收益被压到 0", Double, cyanoConversionMinRate, 0, 100),
+        DEF("cyano_conversion_max_rate", GRP_ENV, "转化率上限；防止捕食收益爆炸", Double, cyanoConversionMaxRate, 0, 1000),
+        DEF("cyano_hue_jitter", GRP_ENV, "子核色相随机幅度（度）；调大后代颜色差异更明显", Double, cyanoHueJitter, 0, 180),
+
+        // ---- 阳光（昼夜 + 垂直梯度 + 局部扰动）----
+        DEF("sun_base_level", GRP_ENV, "阳光基准强度；调大整体光照更充足、生产者更繁盛", Double, sunBaseLevel, 0, 100),
+        DEF("sun_day_amplitude", GRP_ENV, "昼夜波动幅度（0 = 无昼夜）；调大昼夜差异更剧烈", Double, sunDayAmplitude, 0, 10),
+        DEF("sun_day_period_frames", GRP_ENV, "昼夜周期帧数；调小昼夜交替更快（即阳光波动频率更高）", Double, sunDayPeriodFrames, 0, 1000000),
+        DEF("sun_vertical_gradient", GRP_ENV, "垂直光照梯度（0 = 无梯度，世界顶部更亮）；调大上下差异更明显", Double, sunVerticalGradient, 0, 1),
+        DEF("sun_noise_amplitude", GRP_ENV, "局部阳光扰动幅度；调大光照斑驳更明显", Double, sunNoiseAmplitude, 0, 100),
+        DEF("sun_noise_frequency", GRP_ENV, "局部扰动空间频率；调大光斑更细碎", Double, sunNoiseFrequency, 0, 10),
+        DEF("sun_noise_speed", GRP_ENV, "局部扰动时间漂移速度；调大光斑移动更快", Double, sunNoiseSpeed, 0, 10),
 
         DEF("ball_damping", GRP_BALL, "小球速度阻尼（每帧保留比例）；越小惯性越小、运动越'黏'", Double, ballDamping, 0.5, 1),
         DEF("radial_k", GRP_BALL, "轨道径向弹簧系数——偏离期望环绕半径时拉回的力度；调大球群轨道更紧、更规整", Double, radialK, 0, 1),
@@ -105,6 +147,12 @@ const std::vector<ParamDef>& buildTable() {
         DEF_RANGE("max_speed_init", GRP_GENE, "核最大速度初始化范围——影响追击/逃跑能力，快慢策略由此分化", maxSpeedInitMin, maxSpeedInitMax, 1, 2000),
         DEF_RANGE("energy_threshold_init", GRP_GENE, "繁殖阈值初始化范围——阈值越低越早繁殖、越高越稳（攒够再分家）", energyThresholdInitMin, energyThresholdInitMax, 1, 10000),
         DEF_RANGE("mutation_rate_init", GRP_GENE, "变异幅度初始化范围——调大进化更狂野、策略更多样（也更不稳定）", mutationRateInitMin, mutationRateInitMax, 0, 2),
+        // 【有意为之，不要"顺手修正"成 Pair】
+        // affinity_clamp_min 是**单个下限**，没有上限字段：亲和力变异后由
+        // NucleusParams::normalizeAffinity() 重新归一化到总和 1，因此语义上
+        // 只需要下限。若改成 DEF_RANGE（Pair），多出的上限字段会指向
+        // 紧邻的 orbitRadiusClampMin，**静默污染另一个参数**且很难排查。
+        // 本行必须保持手写（不能用 DEF_RANGE），offB 传 0 表示"无第二字段"。
         {"affinity_clamp_min", GRP_GENE, "亲和力变异裁剪下限（随后重新归一化）——防止变异把亲和力压到 0", ParamDef::Type::Double,
           offsetof(WorldConfig, ranges) + offsetof(ParamRanges, affinityClampMin), 0,
           0, 1, (double)kDefaults.ranges.affinityClampMin, 0.0},
@@ -118,6 +166,16 @@ const std::vector<ParamDef>& buildTable() {
         DEF_RANGE("max_speed_clamp", GRP_GENE, "核最大速度变异裁剪范围——进化中速度的极限", maxSpeedClampMin, maxSpeedClampMax, 1, 5000),
         DEF_RANGE("energy_threshold_clamp", GRP_GENE, "繁殖阈值变异裁剪范围——进化中繁殖策略的极限", energyThresholdClampMin, energyThresholdClampMax, 1, 100000),
         DEF_RANGE("mutation_rate_clamp", GRP_GENE, "变异幅度变异裁剪范围——进化中突变程度的极限（变异率本身也遗传）", mutationRateClampMin, mutationRateClampMax, 0, 2),
+
+        // ---- 蓝细菌与机动性遗传范围 ----
+        // 注意：不存在 accel_ratio_init / accel_ratio_clamp 这两个旧名。
+        // maxAccel 是**绝对最大加速度**（世界单位/帧²），不是 maxSpeed 的比值。
+        DEF_RANGE("cyano_preference_init", GRP_GENE, "捕食蓝细菌倾向初始化范围——0 = 完全不吃（验收 #9 语义）", cyanoPreferenceInitMin, cyanoPreferenceInitMax, 0, 1),
+        DEF_RANGE("cyano_digestion_init", GRP_GENE, "消化效率初始化范围——决定天生把节点能量转化成多少收益", cyanoDigestionInitMin, cyanoDigestionInitMax, 0, 1),
+        DEF_RANGE("max_accel_init", GRP_GENE, "最大加速度初始化范围（绝对量，世界单位/帧²）——与捕食转化率形成取舍", maxAccelInitMin, maxAccelInitMax, 0, 1000),
+        DEF_RANGE("cyano_preference_clamp", GRP_GENE, "捕食倾向变异裁剪范围——进化中捕食意愿的极限", cyanoPreferenceClampMin, cyanoPreferenceClampMax, 0, 1),
+        DEF_RANGE("cyano_digestion_clamp", GRP_GENE, "消化效率变异裁剪范围——进化中消化能力的极限", cyanoDigestionClampMin, cyanoDigestionClampMax, 0, 1),
+        DEF_RANGE("max_accel_clamp", GRP_GENE, "最大加速度变异裁剪范围——进化中机动性的极限", maxAccelClampMin, maxAccelClampMax, 0, 5000),
     };
     return table;
 }
@@ -135,7 +193,8 @@ double readDouble(const WorldConfig& cfg, const ParamDef& d, size_t off) {
             std::memcpy(&v, fieldPtr(cfg, off), sizeof(v));
             return (double)v;
         }
-        case ParamDef::Type::Double: {
+        case ParamDef::Type::Double:
+        case ParamDef::Type::Pair: {
             double v;
             std::memcpy(&v, fieldPtr(cfg, off), sizeof(v));
             return v;
@@ -145,21 +204,46 @@ double readDouble(const WorldConfig& cfg, const ParamDef& d, size_t off) {
             std::memcpy(&v, fieldPtr(cfg, off), sizeof(v));
             return v ? 1.0 : 0.0;
         }
-        default: return 0.0;
+        default:
+            // 新增枚举值却忘记在此处理：MSVC 对 enum class 的 /Wswitch 覆盖不可靠，
+            // 故显式断言，避免再次退化成"静默返回 0"。
+            assert(false && "ParamDef::Type 新增取值，但 readDouble 未处理该分支");
+            return 0.0;
     }
 }
 
 void writeDouble(WorldConfig& cfg, const ParamDef& d, size_t off, double v) {
-    if (d.type == ParamDef::Type::Int) {
-        int iv = (int)v;
-        std::memcpy(fieldPtr(cfg, off), &iv, sizeof(iv));
-    } else if (d.type == ParamDef::Type::Double) {
-        std::memcpy(fieldPtr(cfg, off), &v, sizeof(v));
-    } else if (d.type == ParamDef::Type::Bool) {
-        bool bv = v != 0.0;
-        std::memcpy(fieldPtr(cfg, off), &bv, sizeof(bv));
+    switch (d.type) {
+        case ParamDef::Type::Int: {
+            int iv = (int)v;
+            std::memcpy(fieldPtr(cfg, off), &iv, sizeof(iv));
+            break;
+        }
+        case ParamDef::Type::Double:
+        case ParamDef::Type::Pair: {
+            std::memcpy(fieldPtr(cfg, off), &v, sizeof(v));
+            break;
+        }
+        case ParamDef::Type::Bool: {
+            bool bv = v != 0.0;
+            std::memcpy(fieldPtr(cfg, off), &bv, sizeof(bv));
+            break;
+        }
+        default:
+            // 与 readDouble 对称：四种类型必须全部显式处理。
+            assert(false && "ParamDef::Type 新增取值，但 writeDouble 未处理该分支");
+            break;
     }
 }
+
+// 编译期守卫：ParamDef::Type 目前恰有 4 个取值，readDouble/writeDouble 的
+// switch 必须逐个显式覆盖。新增第 5 个取值而未补分支时，这里会在编译期报错
+//（再配合上面的 default: assert 在运行期兜底）。
+static_assert(static_cast<int>(ParamDef::Type::Int) == 0 &&
+                  static_cast<int>(ParamDef::Type::Double) == 1 &&
+                  static_cast<int>(ParamDef::Type::Bool) == 2 &&
+                  static_cast<int>(ParamDef::Type::Pair) == 3,
+              "ParamDef::Type 枚举取值数量/顺序变了：请同步 readDouble 与 writeDouble 的 switch 分支");
 
 std::string trim(const std::string& s) {
     size_t a = s.find_first_not_of(" \t\r\n");
@@ -218,6 +302,11 @@ bool ParamSchema::applyLine(WorldConfig& cfg, const std::string& key, const std:
             for (char& c : v) c = (char)std::tolower((unsigned char)c);
             writeDouble(cfg, *d, d->offA,
                         (v == "on" || v == "true" || v == "1" || v == "yes") ? 1.0 : 0.0);
+        } else if (d->type == ParamDef::Type::Int) {
+            // 用 stoi 而非 stod+(int)：与 EnvConfig 原有语义一致，
+            // 且溢出时 stoi 会抛 out_of_range（返回 false = 值解析失败），
+            // 而 stod 会把 "999999999999" 静默转成 1e12、(int) 强转是未定义行为。
+            writeDouble(cfg, *d, d->offA, (double)std::stoi(val));
         } else {
             writeDouble(cfg, *d, d->offA, std::stod(val));
         }
@@ -281,6 +370,29 @@ bool ParamSchema::coverageCheck() {
         "repel_strength_clamp", "attack_range_clamp", "attack_strength_clamp",
         "avoid_range_clamp", "avoid_strength_clamp", "max_speed_clamp",
         "energy_threshold_clamp", "mutation_rate_clamp",
+        // ---- 蓝细菌（环境与资源）----
+        "cyano_nodes", "cyano_colonies", "cyano_initial_energy",
+        "cyano_link_distance", "cyano_max_links", "cyano_link_check_interval",
+        "cyano_photosynthesis_rate", "cyano_light_half_saturation",
+        "cyano_metabolism_rate", "cyano_transfer_rate", "cyano_transfer_deadband",
+        "cyano_ball_spawn_cost", "cyano_ball_spawn_probability",
+        "cyano_reproduction_cost", "cyano_reproduction_probability",
+        "cyano_reproduction_offset", "cyano_min_node_separation",
+        "cyano_predation_radius",
+        "cyano_conversion_mode", "cyano_conversion_rate", "cyano_conversion_exponent",
+        "cyano_conversion_speed_ref", "cyano_conversion_accel_ref",
+        "cyano_conversion_w_speed", "cyano_conversion_w_accel",
+        "cyano_conversion_min_rate", "cyano_conversion_max_rate",
+        "cyano_hue_jitter",
+        // ---- 阳光 ----
+        "sun_base_level", "sun_day_amplitude", "sun_day_period_frames",
+        "sun_vertical_gradient", "sun_noise_amplitude", "sun_noise_frequency",
+        "sun_noise_speed",
+        // ---- 蓝细菌可视化 ----
+        "cyano_render_links", "cyano_render_char",
+        // ---- 遗传范围：蓝细菌与机动性 ----
+        "cyano_preference_init", "cyano_digestion_init", "max_accel_init",
+        "cyano_preference_clamp", "cyano_digestion_clamp", "max_accel_clamp",
     };
     bool ok = true;
     for (const char* k : envKeys) {

@@ -12,6 +12,7 @@ struct Nucleus {
     int age = 0;   // 存活帧数（每帧 +1，用于新生保护期等）
     double wanderAngle = 0.0;  // 随机游走方向（持久、缓慢转向，避免原地震颤）
     NucleusParams params;
+    double hue = 0.0;  // 0..360 视觉色相（遗传：子 = 父 + 小幅扰动）
 
     Nucleus() = default;
     Nucleus(const Vec2& p, double e, const NucleusParams& par)

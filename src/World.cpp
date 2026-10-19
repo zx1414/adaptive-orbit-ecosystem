@@ -22,15 +22,94 @@ double randRange(std::mt19937& rng, double lo, double hi) {
     std::uniform_real_distribution<double> d(lo, hi);
     return d(rng);
 }
+
+// WorldConfig（环境配置键） → CyanoParams（蓝细菌模块 POD）。
+CyanoParams makeCyanoParams(const WorldConfig& c) {
+    CyanoParams p;
+    p.photosynthesisRate = c.cyanoPhotosynthesisRate;
+    p.lightHalfSaturation = c.cyanoLightHalfSaturation;
+    p.metabolismRate = c.cyanoMetabolismRate;
+    p.linkDistance = c.cyanoLinkDistance;
+    p.maxLinksPerNode = c.cyanoMaxLinks;
+    p.linkCheckInterval = c.cyanoLinkCheckInterval;
+    p.transferRate = c.cyanoTransferRate;
+    p.transferDeadband = c.cyanoTransferDeadband;
+    p.ballSpawnCost = c.cyanoBallSpawnCost;
+    p.ballSpawnProbability = c.cyanoBallSpawnProbability;
+    p.reproductionCost = c.cyanoReproductionCost;
+    p.reproductionProbability = c.cyanoReproductionProbability;
+    p.reproductionOffset = c.cyanoReproductionOffset;
+    p.minNodeSeparation = c.cyanoMinNodeSeparation;
+    return p;
+}
+
+// WorldConfig（环境配置键） → SunParams（阳光模型 POD）。
+SunParams makeSunParams(const WorldConfig& c) {
+    SunParams s;
+    s.baseLevel = c.sunBaseLevel;
+    s.dayAmplitude = c.sunDayAmplitude;
+    s.dayPeriodFrames = c.sunDayPeriodFrames;
+    s.verticalGradient = c.sunVerticalGradient;
+    s.noiseAmplitude = c.sunNoiseAmplitude;
+    s.noiseFrequency = c.sunNoiseFrequency;
+    s.noiseSpeed = c.sunNoiseSpeed;
+    return s;
+}
+
+// WorldConfig（环境配置键） → CyanoConversion（捕食转化率 POD）。
+CyanoConversion makeCyanoConversion(const WorldConfig& c) {
+    CyanoConversion v;
+    v.mode = c.cyanoConversionMode;
+    v.rate = c.cyanoConversionRate;
+    v.exponent = c.cyanoConversionExponent;
+    v.speedRef = c.cyanoConversionSpeedRef;
+    v.accelRef = c.cyanoConversionAccelRef;
+    v.wSpeed = c.cyanoConversionWSpeed;
+    v.wAccel = c.cyanoConversionWAccel;
+    v.minRate = c.cyanoConversionMinRate;
+    v.maxRate = c.cyanoConversionMaxRate;
+    return v;
+}
 }  // namespace
 
 World::World(const WorldConfig& cfg)
-    : config_(cfg), grid_(cfg.width, cfg.height, cfg.gridCellSize), rng_(cfg.seed) {
+    : config_(cfg),
+      grid_(cfg.width, cfg.height, cfg.gridCellSize),
+      rng_(cfg.seed),
+      sun_(makeSunParams(cfg)),
+      // 蓝细菌在构造期构造：initialCyanoNodes<=0 时 initialize() 不被调用，
+      // 群落恒为空 → 后续每帧全链路零开销。
+      cyano_(cfg.width, cfg.height, makeCyanoParams(cfg)),
+      // 色相专用 RNG：与主 rng_ 完全隔离，色相随机绝不推进模拟随机流（验收 #13）。
+      hueRng_(static_cast<uint32_t>(cfg.seed) * 2654435761u + 1013904223u) {
     // 未显式指定承载力时，按世界面积估算一个合理上限，防止核种群无限增长。
     if (config_.maxNuclei <= 0) {
         config_.maxNuclei = std::max(1, (int)(config_.width * config_.height / config_.territoryPerNucleus));
         config_.maxNuclei = std::max(config_.maxNuclei, config_.initialNuclei);
     }
+    // 开启蓝细菌时立刻撒点；关闭时保持空群落（零开销短路）。
+    if (config_.initialCyanoNodes > 0) {
+        cyano_.initialize(rng_, config_.initialCyanoNodes, config_.cyanoColonies,
+                          config_.cyanoInitialEnergy);
+    }
+}
+
+double World::sunLevel() const {
+    // 世界中心处的阳光值（昼夜 + 垂直梯度 + 局部扰动的完整解），供快照/渲染显示。
+    return sunLevelAt(Vec2(config_.width * 0.5, config_.height * 0.5), frame_, sun_,
+                      config_.width, config_.height);
+}
+
+void World::addFreeBall(const Vec2& pos, const Vec2& vel, BallType type) {
+    // mod 产球的唯一入库通道：不归属任何核（ownerId=-1），
+    // 并同步 prevOwner_ 并行数组（与 balls_ 等长，错位会导致归属判定越界）。
+    Ball b;
+    b.pos = pos;
+    b.vel = vel;
+    b.type = type;
+    b.ownerId = -1;
+    balls_.push_back(b);
+    prevOwner_.push_back(-1);
 }
 
 void World::initialize() {
@@ -57,7 +136,7 @@ void World::initialize() {
     nuclei_.reserve((size_t)config_.initialNuclei);
     for (int i = 0; i < config_.initialNuclei; ++i) {
         Nucleus n;
-        n.params.randomize(rng_, config_.ranges);
+        n.params.randomize(rng_, config_.ranges, config_.initialCyanoNodes > 0);
         n.pos.x = randRange(rng_, 0.0, config_.width);
         n.pos.y = randRange(rng_, 0.0, config_.height);
         n.vel = Vec2(0.0, 0.0);
@@ -65,6 +144,11 @@ void World::initialize() {
         n.alive = true;
         n.id = nextNucleusId_++;
         n.wanderAngle = randRange(rng_, 0.0, TWO_PI);
+        // 色相只用 hueRng_：不推进主 rng_，保证开启/关闭可视化不改变模拟轨迹。
+        {
+            std::uniform_real_distribution<double> hueDist(0.0, 360.0);
+            n.hue = hueDist(hueRng_);
+        }
         nuclei_.push_back(n);
     }
 }
@@ -74,7 +158,45 @@ void World::addNucleus(const Vec2& pos, double energy, const NucleusParams& para
     n.alive = true;
     n.id = nextNucleusId_++;
     n.wanderAngle = randRange(rng_, 0.0, TWO_PI);
+    {
+        std::uniform_real_distribution<double> hueDist(0.0, 360.0);
+        n.hue = hueDist(hueRng_);
+    }
     nuclei_.push_back(n);
+}
+
+void World::updateCyanobacteria() {
+    // 关闭蓝细菌（initialCyanoNodes<=0 → 群落恒空）：**零调用**，
+    // 保住 Cyanobacteria::step() 的 rng 短路 → 关闭时与基线模拟完全一致（验收 #13）。
+    if (config_.initialCyanoNodes <= 0) return;
+
+    // 外部驱动点：mods/cyano_producer.cpp 订阅 CYANO_TICK 后在此接管。
+    // 必须放在这里——与内部驱动的调用位置、frame_ 取值、以及"早于 buildGrid()"
+    // 的时序完全一致，mod 驱动才会与内部驱动逐帧等价。
+    // 无监听者时 emit 为空操作，不影响默认路径。
+    if (cyanoExternalDriver_) {
+        SimEvent e;
+        e.type = EventType::CYANO_TICK;
+        e.frame = frame_;
+        events_.emit(e);
+        return;
+    }
+
+    if (cyano_.empty()) return;
+
+    static thread_local std::vector<CyanoBall> spawned;  // 复用缓冲，避免每帧分配
+    spawned.clear();
+    cyano_.step(rng_, frame_, sun_, spawned);
+    // 产出的自由小球：不归属任何核，追加进 balls_（prevOwner_ 同步维持并行数组）。
+    for (size_t i = 0; i < spawned.size(); ++i) {
+        Ball b;
+        b.pos = spawned[i].pos;
+        b.vel = spawned[i].vel;
+        b.type = spawned[i].type;
+        b.ownerId = -1;
+        balls_.push_back(b);
+        prevOwner_.push_back(-1);
+    }
 }
 
 void World::step() {
@@ -82,6 +204,9 @@ void World::step() {
     for (Nucleus& n : nuclei_) {
         if (n.alive) ++n.age;
     }
+    // 蓝细菌更新：插在 ++age 之后、buildGrid() 之前
+    // （本帧新产出的球在 buildGrid 时入网格，下一帧即可被吸收）。
+    updateCyanobacteria();
     buildGrid();
     updateBallDynamics();
     updateOwnership();
@@ -297,6 +422,51 @@ void World::absorbBalls() {
     const double r2 = config_.absorbRadius * config_.absorbRadius;
     frameAbsorbEnergy_ = 0.0;
     frameAbsorbCount_ = 0;
+    frameCyanoCount_ = 0;
+
+    // ---- 段 1：捕食蓝细菌节点（每核每帧最多吃 1 个）----
+    // 独立于下方小球循环，语义清晰：判定半径用 cyanoPredationRadius，
+    // 能量走 EnergyReason::CYANO_GAIN（与吃球的 ABSORB 分开统计）。
+    if (config_.initialCyanoNodes > 0 && !cyano_.empty()) {
+        const CyanoConversion conv = makeCyanoConversion(config_);
+        const double predR = config_.cyanoPredationRadius;
+        if (predR > 0.0) {
+            // 无堆分配的固定缓冲（热路径：每个核每帧一次查询）。
+            constexpr int kMaxNear = 8;
+            int idxBuf[kMaxNear];
+            double distBuf[kMaxNear];
+            for (size_t i = 0; i < nuclei_.size(); ++i) {
+                Nucleus& n = nuclei_[i];
+                if (!n.alive) continue;
+                // 偏好为最低值（0）→ 完全不捕食（验收 #9）。
+                if (!(n.params.cyanoPreference > 0.0)) continue;
+                const int found = cyano_.nodesNear(n.pos, predR, idxBuf, distBuf, kMaxNear);
+                if (found <= 0) continue;
+
+                // 取最近的一个节点吃掉。
+                int best = 0;
+                for (int k = 1; k < found; ++k) {
+                    if (distBuf[k] < distBuf[best]) best = k;
+                }
+                const uint32_t nodeIdx = static_cast<uint32_t>(idxBuf[best]);
+                const double rawEnergy = cyano_.consumeNode(nodeIdx);  // 只标死，同帧下标仍有效
+                if (rawEnergy <= 0.0) continue;
+
+                const double rate = cyanoConversionRate(
+                    conv, n.params.maxSpeed, n.params.maxAccel, n.params.cyanoDigestion);
+                // 转化率与"捕食意愿"共同决定实际获得的能量。
+                const double gain = rawEnergy * rate * n.params.cyanoPreference;
+                if (gain > 0.0) {
+                    energy_.apply(n, gain, EnergyReason::CYANO_GAIN);
+                    frameAbsorbEnergy_ += gain;
+                    frameAbsorbCount_++;
+                    frameCyanoCount_++;
+                }
+            }
+        }
+    }
+
+    // ---- 段 2：原有小球吸收循环（一字未改）----
     for (size_t i = 0; i < balls_.size(); ) {
         Ball& b = balls_[i];
         bool absorbed = false;
@@ -509,7 +679,8 @@ void World::reproduce() {
 
         Nucleus child = n;
         child.age = 0;  // 新生核从 0 岁开始（保护期）
-        child.params.mutate(rng_, n.params.mutationRate, config_.ranges);
+        child.params.mutate(rng_, n.params.mutationRate, config_.ranges,
+                            config_.initialCyanoNodes > 0);
         child.pos.x += randRange(rng_, -config_.reproductionOffset, config_.reproductionOffset);
         child.pos.y += randRange(rng_, -config_.reproductionOffset, config_.reproductionOffset);
         child.pos.x = std::clamp(child.pos.x, 0.0, config_.width);
@@ -518,6 +689,14 @@ void World::reproduce() {
         child.energy = threshold * config_.childEnergyRatio;  // 初始能量直接赋值（不触发死亡判定）
         child.alive = true;
         child.id = nextNucleusId_++;
+        // 色相遗传：父 + 小幅高斯扰动，环绕到 [0,360)。只用 hueRng_，不动主 rng_。
+        {
+            std::normal_distribution<double> jitter(0.0, config_.cyanoHueJitter);
+            double h = n.hue + jitter(hueRng_);
+            h = std::fmod(h, 360.0);
+            if (h < 0.0) h += 360.0;
+            child.hue = h;
+        }
         nuclei_.push_back(child);
         {
             SimEvent e;
@@ -683,6 +862,10 @@ bool World::writeState(std::ostream& os) const {
         wF64(os, n.params.maxSpeed);
         wF64(os, n.params.energyThreshold);
         wF64(os, n.params.mutationRate);
+        // ---- 蓝细菌相关遗传字段（存档版本 v1 内兼容追加）----
+        wF64(os, n.params.cyanoPreference);
+        wF64(os, n.params.cyanoDigestion);
+        wF64(os, n.params.maxAccel);
     }
     return os.good();
 }
@@ -761,6 +944,9 @@ bool World::readState(std::istream& is, std::string& err) {
             !rF64(is, n.params.avoidRange) || !rF64(is, n.params.avoidStrength) ||
             !rF64(is, n.params.maxSpeed) || !rF64(is, n.params.energyThreshold) ||
             !rF64(is, n.params.mutationRate)) return fail("核遗传参数不完整");
+        // ---- 蓝细菌相关遗传字段（存档版本 v1 内兼容追加）----
+        if (!rF64(is, n.params.cyanoPreference) || !rF64(is, n.params.cyanoDigestion) ||
+            !rF64(is, n.params.maxAccel)) return fail("核蓝细菌字段缺失");
     }
     frame_ = (int)frame64;
     nextNucleusId_ = (int)next64;

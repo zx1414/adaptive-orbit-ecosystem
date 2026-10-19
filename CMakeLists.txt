@@ -23,6 +23,8 @@ add_executable(simulator
   src/EventBus.h
   src/EnergySystem.cpp
   src/EnergySystem.h
+  src/Cyanobacteria.cpp
+  src/Cyanobacteria.h
   src/ParamSchema.cpp
   src/ParamSchema.h
   src/LauncherApp.cpp
@@ -38,6 +40,14 @@ add_executable(simulator
   src/mods_registry.h
   mods/example_periodic_drain.cpp  # 显式文件列表：新增 mod = 这里加一行
   mods/example_plague_strike.cpp
+  mods/ball_loss_relief.cpp
+  mods/rare_ball_subsidy.cpp
+  mods/niche_guild.cpp
+  mods/symbiosis_bond.cpp
+  mods/season_cycle.cpp
+  mods/energy_spill.cpp
+  mods/climate_event.cpp
+  mods/cyano_producer.cpp
   src/Vec2.h
   src/BallType.h
   src/Ball.h

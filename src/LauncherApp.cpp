@@ -134,6 +134,9 @@ LauncherApp::LauncherApp(std::string webRoot, std::string baseDir, int port)
         EnvConfig::load(WinFs::toAnsi(envPath), pendingCfg_);
         std::cout << "已加载环境配置: " << envPath << "\n";
     }
+    // 用 env_config.txt 的 max_fps 作为启动帧率上限（0 = 不限速）；后续由前端
+    // maxfps: 指令覆盖。缺省 WorldConfig::maxFps = 0.0，即无配置文件时限速。
+    maxFps_.store(pendingCfg_.maxFps);
     // mods.list：有序启用清单（顺序 = 优先级）。
     enabledMods_ = readModsList(WinFs::toAnsi(baseDir_ + "/mods.list"));
     if (!enabledMods_.empty()) {
@@ -369,7 +372,11 @@ void LauncherApp::onSaveConfig(const std::string& body) {
         ParamSchema::applyLine(pendingCfg_, kv.first, kv.second);
     }
     ParamSchema::writeEnvFile(baseDir_ + "/env_config.txt", pendingCfg_, params);
-    std::cout << "参数已保存为默认（env_config.txt）\n" << std::flush;
+    // 同步限速：参数页改 max_fps 后立即生效，无需重启或重新启动模拟。
+    // （否则 pendingCfg_.maxFps 更新了、env_config.txt 也写了，但正在跑的
+    //   模拟仍用旧的 maxFps_，出现"界面显示与实际运行不一致"。）
+    maxFps_.store(pendingCfg_.maxFps);
+    std::cout << "参数已保存为默认（env_config.txt）" << std::endl;
 }
 
 void LauncherApp::onSetMods(const std::string& body) {

@@ -13,7 +13,10 @@ enum class EventType {
     NUCLEUS_BORN,     // 子核诞生
     NUCLEUS_DIED,     // 核死亡（EnergySystem::apply 内部发射）
     NUCLEUS_REPRODUCED,  // 本阶段定义，暂不发射（预留给后续 mod）
-    PLAGUE_TICK       // 本阶段定义，暂不发射（预留给后续 mod）
+    PLAGUE_TICK,      // 本阶段定义，暂不发射（预留给后续 mod）
+    CYANO_TICK        // 蓝细菌群落驱动点：++age 之后、buildGrid() 之前，
+                      // 与 World::updateCyanobacteria() 原本的调用位置完全一致。
+                      // 无监听者时 emit 为空操作，行为与不加此事件时完全相同。
 };
 
 // 一次事件：携带相关实体指针与数值。
@@ -40,6 +43,6 @@ public:
     }
 
 private:
-    static constexpr int kTypeCount = 7;  // 与 EventType 枚举项数一致
+    static constexpr int kTypeCount = 8;  // 与 EventType 枚举项数一致
     std::vector<std::function<void(const SimEvent&)>> listeners_[kTypeCount];
 };

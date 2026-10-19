@@ -76,3 +76,107 @@ Compress-Archive -Path release\v1.1.0\* -DestinationPath release\自适应核生
 1. `src/main.cpp` 的 `kVersion`（`--version` 输出）；
 2. `web/index.html` 顶栏版本号；
 3. 本文档与 README 中的版本说明。
+
+---
+
+## 5. v2.0.0 发布记录
+
+发布日期：本轮。内容：**蓝细菌生产者 mod + 前端布局优化**。
+
+打包产物：`_agent\自适应核生态模拟器-v2.0.0.zip`（403 KB，解压即可用）。
+打包源目录：`_agent\release_v2\`。
+
+### 与 v1.1.0 的差异
+
+- 新增 mod `cyanobacteria`（实现 `mods/cyano_producer.cpp`）：
+  自养生产者群落，光合产能 / 连接网络能量流动 / 概率产球与繁殖 /
+  核捕食节点（转化率随机动性下降）。
+  **启用需两步**：配置 `cyano_nodes > 0`，且 exe 同目录 `mods.list` 含一行 `cyanobacteria`。
+- 前端：HUD 四分组（模拟 / 球型 / 能量 / 蓝细菌）、图例可折叠、窄屏防重叠。
+- 版本号三处已同步为 2.0.0。
+
+### 打包注意（已踩坑）
+
+- **包内不要放 `env_config.txt`**。仓库根的该文件含非默认值
+  （`ball_loss_cost = 1.5`，默认 5.0），会让模拟结果偏离基线，
+  导致与 v1.1.0 的逐字节回归失败。包内改用程序内建默认；
+  平衡配置以 `env_config_balanced.txt` 单独提供。
+- **`mods` 文件名不得与 `src` 同名**（Windows 大小写不敏感）：
+  `mods/cyanobacteria.cpp` 会覆盖 `src/Cyanobacteria.cpp` 的 obj，
+  造成一片 LNK2019。已改名为 `cyano_producer.cpp`。
+- 构建脚本 `_agent\integration\build.cmd` 已改为显式列出 mods 文件，
+  勿回退成 `mods\*.cpp` glob（会重新引入上述覆盖）。
+
+上传 Release 时描述可写：
+
+> v2.0.0：新增蓝细菌生产者 mod（光合产能 / 菌丝网络 / 核捕食的能量取舍），
+> 前端 HUD 分组与图例折叠优化。关闭蓝细菌时与 v1.1.0 行为逐字节一致。
+
+---
+
+## 6. v2.1.0 发布记录（前端缺陷修复 + UI 重做）
+
+发布日期：本轮。内容：**修复「只有核能显示」+ 前端 UI/交互重做 + 启动器内核版本对齐**。
+打包产物：`_agent\自适应核生态模拟器-v2.1.0.zip`；打包源目录：`_agent\release_v210\`；
+打包脚本：`_agent\qa\package_v210.ps1`（可重复执行）。
+
+### 6.1 修复：启用材质包后小球/蓝细菌全部隐身
+
+根因（详见 `_agent/qa/ROOT_CAUSE.md`）：`web/app.js` 的 `parseColors()` 从
+`resourcepacks/<包>/colors.txt` 解析出的键名是 **snake_case**（`ball_shield`、
+`free_ball`、`cyano_node`…），而 `applyPaletteToRenderer()` 读的是 **camelCase**
+（`p.ballShield`、`p.freeBall`…）。于是启用任意 `mode = type_color` 的材质包时
+`typeModeColors` 始终是 `[0,0,0]`，`stampBalls()` 把 `0`（alpha=0，全透明）写进像素缓冲
+→ 球 100% 隐身；核走 `ctx.arc/stroke` 直接绘制，所以「只有核还能看见」。
+单段键名（`background`、`nucleus`）两种写法同形，因此背景与核配色是生效的——
+「尺寸/背景生效、球色失效」正是这条根因的指纹。
+
+修复：新增 `pickArr(p, camel, snake)` 兼容层 + `clampByte` 越界夹取；两种键名都取；
+并加**两道兜底**：①`mode==='type_color'` 时若某类型色仍为 0，回落 `ownerColors` 第一组；
+②`stampBalls()` 里 `col === 0` 时回落 `freeColorWord`。任何路径都不会再写出透明球。
+
+> 回归教训：`node --check`、DOM id 审计、CSV 逐字节回归**都不经过「浏览器里真的画出来没有」**。
+> 前端改动必须用无头浏览器实拍验证。本轮建立的截图工具链：
+> `_agent/qa/shoot.ps1`（无头 Edge 截图）、`_agent/qa/replica.js`（按 app.js 数学离线重算像素）。
+
+### 6.2 修复：画布被拉伸（核画成椭圆）
+
+原先 canvas 位图固定 1280×720、CSS `width/height:100%` 铺满 stage，非 16:9 窗口下
+圆形的核被拉成椭圆。改为 `resizeCanvas()` 跟随 `#stage` 实际尺寸重建位图
+（等比、单边 ≤1600、总像素 ≤1.6M、幂等），`W/H/trail/buf` 改为可重建；
+宽高比与容器一致 ⇒ 核恒为正圆，指针映射公式不变仍然准确。
+
+### 6.3 UI 与操作便捷性
+
+- 暗色设计令牌统一；HUD 改 2×2 等宽卡片 + `tabular-nums`；控制条分「播放 / 数据 / 视图」三组；
+  `select#speed` 暗色化；tab 胶囊化；徽章语义色 + 状态圆点；`退出` 危险色。
+- 图例默认收起（`<details>`），展开含完整快捷键说明；快捷键拆固定两行避免孤字。
+- **侧栏可折叠**（`#btn-sidebar`，状态存 `localStorage`），折叠后 `resizeCanvas()` 立即放大画面。
+- **快捷键**：空格 暂停/继续 · N 单步 · S 保存 · R 重置视图 · Esc 返回菜单 · 1/2/3/4 切页 · +/− 缩放；
+  输入框/按钮聚焦时智能让行；三处可发现的提示（按钮 title、图例、侧栏）。
+- 双击画布重置视图；控制条 `− 倍率 +` 缩放控件；暂停角标；快速设置值记忆（`localStorage`）；
+  未启动空状态引导文案；窄屏（≤900px）HUD 单列紧凑模式。
+- 版本号两处同步为 **2.1.0**（`src/main.cpp` 的 `kVersion` + `web/index.html` 顶栏）。
+
+### 6.4 启动器内核对齐（重要）
+
+此前仓库根 `simulator.exe` 是旧的 **v1.1.0** 二进制（快照 v1，64B 头 / 28B 核记录），
+而 `web/app.js` 只接受快照 v2 —— 双击 `启动器.bat` 会调到它，结果是**画面全黑、连核都没有**。
+本轮已用 v2.1.0 构建覆盖根目录 exe，旧文件留档为 `simulator_v1.1.0_old.exe`。
+
+### 6.5 本轮回归证据
+
+- 构建：0 error / 39 warning（与 v2.0.0 基线同类，C4099×38 + C4996×1，无新增警告种类）。
+- `#13 关闭等价`：`balls_005000.csv` / `nuclei_005000.csv` / `survivors.csv`
+  与冻结基线**逐字节一致**（`E0EB7319…` / `BD13B8BE…` / `BD13B8BE…`）。
+- `--schema-check` 通过；`src/` 仅 `main.cpp` 的版本字符串改动（1 行）。
+- 前端：`node --check` exit 0；`_agent/qa/ui_check.js` 128 PASS、`fix_check.js` 56 PASS、
+  `struct_check.js` 7 PASS；无头 Edge 实拍覆盖 1400×900 / 1024×700 / 800×600、
+  菜单 / 运行 / 暂停 / 结束四态、图例展开、侧栏折叠、参数·Mod·存档页。截图存于 `_agent/qa/shot/`。
+
+### 6.6 打包注意（沿用 + 新增）
+
+- 包内仍**不放** `env_config.txt`（仓库根那份含 `ball_loss_cost = 1.5` 等非默认值）。
+- 包内**新增 `packs.list`**（默认 `big_beads`），装好即是最新配色；可在 Mod 页切换/关闭。
+- 包内不放 `survivors.csv`（测试残留）与 `mods.list`（蓝细菌默认关闭，需要时复制
+  `mods.list.example`）。

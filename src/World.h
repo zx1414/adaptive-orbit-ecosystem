@@ -5,6 +5,7 @@
 #include <vector>
 #include <random>
 #include "Ball.h"
+#include "Cyanobacteria.h"
 #include "EnergySystem.h"
 #include "EventBus.h"
 #include "Nucleus.h"
@@ -37,6 +38,49 @@ struct WorldConfig {
     double ballSpawnProbability = 0.01;   // 每帧随机补充自由小球的概率
     double baseBallEnergy = 1.0;          // 吸收单个小球的基础能量
     double gridCellSize = 60.0;           // 空间哈希网格单元大小
+
+    // ---- 蓝细菌（环境与资源）----
+    int    initialCyanoNodes = 0;                 // cyano_nodes          初始节点总数（0=关闭）
+    int    cyanoColonies = 4;                     // cyano_colonies       初始聚落数
+    double cyanoInitialEnergy = 10.0;             // cyano_initial_energy 节点初始能量
+    double cyanoLinkDistance = 80.0;              // cyano_link_distance  连接距离
+    int    cyanoMaxLinks = 6;                     // cyano_max_links      每节点连接上限
+    int    cyanoLinkCheckInterval = 4;            // cyano_link_check_interval 连接维护间隔帧
+    double cyanoPhotosynthesisRate = 0.02;        // cyano_photosynthesis_rate
+    double cyanoLightHalfSaturation = 0.5;        // cyano_light_half_saturation
+    double cyanoMetabolismRate = 0.005;           // cyano_metabolism_rate
+    double cyanoTransferRate = 0.05;              // cyano_transfer_rate
+    double cyanoTransferDeadband = 0.05;          // cyano_transfer_deadband  能量传输死区（差值不超过它就不传输，防高频微额往复）
+    double cyanoBallSpawnCost = 8.0;              // cyano_ball_spawn_cost
+    double cyanoBallSpawnProbability = 0.002;     // cyano_ball_spawn_probability
+    double cyanoReproductionCost = 20.0;          // cyano_reproduction_cost
+    double cyanoReproductionProbability = 0.001;  // cyano_reproduction_probability
+    double cyanoReproductionOffset = 25.0;        // cyano_reproduction_offset
+    double cyanoMinNodeSeparation = 15.0;         // cyano_min_node_separation
+    double cyanoPredationRadius = 30.0;           // cyano_predation_radius  核吞节点的判定半径
+    int    cyanoConversionMode = 1;               // cyano_conversion_mode   0=常数 1=速度×加速度反比 2=幂律 3=仅加速度
+    double cyanoConversionRate = 1.0;             // cyano_conversion_rate
+    double cyanoConversionExponent = 1.0;         // cyano_conversion_exponent
+    double cyanoConversionSpeedRef = 60.0;        // cyano_conversion_speed_ref
+    double cyanoConversionAccelRef = 3.0;         // cyano_conversion_accel_ref
+    double cyanoConversionWSpeed = 1.0;           // cyano_conversion_w_speed
+    double cyanoConversionWAccel = 1.0;           // cyano_conversion_w_accel
+    double cyanoConversionMinRate = 0.001;        // cyano_conversion_min_rate
+    double cyanoConversionMaxRate = 10.0;         // cyano_conversion_max_rate
+    double cyanoHueJitter = 8.0;                  // cyano_hue_jitter        子核色相变异幅度（度）
+
+    // ---- 阳光（昼夜 + 垂直梯度 + 局部扰动）----
+    double sunBaseLevel = 1.0;                    // sun_base_level
+    double sunDayAmplitude = 0.7;                 // sun_day_amplitude
+    double sunDayPeriodFrames = 1200.0;           // sun_day_period_frames
+    double sunVerticalGradient = 0.3;             // sun_vertical_gradient
+    double sunNoiseAmplitude = 0.1;               // sun_noise_amplitude
+    double sunNoiseFrequency = 0.01;              // sun_noise_frequency
+    double sunNoiseSpeed = 0.002;                 // sun_noise_speed
+
+    // ---- 蓝细菌可视化 ----
+    bool   cyanoRenderLinks = true;               // cyano_render_links  控制台是否画节点连线
+    int    cyanoRenderChar = 0;                   // cyano_render_char   0='*' 1='o' 2='+'（避免与 n/N/s/w/c 冲突）
 
     // ---- 小球动力学 -------
     double ballDamping = 0.90;                 // 小球速度阻尼
@@ -108,6 +152,31 @@ public:
     int aliveNucleusCount() const;
     double averageNucleusEnergy() const;
 
+    // ---- 蓝细菌（WS4 接线）----
+    // 生产者群落只读访问（WS6a 快照取数 / Sampler / 渲染使用）。
+    const Cyanobacteria& cyano() const { return cyano_; }
+    // 当前世界中心处的阳光值（>= 0），供快照头与渲染显示昼夜与光照强度。
+    double sunLevel() const;
+
+    // ---- 蓝细菌 mod 化接缝（供 mods/cyanobacteria.cpp 驱动）----
+    // 只暴露"驱动群落"所必需的最小能力，World 仍是状态与不变量的唯一持有者。
+    // 群落可写访问：mod 每帧驱动 step 用；关闭（initialCyanoNodes<=0）时群落恒空。
+    Cyanobacteria& cyanoMutable() { return cyano_; }
+    // 阳光参数：mod 调 Cyanobacteria::step() 时需要（构造期由 WorldConfig 派生、此后只读）。
+    const SunParams& sunParams() const { return sun_; }
+    // 添加自由小球：mod 唯一合法的加球通道。
+    // 必须经由 World 执行——prevOwner_ 是与 balls_ 并行的私有数组，
+    // mod 直接 push_back 会导致两数组错位。
+    void addFreeBall(const Vec2& pos, const Vec2& vel, BallType type);
+    // 蓝细菌是否启用：等价于配置 initialCyanoNodes > 0（构造期已知，不依赖运行时状态，
+    // 以保证"关闭时与基线逐字节一致"的确定性红线不被破坏）。
+    bool cyanoEnabled() const { return config_.initialCyanoNodes > 0; }
+    // 外部驱动开关：mods/cyanobacteria.cpp 注册时置 true，此后由 mod 在 FRAME_START
+    // 驱动群落，World::updateCyanobacteria() 主动让位，**避免双重驱动**。
+    // 默认 false = World 内部驱动（与 mod 化之前的行为完全一致）。
+    void setCyanoExternalDriver(bool v) { cyanoExternalDriver_ = v; }
+    bool cyanoExternalDriver() const { return cyanoExternalDriver_; }
+
     bool finished() const { return finished_; }
     const char* finishReason() const { return finishReason_; }
 
@@ -143,6 +212,7 @@ private:
     void checkFinish();
     void spawnFreeBall();
     double influenceRadius() const;
+    void updateCyanobacteria();   // 蓝细菌每帧更新 + 产出自由小球入库
 
     WorldConfig config_;
     std::vector<Ball> balls_;
@@ -150,12 +220,19 @@ private:
     std::vector<Nucleus> nuclei_;
     SpatialGrid grid_;
     std::mt19937 rng_;
+    SunParams sun_;        // 阳光模型参数（由 WorldConfig 派生，构造期固定）
+    Cyanobacteria cyano_;  // 生产者群落（值成员；initialCyanoNodes<=0 时恒为空 → 全链路零开销）
+    // 核色相专用 RNG：**绝不消耗主 rng_**，保证开启可视化不影响模拟可复现性。
+    std::mt19937 hueRng_;
     EventBus events_;              // 事件总线（mod 订阅入口）
     EnergySystem energy_{events_}; // 能量唯一通道（依赖 events_，声明顺序不可换）
     int frame_ = 0;
     int nextNucleusId_ = 0;
     double frameAbsorbEnergy_ = 0.0;  // 本帧吸收总能量（BALL_ABSORBED 聚合事件）
     int frameAbsorbCount_ = 0;        // 本帧吸收小球数
+    int frameCyanoCount_ = 0;         // 本帧捕食蓝细菌节点数
+    // mods/cyanobacteria.cpp 接管驱动时置 true（见 setCyanoExternalDriver）。
+    bool cyanoExternalDriver_ = false;
     bool finished_ = false;
     const char* finishReason_ = "";
 };

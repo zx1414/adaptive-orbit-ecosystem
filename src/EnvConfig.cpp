@@ -6,6 +6,34 @@
 #include <stdexcept>
 #include <string>
 
+#include "ParamSchema.h"
+
+// ---------------------------------------------------------------------------
+// 为什么 EnvConfig::load 不再手写逐键 if-else 链（**不要"顺手"改回去**）
+//
+// 原实现是一条 `if (key == "width") ... else if (key == "...") ...` 长链。
+// 单条 if-else 链的**块嵌套深度**受 MSVC 硬限制：实测 80 个分支可编译，
+// 122 个分支即 `fatal error C1061: 编译器限制: 块嵌套太深`（/W4 /O2 直接编译不过）。
+// 本轮新增 43 个配置键后越过了阈值。
+//
+// 现在改为委托 `ParamSchema::applyLine()` —— schema 表（ParamSchema.cpp 的
+// buildTable）已经是全部键的**单一事实来源**，且其解析语义与本文件原先的手写链
+// 完全一致（Int/Double/Bool/Pair、"lo, hi"、内联 # 注释、on/true/1/yes）。
+//
+// 收益：
+//   1. 根除 C1061（不再有深嵌套）；
+//   2. 新增配置键只需登记 2 处（schema 表 + env_config.txt），
+//      不再需要同步维护本文件的解析分支 —— 「漏登记导致运行时打未知键」这一
+//      整类 bug 从根上消失。
+//
+// 忠实保留原有**两条不同的诊断信息**（这是刻意的，别合并）：
+//   - 键不在 schema 表里 → "[EnvConfig] 未知键，已忽略"
+//   - 键在表里但值非法   → "[EnvConfig] 第 N 行值解析失败"
+// 做法：先用 `ParamSchema::find()` 判断键是否存在，再调用 `applyLine()` 写值。
+// 若直接 `if (!applyLine(...)) 打印未知键`，会把"值非法"误报成"未知键"
+// （applyLine 内部捕获异常并返回 false，无法区分这两种失败）。
+// ---------------------------------------------------------------------------
+
 namespace {
 std::string trim(const std::string& s) {
     size_t a = s.find_first_not_of(" \t\r\n");
@@ -33,114 +61,22 @@ bool EnvConfig::load(const std::string& path, WorldConfig& cfg) {
         }
         std::string key = trim(t.substr(0, eq));
         std::string val = trim(t.substr(eq + 1));
-        // 去掉内联注释
-        size_t hash = val.find('#');
-        if (hash != std::string::npos) val = trim(val.substr(0, hash));
 
-        auto toD = [&]() -> double { return std::stod(val); };
-        auto toI = [&]() -> int { return std::stoi(val); };
-        auto toB = [&]() -> bool {
-            std::string v = val;
-            for (char& c : v) c = (char)std::tolower((unsigned char)c);
-            return v == "on" || v == "true" || v == "1" || v == "yes";
-        };
-        // 解析 "lo, hi" 或单个值（单个值则 lo==hi）
-        auto toPair = [&](double& lo, double& hi) {
-            size_t comma = val.find(',');
-            if (comma == std::string::npos) {
-                lo = std::stod(val);
-                hi = lo;
-            } else {
-                lo = std::stod(trim(val.substr(0, comma)));
-                hi = std::stod(trim(val.substr(comma + 1)));
-            }
-        };
+        // 先判键是否存在：这样才能把"未知键"与"值非法"分成两条诊断。
+        // 传给 applyLine 的是**原始值**（含内联注释），由它自己去注释、去空白 trim，
+        // 与手写链的语义一致（本文件不再重复处理，避免双重去注释语义漂移）。
+        if (!ParamSchema::find(key)) {
+            std::cerr << "[EnvConfig] 未知键，已忽略: " << key << "\n";
+            continue;
+        }
         try {
-            if (key == "width") cfg.width = toD();
-            else if (key == "height") cfg.height = toD();
-            else if (key == "seed") cfg.seed = toI();
-            else if (key == "balls") cfg.initialBalls = toI();
-            else if (key == "nuclei") cfg.initialNuclei = toI();
-            else if (key == "frames") cfg.maxFrames = toI();
-            else if (key == "render_interval") cfg.renderInterval = toI();
-            else if (key == "sample_interval") cfg.sampleInterval = toI();
-            else if (key == "trend_interval") cfg.trendInterval = toI();
-            else if (key == "max_fps") cfg.maxFps = toD();
-            else if (key == "visualization") cfg.visualization = toB();
-            else if (key == "clear_screen") cfg.clearScreen = toB();
-            else if (key == "grid_cols") cfg.gridCols = toI();
-            else if (key == "grid_rows") cfg.gridRows = toI();
-            else if (key == "lock_console") cfg.lockConsole = toB();
-            else if (key == "pause_on_exit") cfg.pauseOnExit = toB();
-            else if (key == "max_nuclei") cfg.maxNuclei = toI();
-            else if (key == "territory_per_nucleus") cfg.territoryPerNucleus = toD();
-            else if (key == "absorb_radius") cfg.absorbRadius = toD();
-            else if (key == "ball_spawn_probability") cfg.ballSpawnProbability = toD();
-            else if (key == "base_ball_energy") cfg.baseBallEnergy = toD();
-            else if (key == "grid_cell_size") cfg.gridCellSize = toD();
-            else if (key == "ball_damping") cfg.ballDamping = toD();
-            else if (key == "radial_k") cfg.radialK = toD();
-            else if (key == "tangential_k") cfg.tangentialK = toD();
-            else if (key == "near_repel_radius") cfg.nearRepelRadius = toD();
-            else if (key == "ball_ball_repel_radius") cfg.ballBallRepelRadius = toD();
-            else if (key == "ball_ball_repel_k") cfg.ballBallRepelK = toD();
-            else if (key == "ball_same_owner_attract_radius") cfg.ballSameOwnerAttractRadius = toD();
-            else if (key == "ball_same_owner_attract_k") cfg.ballSameOwnerAttractK = toD();
-            else if (key == "nucleus_damping") cfg.nucleusDamping = toD();
-            else if (key == "attack_k") cfg.attackK = toD();
-            else if (key == "avoid_k") cfg.avoidK = toD();
-            else if (key == "combat_rate") cfg.combatRate = toD();
-            else if (key == "influence_margin") cfg.influenceMargin = toD();
-            else if (key == "forage_k") cfg.forageK = toD();
-            else if (key == "forage_radius") cfg.forageRadius = toD();
-            else if (key == "wander_k") cfg.wanderK = toD();
-            else if (key == "wander_turn_rate") cfg.wanderTurnRate = toD();
-            else if (key == "basal_cost") cfg.basalCost = toD();
-            else if (key == "speed_cost_k") cfg.speedCostK = toD();
-            else if (key == "speed_cost_exponent") cfg.speedCostExponent = toD();
-            else if (key == "reproduction_cost_ratio") cfg.reproductionCostRatio = toD();
-            else if (key == "child_energy_ratio") cfg.childEnergyRatio = toD();
-            else if (key == "nucleus_init_energy_ratio") cfg.nucleusInitEnergyRatio = toD();
-            else if (key == "reproduction_offset") cfg.reproductionOffset = toD();
-            else if (key == "nucleus_min_separation") cfg.nucleusMinSeparation = toD();
-            else if (key == "nucleus_repel_k") cfg.nucleusRepelK = toD();
-            else if (key == "newborn_grace_frames") cfg.newbornGraceFrames = toI();
-            else if (key == "ball_max_speed_shield") cfg.ballMaxSpeedShield = toD();
-            else if (key == "ball_max_speed_worker") cfg.ballMaxSpeedWorker = toD();
-            else if (key == "ball_max_speed_scout") cfg.ballMaxSpeedScout = toD();
-            else if (key == "ball_vel_range") cfg.ballVelRange = toD();
-            else if (key == "bounce_restitution") cfg.bounceRestitution = toD();
-            else if (key == "follow_boost") cfg.followBoost = toD();
-            else if (key == "follow_coupling") cfg.followCoupling = toD();
-            else if (key == "detach_radius") cfg.detachRadius = toD();
-            else if (key == "ball_loss_cost") cfg.ballLossCost = toD();
-            // 遗传参数：初始化范围（lo, hi）
-            else if (key == "affinity_init") toPair(cfg.ranges.affinityInitMin, cfg.ranges.affinityInitMax);
-            else if (key == "orbit_radius_init") toPair(cfg.ranges.orbitRadiusInitMin, cfg.ranges.orbitRadiusInitMax);
-            else if (key == "absorb_preference_init") toPair(cfg.ranges.absorbPreferenceInitMin, cfg.ranges.absorbPreferenceInitMax);
-            else if (key == "repel_strength_init") toPair(cfg.ranges.repelStrengthInitMin, cfg.ranges.repelStrengthInitMax);
-            else if (key == "attack_range_init") toPair(cfg.ranges.attackRangeInitMin, cfg.ranges.attackRangeInitMax);
-            else if (key == "attack_strength_init") toPair(cfg.ranges.attackStrengthInitMin, cfg.ranges.attackStrengthInitMax);
-            else if (key == "avoid_range_init") toPair(cfg.ranges.avoidRangeInitMin, cfg.ranges.avoidRangeInitMax);
-            else if (key == "avoid_strength_init") toPair(cfg.ranges.avoidStrengthInitMin, cfg.ranges.avoidStrengthInitMax);
-            else if (key == "max_speed_init") toPair(cfg.ranges.maxSpeedInitMin, cfg.ranges.maxSpeedInitMax);
-            else if (key == "energy_threshold_init") toPair(cfg.ranges.energyThresholdInitMin, cfg.ranges.energyThresholdInitMax);
-            else if (key == "mutation_rate_init") toPair(cfg.ranges.mutationRateInitMin, cfg.ranges.mutationRateInitMax);
-            // 遗传参数：变异裁剪范围（lo, hi）
-            else if (key == "affinity_clamp_min") cfg.ranges.affinityClampMin = toD();
-            else if (key == "orbit_radius_clamp") toPair(cfg.ranges.orbitRadiusClampMin, cfg.ranges.orbitRadiusClampMax);
-            else if (key == "absorb_preference_clamp") toPair(cfg.ranges.absorbPreferenceClampMin, cfg.ranges.absorbPreferenceClampMax);
-            else if (key == "repel_strength_clamp") toPair(cfg.ranges.repelStrengthClampMin, cfg.ranges.repelStrengthClampMax);
-            else if (key == "attack_range_clamp") toPair(cfg.ranges.attackRangeClampMin, cfg.ranges.attackRangeClampMax);
-            else if (key == "attack_strength_clamp") toPair(cfg.ranges.attackStrengthClampMin, cfg.ranges.attackStrengthClampMax);
-            else if (key == "avoid_range_clamp") toPair(cfg.ranges.avoidRangeClampMin, cfg.ranges.avoidRangeClampMax);
-            else if (key == "avoid_strength_clamp") toPair(cfg.ranges.avoidStrengthClampMin, cfg.ranges.avoidStrengthClampMax);
-            else if (key == "max_speed_clamp") toPair(cfg.ranges.maxSpeedClampMin, cfg.ranges.maxSpeedClampMax);
-            else if (key == "energy_threshold_clamp") toPair(cfg.ranges.energyThresholdClampMin, cfg.ranges.energyThresholdClampMax);
-            else if (key == "mutation_rate_clamp") toPair(cfg.ranges.mutationRateClampMin, cfg.ranges.mutationRateClampMax);
-            else std::cerr << "[EnvConfig] 未知键，已忽略: " << key << "\n";
+            if (!ParamSchema::applyLine(cfg, key, val)) {
+                std::cerr << "[EnvConfig] 第 " << lineNo << " 行值解析失败: "
+                          << key << " = " << val << "\n";
+            }
         } catch (const std::exception&) {
-            std::cerr << "[EnvConfig] 第 " << lineNo << " 行值解析失败: " << key << " = " << val << "\n";
+            std::cerr << "[EnvConfig] 第 " << lineNo << " 行值解析失败: "
+                      << key << " = " << val << "\n";
         }
     }
     return true;

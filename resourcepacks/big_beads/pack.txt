@@ -1,0 +1,4 @@
+name = big_beads
+desc = 大珠子：小球加大并按类型区分尺寸，核缩小、颜色随谱系遗传
+version = 1.0
+author = 内置

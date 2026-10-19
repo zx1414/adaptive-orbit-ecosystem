@@ -5,213 +5,473 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>核-小球生态演化模拟器 · 启动器</title>
 <style>
+  /* ---------- 设计令牌 ---------- */
   :root {
-    --bg: #0d1117; --panel: #161b22; --border: #30363d; --text: #c9d1d9;
-    --accent: #58a6ff; --ok: #3fb950; --warn: #d29922; --err: #f85149;
+    --bg: #0b0f14; --panel: #141a22; --panel2: #1a222c; --line: #242d3a; --line2: #303a48;
+    --border: #30363d;                    /* 旧令牌保留：部分规则仍引用 */
+    --text: #c9d1d9; --text2: #e6edf3; --muted: #8b949e;
+    --accent: #58a6ff; --accent2: #79c0ff;
+    --ok: #3fb950; --warn: #d29922; --err: #f85149;
+    --shadow: 0 6px 22px rgba(0, 0, 0, .38);
+    --ring: 0 0 0 3px rgba(88, 166, 255, .22);
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(--text);
                font-family: "Segoe UI", "Microsoft YaHei", sans-serif; font-size: 14px; }
   #app { display: flex; flex-direction: column; height: 100%; }
 
-  /* 顶部 */
-  #topbar { display: flex; align-items: center; gap: 14px; padding: 8px 16px;
-            background: var(--panel); border-bottom: 1px solid var(--border); flex-wrap: wrap; }
-  #topbar .title { font-weight: 700; font-size: 16px; color: #e6edf3; white-space: nowrap; }
-  #badge { font-size: 12px; padding: 3px 10px; border-radius: 12px; background: #21262d;
-           border: 1px solid var(--border); white-space: nowrap; }
-  #badge.menu { color: var(--text); }
-  #badge.running { color: var(--ok); border-color: var(--ok); }
-  #badge.paused { color: var(--warn); border-color: var(--warn); }
-  #badge.finished { color: var(--err); border-color: var(--err); }
-  #tabs { display: flex; gap: 4px; margin-left: 8px; }
-  #tabs button { background: transparent; border: 1px solid transparent; color: var(--text);
-                 padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 14px; }
-  #tabs button.active { background: #21262d; border-color: var(--border); color: #e6edf3; }
-  #tabs button:hover { background: #1c2128; }
+  /* ---------- 控件基座 ---------- */
+  button {
+    background: #1b232d; color: var(--text); border: 1px solid var(--line2);
+    border-radius: 7px; padding: 6px 12px; font-size: 13px; cursor: pointer; white-space: nowrap;
+    transition: background .13s, border-color .13s, color .13s, box-shadow .13s, transform .06s;
+  }
+  button:hover:not(:disabled) { background: #242e3a; border-color: #3d4757; color: var(--text2); }
+  button:active:not(:disabled) { transform: translateY(1px); }        /* 按下位移 1px，给物理反馈 */
+  button:focus-visible { outline: none; box-shadow: var(--ring); border-color: var(--accent); }
+  /* 禁用态：不用「半透明」糊弄，改成实心暗底 + 弱文字 + 禁止光标，一眼看出不可点 */
+  button:disabled { background: #12181f; border-color: #1d242d; color: #525d6b;
+                    cursor: not-allowed; box-shadow: none; }
+  button.primary { background: linear-gradient(180deg, #2f81f7, #1d6feb); border-color: #1f6feb;
+                   color: #fff; font-weight: 600; box-shadow: 0 2px 10px rgba(31, 111, 235, .30); }
+  button.primary:hover:not(:disabled) { background: linear-gradient(180deg, #4a94f8, #2a7bf0); }
+  button.primary:disabled { background: #12181f; border-color: #1d242d; color: #525d6b;
+                            box-shadow: none; }
+  button.icon { min-width: 30px; padding: 6px 9px; font-size: 14px; line-height: 1; }
+  button.danger:hover:not(:disabled) { background: rgba(248, 81, 73, .14); border-color: var(--err);
+                                       color: #ff7b72; }
+  input, select {
+    background: #0d1117; color: var(--text2); border: 1px solid var(--line2);
+    border-radius: 6px; padding: 6px 8px; font-size: 13px; font-family: inherit;
+    transition: border-color .13s, box-shadow .13s;
+  }
+  input:focus, select:focus { outline: none; border-color: var(--accent); box-shadow: var(--ring); }
+  select { appearance: none; -webkit-appearance: none; padding-right: 26px; cursor: pointer;
+           background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path d='M1 1l4 4 4-4' fill='none' stroke='%238b949e' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+           background-repeat: no-repeat; background-position: right 8px center; }
+  select:disabled, input:disabled { background: #12181f; color: #525d6b; border-color: #1d242d;
+                                    cursor: not-allowed; }
+  .hint { font-size: 12px; color: var(--muted); line-height: 1.6; }
+  .kbd { display: inline-block; padding: 0 5px; border: 1px solid var(--line2);
+         border-bottom-width: 2px; border-radius: 4px; background: #0d1117; color: var(--text);
+         font-family: Consolas, monospace; font-size: 10px; line-height: 15px; vertical-align: 1px; }
+
+  /* ---------- 顶栏 ---------- */
+  #topbar { display: flex; align-items: center; gap: 12px; padding: 9px 16px; flex-wrap: wrap;
+            background: linear-gradient(180deg, #161d26, #121821);
+            border-bottom: 1px solid var(--line); position: relative; z-index: 20; }
+  #topbar .title { font-weight: 700; font-size: 16px; color: var(--text2); white-space: nowrap;
+                   letter-spacing: .3px; display: flex; align-items: baseline; gap: 6px; }
+  #topbar .title .ver { font-size: 11px; font-weight: 400; color: var(--muted);
+                        letter-spacing: .5px; }
+  /* 状态徽章：小圆点 + 语义色（JS 直接设置 className = 状态名） */
+  #badge { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; padding: 3px 10px;
+           border-radius: 999px; background: #0f141b; border: 1px solid var(--line2);
+           white-space: nowrap; color: var(--muted); }
+  #badge::before { content: ""; width: 7px; height: 7px; border-radius: 50%;
+                   background: currentColor; box-shadow: 0 0 6px currentColor; }
+  #badge.menu { color: #8b949e; }
+  #badge.running { color: var(--ok); border-color: rgba(63, 185, 80, .45);
+                   background: rgba(63, 185, 80, .08); }
+  #badge.paused { color: var(--warn); border-color: rgba(210, 153, 34, .45);
+                  background: rgba(210, 153, 34, .08); }
+  #badge.finished { color: var(--err); border-color: rgba(248, 81, 73, .45);
+                    background: rgba(248, 81, 73, .08); }
+  #tabs { display: flex; gap: 2px; margin-left: 4px; padding: 3px;
+          background: #0f141b; border: 1px solid var(--line2); border-radius: 8px; }
+  #tabs button { background: transparent; border: 1px solid transparent; color: var(--muted);
+                 padding: 5px 13px; border-radius: 6px; font-size: 13px; }
+  #tabs button:hover:not(:disabled) { background: #1a222c; color: var(--text); }
+  #tabs button.active { background: rgba(31, 111, 235, .12); border-color: rgba(31, 111, 235, .40);
+                        color: var(--accent2); box-shadow: inset 0 -2px 0 var(--accent); }
   .spacer { flex: 1; }
 
-  /* 主区 */
+  /* ---------- 主区 ---------- */
   #main { flex: 1; overflow: hidden; position: relative; }
   .page { position: absolute; inset: 0; display: none; overflow: auto; }
   .page.active { display: flex; }
 
-  /* 运行页 */
+  /* ---------- 运行页 ---------- */
   #page-run { flex-direction: row; }
-  #sidebar { width: 260px; min-width: 260px; background: var(--panel); border-right: 1px solid var(--border);
-             display: flex; flex-direction: column; padding: 14px; gap: 12px; overflow-y: auto; }
-  #sidebar h3 { color: #e6edf3; font-size: 13px; margin-bottom: 4px; }
+  #sidebar { width: 260px; min-width: 260px; background: var(--panel);
+             border-right: 1px solid var(--line); display: flex; flex-direction: column;
+             padding: 14px; gap: 12px; overflow-y: auto; }
+  #sidebar h3 { font-size: 11px; letter-spacing: 1.4px; text-transform: uppercase;
+                color: var(--muted); display: flex; align-items: center; gap: 6px; }
+  #sidebar h3::before { content: ""; width: 3px; height: 12px; border-radius: 2px;
+                        background: var(--accent); opacity: .85; }
+  .qcard { background: #121821; border: 1px solid var(--line2); border-radius: 10px;
+           padding: 12px; display: flex; flex-direction: column; gap: 10px; }
   .field { display: flex; flex-direction: column; gap: 4px; }
-  .field label { font-size: 12px; color: var(--text); }
-  .field input, .field select { background: #0d1117; color: #e6edf3; border: 1px solid var(--border);
-                                border-radius: 6px; padding: 6px 8px; font-size: 13px; width: 100%; }
-  button { background: #21262d; color: var(--text); border: 1px solid var(--border);
-           border-radius: 6px; padding: 7px 14px; font-size: 13px; cursor: pointer; }
-  button:hover { background: #30363d; }
-  button:disabled { opacity: 0.45; cursor: default; }
-  button.primary { background: #1f6feb; border-color: #1f6feb; color: #fff; font-weight: 600; }
-  button.primary:hover { background: #2f81f7; }
-  #btn-start { font-size: 15px; padding: 10px; }
-  #stage { flex: 1; position: relative; background: #05070b; }
-  canvas { display: block; width: 100%; height: 100%; cursor: grab; }
+  .field label { font-size: 12px; color: var(--muted); }
+  .field input { width: 100%; font-variant-numeric: tabular-nums; }
+  #btn-start { width: 100%; padding: 11px; font-size: 14px; letter-spacing: .5px; }
+  #sidebar .sidehint { font-size: 11px; color: #6e7681; line-height: 1.65; }
+  #sidebar .sidehint .kbd { font-size: 9px; line-height: 13px; }
+
+  /* 画布区：canvas 位图尺寸由 app.js 的 resizeCanvas 跟随本容器，CSS 只负责铺满 */
+  #stage { flex: 1; position: relative; background: #05070b; overflow: hidden; }
+  canvas { display: block; width: 100%; height: 100%; cursor: grab; background: #05070b; }
   canvas.dragging { cursor: grabbing; }
-  #controlbar { position: absolute; left: 12px; top: 12px; display: flex; gap: 8px; flex-wrap: wrap;
-                background: rgba(22,27,34,0.85); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
-  #hud { position: absolute; right: 12px; top: 12px; font-size: 12px; line-height: 1.8;
-          background: rgba(22,27,34,0.85); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; }
-  #hud b { color: #e6edf3; }
-  #legend { position: absolute; left: 12px; bottom: 12px; font-size: 12px; line-height: 1.7;
-            background: rgba(22,27,34,0.85); border: 1px solid var(--border); border-radius: 8px;
-            padding: 8px 12px; pointer-events: none; user-select: none; }
-  .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 5px; vertical-align: -1px; }
-  #tooltip { position: absolute; display: none; font-size: 12px; line-height: 1.6;
-             background: rgba(22,27,34,0.95); border: 1px solid var(--border); border-radius: 8px;
-             padding: 8px 12px; pointer-events: none; white-space: nowrap; z-index: 5; }
+
+  /* 侧栏折叠：只留画布。宽度变化后 app.js 会 resizeCanvas() 重建位图 */
+  body.sidebar-collapsed #sidebar { display: none; }
+  #btn-sidebar.active { background: rgba(31, 111, 235, .16); border-color: rgba(31, 111, 235, .45);
+                        color: var(--accent2); }
+
+  /* 未启动空状态：居中、低对比、不接收指针事件（menu 之外由 JS 淡出） */
+  .stage-empty { position: absolute; inset: 0; z-index: 4; display: flex; flex-direction: column;
+                 align-items: center; justify-content: center; gap: 10px; text-align: center;
+                 pointer-events: none; opacity: 0; transition: opacity .25s ease; padding: 0 24px; }
+  .stage-empty.show { opacity: 1; }
+  .stage-empty .se-main { font-size: 16px; color: #8b949e; letter-spacing: .5px; }
+  .stage-empty .se-sub { font-size: 12px; color: #525d6b; line-height: 1.7; }
+  /* 侧栏折叠时启动按钮不可见：换成「先展开侧栏」的引导文案，避免指向不存在的按钮 */
+  .stage-empty .se-when-closed { display: none; }
+  body.sidebar-collapsed .stage-empty .se-when-open { display: none; }
+  body.sidebar-collapsed .stage-empty .se-when-closed { display: block; }
+
+  /* 控制条：三组（播放 / 数据 / 视图）用细竖线分隔，避免一排按钮糊在一起 */
+  #controlbar { position: absolute; left: 12px; top: 12px; z-index: 6;
+                display: flex; align-items: center; gap: 7px; flex-wrap: wrap;
+                background: rgba(20, 26, 34, .88); border: 1px solid var(--line2);
+                border-radius: 10px; padding: 7px 9px; box-shadow: var(--shadow);
+                backdrop-filter: blur(8px); }
+  .cgroup { display: flex; align-items: center; gap: 6px; flex-wrap: nowrap; }
+  .csep { width: 1px; height: 20px; flex: 0 0 auto; margin: 0 2px;
+          background: linear-gradient(180deg, transparent, var(--line2), transparent); }
+  #speed { padding: 5px 26px 5px 9px; font-size: 12px; }
+  #st-zoom { min-width: 46px; text-align: center; color: var(--text2); font-weight: 600;
+             font-size: 12px; font-variant-numeric: tabular-nums; user-select: none; }
+
+  /* HUD：2×2 等宽卡片；每行「标签 …… 数值」右对齐，数字等宽防跳动 */
+  #hud { position: absolute; right: 12px; top: 12px; z-index: 6; font-size: 12px;
+         display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px;
+         width: min(400px, calc(100% - 24px)); pointer-events: none; user-select: none; }
+  #hud .hgroup { min-width: 0; padding: 7px 10px 8px; border-radius: 10px;
+                 background: rgba(20, 26, 34, .84); border: 1px solid var(--line2);
+                 backdrop-filter: blur(8px); box-shadow: 0 4px 14px rgba(0, 0, 0, .25); }
+  #hud .hlabel { display: flex; align-items: center; gap: 5px; margin-bottom: 4px;
+                 font-size: 10px; letter-spacing: 1.5px; color: var(--muted); }
+  #hud .hlabel::before { content: ""; width: 5px; height: 5px; border-radius: 50%;
+                         background: var(--accent); opacity: .8; }
+  #hud .hitems { display: flex; flex-direction: column; gap: 1px; }
+  #hud .hitems span { display: flex; justify-content: space-between; gap: 12px;
+                      line-height: 1.55; min-width: 0; color: var(--muted);
+                      white-space: nowrap; overflow: hidden; }
+  #hud b { color: var(--text2); font-weight: 600; font-variant-numeric: tabular-nums;
+           letter-spacing: .2px; }
+
+  /* 图例：默认收起（不挡画面），summary 上的「?」提示可展开；展开时浮在画布之上 */
+  #legend { position: absolute; left: 12px; bottom: 12px; z-index: 6;
+            font-size: 12px; line-height: 1.55; background: rgba(20, 26, 34, .88);
+            border: 1px solid var(--line2); border-radius: 10px; padding: 6px 10px;
+            pointer-events: none; user-select: none; box-shadow: var(--shadow);
+            max-width: min(490px, calc(100% - 24px)); backdrop-filter: blur(8px); }
+  #legend summary { list-style: none; cursor: pointer; pointer-events: auto;
+                    display: flex; align-items: center; gap: 7px;
+                    font-weight: 600; color: var(--text2); }
+  #legend summary::-webkit-details-marker { display: none; }
+  /* 「?」小圆点：让用户知道这里可以点开看说明 */
+  #legend summary::before { content: "?"; display: inline-flex; align-items: center;
+                            justify-content: center; width: 14px; height: 14px;
+                            border-radius: 50%; border: 1px solid var(--muted);
+                            color: var(--muted); font-size: 10px; font-weight: 700;
+                            line-height: 1; }
+  #legend summary::after { content: "▾"; margin-left: auto; font-size: 10px; color: var(--muted); }
+  #legend:not([open]) summary::after { content: "▸"; }
+  #legend .lgrid { display: grid; grid-template-columns: repeat(2, minmax(0, max-content));
+                   column-gap: 16px; row-gap: 3px; margin-top: 7px; padding-top: 7px;
+                   border-top: 1px dashed var(--line); }
+  #legend .lrow { min-width: 0; white-space: normal; }
+  #legend .lrow.full { grid-column: 1 / -1; }
+  #legend .lnote, #legend .lhint { color: var(--muted); }
+  #legend .lhint { margin-top: 1px; padding-top: 5px; border-top: 1px dashed var(--line); }
+  /* 连续两条提示行（快捷键拆行）只在第一条上方画分隔线，避免双线 */
+  #legend .lhint + .lhint { border-top: 0; padding-top: 0; }
+  .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 50%;
+            margin-right: 5px; vertical-align: -1px; }
+
+  /* 暂停角标：底部居中、很淡、不接收指针事件，只看状态不挡操作 */
+  #paused-badge { position: absolute; left: 50%; bottom: 16px; z-index: 5;
+                  transform: translate(-50%, 8px); opacity: 0; pointer-events: none;
+                  transition: opacity .18s ease, transform .18s ease;
+                  padding: 5px 14px; border-radius: 999px; font-size: 12px;
+                  letter-spacing: .5px; color: #e3b341;
+                  background: rgba(210, 153, 34, .13); border: 1px solid rgba(210, 153, 34, .5);
+                  backdrop-filter: blur(6px); }
+  #paused-badge.show { opacity: 1; transform: translate(-50%, 0); }
+
+  #tooltip { position: absolute; display: none; font-size: 12px; line-height: 1.65; z-index: 7;
+             background: rgba(20, 26, 34, .96); border: 1px solid var(--line2);
+             border-radius: 8px; padding: 8px 12px; pointer-events: none; white-space: nowrap;
+             box-shadow: var(--shadow); }
   #overlay { position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
-             background: rgba(5,7,11,0.72); z-index: 10; }
+             background: rgba(5, 7, 11, .74); z-index: 10; backdrop-filter: blur(2px); }
   #overlay.show { display: flex; }
-  #overlay .card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
-                   padding: 30px 40px; text-align: center; max-width: 440px; }
-  #overlay h2 { font-size: 18px; margin-bottom: 10px; color: #e6edf3; }
+  #overlay .card { background: var(--panel); border: 1px solid var(--line2); border-radius: 14px;
+                   padding: 30px 40px; text-align: center; max-width: 460px; box-shadow: var(--shadow); }
+  #overlay h2 { font-size: 18px; margin-bottom: 10px; color: var(--text2); }
   #overlay p { font-size: 14px; color: var(--text); margin-bottom: 18px; line-height: 1.6; }
   #overlay .row { display: flex; gap: 10px; justify-content: center; }
 
-  /* 参数页 */
+  /* ---------- 参数页 ---------- */
   #page-params { flex-direction: column; padding: 16px 20px; gap: 14px; }
-  #params-toolbar { display: flex; gap: 10px; align-items: center; position: sticky; top: 0;
-                    background: var(--bg); padding: 8px 0; z-index: 3; border-bottom: 1px solid var(--border); }
-  .pgroup { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
-  .pgroup > .phead { padding: 10px 16px; font-weight: 600; color: #e6edf3; cursor: pointer;
-                     background: #1c2128; user-select: none; }
-  .pgroup .grouphint { padding: 6px 16px; font-size: 12px; color: #8b949e;
-                       border-bottom: 1px dashed #21262d; line-height: 1.6; }
-  .pgroup > .pbody { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 0; padding: 6px 12px 12px; }
-  .pitem { padding: 8px 6px; border-bottom: 1px dashed #21262d; display: flex; flex-direction: column; gap: 4px; }
-  .pitem .pk { font-size: 12px; color: var(--accent); font-family: Consolas, monospace; }
-  .pitem .pd { font-size: 11px; color: #8b949e; min-height: 15px; }
+  #params-toolbar, #mods-toolbar, #saves-toolbar {
+    display: flex; gap: 10px; align-items: center; position: sticky; top: 0; z-index: 3;
+    background: var(--bg); padding: 8px 0; border-bottom: 1px solid var(--line); }
+  .pgroup { background: var(--panel); border: 1px solid var(--line2); border-radius: 10px;
+            overflow: hidden; }
+  .pgroup > .phead { padding: 10px 16px; font-weight: 600; color: var(--text2); cursor: pointer;
+                     background: #1a222c; user-select: none; transition: background .13s; }
+  .pgroup > .phead:hover { background: #202a36; }
+  .pgroup .grouphint { padding: 6px 16px; font-size: 12px; color: var(--muted);
+                       border-bottom: 1px dashed var(--line); line-height: 1.6; }
+  .pgroup > .pbody { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+                     gap: 0; padding: 6px 12px 12px; }
+  .pitem { padding: 8px 6px; border-bottom: 1px dashed var(--line); display: flex;
+           flex-direction: column; gap: 4px; transition: background .13s; }
+  .pitem:hover { background: rgba(255, 255, 255, .022); }
+  .pitem .pk { font-size: 12px; color: var(--accent2); font-family: Consolas, monospace; }
+  .pitem .pd { font-size: 11px; color: var(--muted); min-height: 15px; }
   .pitem .prow { display: flex; gap: 6px; align-items: center; }
-  .pitem input[type=number], .pitem input[type=text] { background: #0d1117; color: #e6edf3;
-       border: 1px solid var(--border); border-radius: 6px; padding: 5px 8px; font-size: 13px; width: 100%; }
+  .pitem input[type=number], .pitem input[type=text] { width: 100%; font-variant-numeric: tabular-nums; }
   .pitem input.pair { width: 48%; }
   .pitem input:invalid { border-color: var(--err); }
   .pitem button.dflt { padding: 4px 8px; font-size: 12px; white-space: nowrap; }
   .pitem input[type=checkbox] { width: auto; transform: scale(1.2); margin: 4px; }
+  .pitem input[type=checkbox]:focus-visible { outline: none; box-shadow: var(--ring); }
 
-  /* Mod 页 */
+  /* ---------- Mod 页 ---------- */
   #page-mods { flex-direction: column; padding: 16px 20px; gap: 14px; }
   #subtab { display: flex; gap: 6px; }
-  #subtab button { background: transparent; border: 1px solid var(--border); color: var(--text);
-                   padding: 5px 14px; border-radius: 6px; cursor: pointer; }
-  #subtab button.active { background: #21262d; color: #e6edf3; }
+  #subtab button { background: transparent; border: 1px solid var(--line2); color: var(--muted);
+                   padding: 5px 14px; border-radius: 7px; }
+  #subtab button:hover:not(:disabled) { color: var(--text); border-color: #3d4757; }
+  #subtab button.active { background: rgba(31, 111, 235, .12); color: var(--accent2);
+                          border-color: rgba(31, 111, 235, .40); }
   #warnlist:empty { display: none; }
   #warnlist { display: flex; flex-direction: column; gap: 6px; }
   .warn { padding: 8px 12px; border-radius: 8px; font-size: 13px; border: 1px solid; }
-  .warn.warn { background: rgba(210,153,34,0.12); border-color: var(--warn); color: #e3b341; }
-  .warn.error { background: rgba(248,81,73,0.12); border-color: var(--err); color: #ff7b72; }
-  .moditem { display: flex; align-items: center; gap: 12px; background: var(--panel);
-             border: 1px solid var(--border); border-radius: 10px; padding: 12px 16px; }
-  .moditem .order { color: #8b949e; font-size: 12px; min-width: 34px; text-align: center; }
-  .moditem .minfo { flex: 1; }
-  .moditem .mname { font-weight: 600; color: #e6edf3; }
-  .moditem .mdesc { font-size: 12px; color: #8b949e; margin-top: 2px; }
-  .moditem .morder-btns { display: flex; flex-direction: column; gap: 4px; }
-  .moditem .morder-btns button { padding: 2px 8px; font-size: 12px; }
-  .moditem input[type=checkbox] { transform: scale(1.25); }
-  #mods-toolbar { display: flex; gap: 10px; align-items: center; position: sticky; top: 0;
-                  background: var(--bg); padding: 8px 0; z-index: 3; border-bottom: 1px solid var(--border); }
-  .hint { font-size: 12px; color: #8b949e; }
+  .warn.warn { background: rgba(210, 153, 34, .10); border-color: rgba(210, 153, 34, .55);
+               color: #e3b341; }
+  .warn.error { background: rgba(248, 81, 73, .10); border-color: rgba(248, 81, 73, .55);
+                color: #ff7b72; }
+  .moditem, .packitem { display: flex; align-items: center; gap: 12px; background: var(--panel);
+                        border: 1px solid var(--line2); border-radius: 10px; padding: 12px 16px;
+                        transition: border-color .15s, transform .15s, box-shadow .15s; }
+  .moditem:hover, .packitem:hover { border-color: #3d4757; transform: translateY(-1px);
+                                    box-shadow: 0 4px 14px rgba(0, 0, 0, .25); }
+  .moditem .order, .packitem .order { color: var(--muted); font-size: 12px;
+                                      min-width: 34px; text-align: center;
+                                      font-variant-numeric: tabular-nums; }
+  .moditem .minfo, .packitem .pinfo { flex: 1; }
+  .moditem .mname, .packitem .pname { font-weight: 600; color: var(--text2); }
+  .moditem .mdesc, .packitem .pdesc { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .moditem .morder-btns, .packitem .porder-btns { display: flex; flex-direction: column; gap: 4px; }
+  .moditem .morder-btns button, .packitem .porder-btns button { padding: 2px 8px; font-size: 12px; }
+  .moditem input[type=checkbox], .packitem input[type=checkbox] { transform: scale(1.25);
+                                                                  cursor: pointer; }
 
-  /* 材质包列表 */
-  .packitem { display: flex; align-items: center; gap: 12px; background: var(--panel);
-              border: 1px solid var(--border); border-radius: 10px; padding: 12px 16px; }
-  .packitem .order { color: #8b949e; font-size: 12px; min-width: 34px; text-align: center; }
-  .packitem .pinfo { flex: 1; }
-  .packitem .pname { font-weight: 600; color: #e6edf3; }
-  .packitem .pdesc { font-size: 12px; color: #8b949e; margin-top: 2px; }
-  .packitem .porder-btns { display: flex; flex-direction: column; gap: 4px; }
-  .packitem .porder-btns button { padding: 2px 8px; font-size: 12px; }
-  .packitem input[type=checkbox] { transform: scale(1.25); }
-
-  /* 存档页 */
+  /* ---------- 存档页 ---------- */
   #page-saves { flex-direction: column; padding: 16px 20px; gap: 14px; }
-  #saves-toolbar { display: flex; gap: 10px; align-items: center; position: sticky; top: 0;
-                   background: var(--bg); padding: 8px 0; z-index: 3; border-bottom: 1px solid var(--border); }
   #saves-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
-  .savecard { background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
-              padding: 12px; display: flex; gap: 12px; }
+  .savecard { background: var(--panel); border: 1px solid var(--line2); border-radius: 10px;
+              padding: 12px; display: flex; gap: 12px;
+              transition: border-color .15s, transform .15s, box-shadow .15s; }
+  .savecard:hover { border-color: #3d4757; transform: translateY(-1px); }
   .savecard img { width: 132px; height: 74px; object-fit: cover; border-radius: 6px;
-                  background: #05070b; border: 1px solid var(--border); }
+                  background: #05070b; border: 1px solid var(--line2); }
   .savecard .noimg { width: 132px; height: 74px; border-radius: 6px; background: #05070b;
-                     border: 1px solid var(--border); display: flex; align-items: center;
+                     border: 1px solid var(--line2); display: flex; align-items: center;
                      justify-content: center; color: #484f58; font-size: 12px; }
   .savecard .sinfo { flex: 1; display: flex; flex-direction: column; gap: 3px; }
-  .savecard .sname { font-weight: 600; color: #e6edf3; font-size: 15px; }
-  .savecard .smeta { font-size: 12px; color: #8b949e; line-height: 1.6; }
+  .savecard .sname { font-weight: 600; color: var(--text2); font-size: 15px; }
+  .savecard .smeta { font-size: 12px; color: var(--muted); line-height: 1.6; }
   .savecard .sbtns { display: flex; gap: 6px; margin-top: auto; flex-wrap: wrap; }
   .savecard .sbtns button { padding: 4px 10px; font-size: 12px; }
+
+  /* ---------- 窄屏（<1100px）：侧栏收窄，控制条/HUD 各自限宽避免重叠 ---------- */
+  @media (max-width: 1100px) {
+    #sidebar { width: 238px; min-width: 238px; padding: 11px; }
+    #tabs button { padding: 5px 10px; font-size: 12px; }
+    #controlbar { max-width: calc(52% - 24px); padding: 6px 8px; gap: 5px; }
+    #controlbar button { padding: 5px 9px; font-size: 12px; }
+    #controlbar button.icon { padding: 5px 7px; }
+    #speed { padding: 4px 24px 4px 8px; font-size: 12px; }
+    #hud { width: min(336px, 44%); font-size: 11px; gap: 6px; }
+    #hud .hgroup { padding: 6px 8px 7px; }
+    #legend { max-width: calc(100% - 24px); }
+  }
+  @media (max-height: 760px) {
+    #hud { font-size: 11px; }
+    #hud .hgroup { padding: 6px 9px 7px; }
+    #controlbar { padding: 6px 8px; }
+  }
+  /* ---------- 窄窗口（<900px）紧凑模式：HUD 单列、控制条收紧、图例更窄 ---------- */
+  @media (max-width: 900px) {
+    #topbar { padding: 7px 10px; gap: 8px; }
+    #topbar .title { font-size: 14px; }
+    #topbar .title .ver { font-size: 10px; }
+    #badge { padding: 2px 8px; font-size: 11px; }
+    #tabs button { padding: 4px 8px; font-size: 11px; }
+    #btn-quit { padding: 5px 10px; font-size: 12px; }
+    #sidebar { width: 208px; min-width: 208px; padding: 10px; }
+    .qcard { padding: 10px; gap: 8px; }
+    #btn-start { padding: 9px; font-size: 13px; }
+    #controlbar { max-width: calc(100% - 232px); padding: 5px 7px; gap: 4px; }
+    #controlbar button { padding: 4px 7px; font-size: 11px; }
+    #controlbar button.icon { padding: 4px 6px; }
+    .cgroup { gap: 4px; }
+    .csep { margin: 0 1px; height: 18px; }
+    #speed { padding: 3px 22px 3px 7px; font-size: 11px; }
+    #st-zoom { min-width: 40px; font-size: 11px; }
+    /* HUD 单列竖排，字号再小一档；只占右侧一条，不压画面中心 */
+    #hud { grid-template-columns: 1fr; width: min(200px, 46%); gap: 4px; font-size: 10px; }
+    #hud .hgroup { padding: 5px 7px 6px; }
+    #hud .hlabel { font-size: 9px; letter-spacing: 1.2px; margin-bottom: 2px; }
+    #hud .hitems span { line-height: 1.4; }
+    #legend { max-width: min(340px, calc(100% - 24px)); font-size: 11px; }
+    #legend .lgrid { column-gap: 10px; }
+    .stage-empty .se-main { font-size: 14px; }
+    .stage-empty .se-sub { font-size: 11px; }
+  }
 </style>
 </head>
 <body>
 <div id="app">
   <div id="topbar">
-    <span class="title">核-小球生态演化模拟器 <span style="color:#8b949e;font-size:12px">v1.1.0</span></span>
-    <span id="badge" class="menu">菜单</span>
-    <div id="tabs">
-      <button class="active" data-page="run">运行</button>
-      <button data-page="params">参数</button>
-      <button data-page="mods">Mod</button>
-      <button data-page="saves">存档</button>
+    <span class="title">核-小球生态演化模拟器 <span class="ver">v2.1.0</span></span>
+    <span id="badge" class="menu">未运行</span>
+    <div id="tabs" role="tablist" aria-label="页面切换">
+      <button class="active" data-page="run" title="运行（1）">运行</button>
+      <button data-page="params" title="参数（2）">参数</button>
+      <button data-page="mods" title="Mod（3）">Mod</button>
+      <button data-page="saves" title="存档（4）">存档</button>
     </div>
     <span class="spacer"></span>
-    <button id="btn-quit" title="退出程序（关闭模拟进程）">退出</button>
+    <button id="btn-quit" class="danger" title="退出程序（关闭模拟进程）">退出</button>
   </div>
   <div id="main">
 
     <div id="page-run" class="page active">
       <div id="sidebar">
-        <h3>快速设置</h3>
-        <div class="field"><label>随机种子 seed</label><input id="q-seed" type="number" value="42"></div>
-        <div class="field"><label>初始小球 balls</label><input id="q-balls" type="number" value="1000" min="0"></div>
-        <div class="field"><label>初始核 nuclei</label><input id="q-nuclei" type="number" value="20" min="1"></div>
-        <div class="field"><label>总帧数 frames</label><input id="q-frames" type="number" value="100000" min="1"></div>
-        <button id="btn-start" class="primary">▶ 启动模拟</button>
+        <div class="qcard">
+          <h3>快速设置</h3>
+          <div class="field"><label for="q-seed">随机种子 seed</label>
+            <input id="q-seed" type="number" value="42"></div>
+          <div class="field"><label for="q-balls">初始小球 balls</label>
+            <input id="q-balls" type="number" value="1000" min="0"></div>
+          <div class="field"><label for="q-nuclei">初始核 nuclei</label>
+            <input id="q-nuclei" type="number" value="20" min="1"></div>
+          <div class="field"><label for="q-frames">总帧数 frames</label>
+            <input id="q-frames" type="number" value="100000" min="1"></div>
+        </div>
+        <button id="btn-start" class="primary" title="按快速设置 + 参数页配置启动模拟">启动模拟</button>
         <div class="hint">完整参数（物理/遗传/代谢等）在「参数」页调节。</div>
+        <div class="sidehint">
+          快捷键：<span class="kbd">空格</span> 暂停/继续 ·
+          <span class="kbd">N</span> 单步 · <span class="kbd">S</span> 保存 ·
+          <span class="kbd">R</span> 重置视图 · <span class="kbd">1-4</span> 切页 ·
+          <span class="kbd">+/-</span> 缩放 · <span class="kbd">Esc</span> 返回菜单
+        </div>
       </div>
       <div id="stage">
         <canvas id="view" width="1280" height="720"></canvas>
+        <!-- 空状态：未启动时画布全黑容易以为卡死；仅 menu 态显示（结束态有 overlay，互不打架）。
+             侧栏折叠时「启动模拟」按钮不可见，故文案按 body.sidebar-collapsed 切换 -->
+        <div id="stage-empty" class="stage-empty show">
+          <div class="se-main se-when-open">点击左侧「启动模拟」开始</div>
+          <div class="se-main se-when-closed">点控制条上的「侧栏」展开，再点「启动模拟」</div>
+          <div class="se-sub">空格 暂停/继续 · 1-4 切页 · 双击画布重置视图</div>
+        </div>
         <div id="controlbar">
-          <button id="btn-pause" disabled>暂停</button>
-          <button id="btn-resume" disabled>继续</button>
-          <button id="btn-step" disabled>单步</button>
-          <button id="btn-stop" disabled>停止</button>
-          <button id="btn-save" disabled title="保存当前状态到「存档」页">保存</button>
-          <select id="speed" disabled>
-            <option value="0" selected>不限速</option>
-            <option value="60">60 FPS</option>
-            <option value="30">30 FPS</option>
-            <option value="15">15 FPS</option>
-            <option value="5">5 FPS</option>
-          </select>
-          <button id="btn-reset-view">重置视图</button>
+          <div class="cgroup" role="group" aria-label="播放控制">
+            <button id="btn-pause" disabled title="暂停（空格）">暂停</button>
+            <button id="btn-resume" disabled title="继续（空格）">继续</button>
+            <button id="btn-step" disabled title="单步（N）">单步</button>
+            <button id="btn-stop" disabled title="停止并回到菜单">停止</button>
+          </div>
+          <span class="csep" role="separator"></span>
+          <div class="cgroup" role="group" aria-label="数据">
+            <button id="btn-save" disabled title="保存当前状态到「存档」页（S）">保存</button>
+            <select id="speed" disabled title="限速（启动时按 env_config.txt 的 max_fps 生效）">
+              <option value="0">不限速</option>
+              <option value="60">60 FPS</option>
+              <option value="30" selected>30 FPS</option>
+              <option value="15">15 FPS</option>
+              <option value="5">5 FPS</option>
+            </select>
+          </div>
+          <span class="csep" role="separator"></span>
+          <div class="cgroup" role="group" aria-label="视图">
+            <button id="btn-zoom-out" class="icon" title="缩小（-）">−</button>
+            <span id="st-zoom" title="当前缩放（100% = 适应视图）">100%</span>
+            <button id="btn-zoom-in" class="icon" title="放大（+）">+</button>
+            <button id="btn-reset-view" title="重置视图（R / 双击画布）">重置视图</button>
+            <button id="btn-sidebar" title="折叠侧栏（画布变宽）">侧栏</button>
+          </div>
         </div>
         <div id="hud">
-          帧 <b id="st-frame">0</b> · 核 <b id="st-nuclei">0</b> · 球 <b id="st-balls">0</b><br>
-          护盾 <b id="st-shield">0</b> · 资源 <b id="st-worker">0</b> · 侦察 <b id="st-scout">0</b><br>
-          平均能量 <b id="st-energy">0</b> · 渲染 <b id="st-fps">0</b> FPS
+          <div class="hgroup">
+            <div class="hlabel">模拟</div>
+            <div class="hitems">
+              <span>帧 <b id="st-frame">0</b></span>
+              <span>核 <b id="st-nuclei">0</b></span>
+              <span>球 <b id="st-balls">0</b></span>
+            </div>
+          </div>
+          <div class="hgroup">
+            <div class="hlabel">球型</div>
+            <div class="hitems">
+              <span>护盾 <b id="st-shield">0</b></span>
+              <span>资源 <b id="st-worker">0</b></span>
+              <span>侦察 <b id="st-scout">0</b></span>
+            </div>
+          </div>
+          <div class="hgroup">
+            <div class="hlabel">能量</div>
+            <div class="hitems">
+              <span>平均能量 <b id="st-energy">0</b></span>
+              <span>FPS <b id="st-fps">--</b></span>
+            </div>
+          </div>
+          <div class="hgroup">
+            <div class="hlabel">蓝细菌</div>
+            <div class="hitems">
+              <span>节点 <b id="st-cyano">0</b></span>
+              <span>连接 <b id="st-cyanolinks">0</b></span>
+              <span>节点能量 <b id="st-cyanoenergy">0</b></span>
+              <span>阳光 <b id="st-sun">0.00</b></span>
+            </div>
+          </div>
         </div>
-        <div id="legend">
-          <span class="swatch" style="background:#9e9e9e"></span>自由球(灰白)
-          <span class="swatch" style="background:#7ec8f0"></span>有主球(色相=归属核,亮度=类型)
-          <span class="swatch" style="background:#ffffff;border:1px solid #888"></span>核(能量环)
-          <br>滚轮缩放 · 拖拽平移 · 悬停查看核参数
-        </div>
+        <details id="legend">
+          <summary title="点击展开/收起图例（快捷键提示也在里面）">图例</summary>
+          <div class="lgrid">
+            <div class="lrow"><span class="swatch" style="background:#9e9e9e"></span>自由球(灰白,3px)</div>
+            <div class="lrow"><span class="swatch" style="background:#7ec8f0"></span>有主球(色相=核,亮度=类型)</div>
+            <div class="lrow"><span class="swatch" style="background:#ffffff;border:1px solid #888"></span>核(能量环,谱系色)</div>
+            <div class="lrow"><span class="swatch" style="background:#5adcaa"></span>蓝细菌节点(大小=能量)</div>
+            <div class="lrow"><span class="swatch" style="background:#3c8c6e;width:14px;height:2px;border-radius:0"></span>菌丝连线</div>
+            <div class="lrow lnote">护盾5/资源4/侦察3px</div>
+            <div class="lrow full lhint">滚轮缩放（以指针为锚）· 拖拽平移 · 悬停查看核参数 · 双击画布重置视图</div>
+            <!-- 快捷键拆成固定两行：避免展开时在末行出现单字孤行（D3） -->
+            <div class="lrow full lhint">快捷键：<span class="kbd">空格</span> 暂停/继续 ·
+              <span class="kbd">N</span> 单步 · <span class="kbd">S</span> 保存</div>
+            <div class="lrow full lhint">快捷键：<span class="kbd">R</span> 重置视图 ·
+              <span class="kbd">1-4</span> 切页 · <span class="kbd">+/-</span> 缩放 ·
+              <span class="kbd">Esc</span> 返回菜单</div>
+          </div>
+        </details>
+        <div id="paused-badge">已暂停 · 按空格继续</div>
         <div id="tooltip"></div>
         <div id="overlay">
           <div class="card">
             <h2 id="overlay-title">模拟已结束</h2>
             <p id="overlay-text"></p>
             <div class="row">
-              <button id="btn-menu">返回菜单</button>
+              <button id="btn-menu" class="primary">返回菜单</button>
               <button id="btn-exit">退出程序</button>
               <button id="btn-reload" style="display:none">重试连接</button>
             </div>
@@ -224,7 +484,7 @@
       <div id="params-toolbar">
         <button id="btn-save-config" class="primary">保存为默认</button>
         <button id="btn-restore-defaults">恢复全部默认</button>
-        <span class="hint">「保存为默认」写入 env_config.txt,之后启动模拟与命令行模式都会使用。</span>
+        <span class="hint">「保存为默认」写入 env_config.txt，之后启动模拟与命令行模式都会使用。</span>
       </div>
       <div id="params-groups"></div>
     </div>

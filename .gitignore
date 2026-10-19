@@ -12,3 +12,10 @@ saves/
 mods.list
 packs.list
 release/
+
+# 本地 agent 工作目录 / 临时产物（不入库）
+_agent/
+buildobj_*/
+*_probe*
+*.bak-*
+docs/_recon/

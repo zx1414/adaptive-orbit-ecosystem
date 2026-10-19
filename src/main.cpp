@@ -25,7 +25,7 @@
 #include "mods_registry.h"
 
 namespace {
-constexpr const char* kVersion = "1.1.0";  // 发布版本（--version 查看）
+constexpr const char* kVersion = "2.1.0";  // 发布版本（--version 查看）；2.1.0 = 前端修复版（材质包取色键名/画布比例）
 
 struct Args {
     double width = 2000.0;
@@ -51,6 +51,19 @@ struct Args {
     bool schemaCheck = false;    // 只做参数表键覆盖检查后退出
     bool showVersion = false;    // 打印版本后退出
     std::string env;
+    // ---- 蓝细菌 / 阳光 CLI 覆盖值（默认值 = WorldConfig{} 的默认值）----
+    int cyanoNodes = 0;
+    int cyanoColonies = 4;
+    double cyanoInitialEnergy = 10.0;
+    double cyanoLinkDistance = 80.0;
+    int cyanoMaxLinks = 6;
+    int cyanoLinkCheckInterval = 4;
+    double cyanoPredationRadius = 30.0;
+    int cyanoConversionMode = 1;
+    double cyanoHueJitter = 8.0;
+    double sunBaseLevel = 1.0;
+    double sunDayAmplitude = 0.7;
+    double sunDayPeriodFrames = 1200.0;
     std::set<std::string> provided;  // 记录被显式指定的参数，用于覆盖配置文件
 };
 
@@ -83,6 +96,21 @@ Args parseArgs(int argc, char** argv) {
         else if (s == "--clear") { a.clearScreen = true; a.provided.insert(s); }
         else if (s == "--no-clear") { a.clearScreen = false; a.provided.insert(s); }
         else if (s == "--env") a.env = next(i, "--env");
+        // ---- 蓝细菌 ----
+        else if (s == "--cyano-nodes") { a.cyanoNodes = std::stoi(next(i, "--cyano-nodes")); a.provided.insert(s); }
+        else if (s == "--cyano-colonies") { a.cyanoColonies = std::stoi(next(i, "--cyano-colonies")); a.provided.insert(s); }
+        else if (s == "--cyano-initial-energy") { a.cyanoInitialEnergy = std::stod(next(i, "--cyano-initial-energy")); a.provided.insert(s); }
+        else if (s == "--cyano-link-distance") { a.cyanoLinkDistance = std::stod(next(i, "--cyano-link-distance")); a.provided.insert(s); }
+        else if (s == "--cyano-max-links") { a.cyanoMaxLinks = std::stoi(next(i, "--cyano-max-links")); a.provided.insert(s); }
+        else if (s == "--cyano-link-check-interval") { a.cyanoLinkCheckInterval = std::stoi(next(i, "--cyano-link-check-interval")); a.provided.insert(s); }
+        else if (s == "--cyano-predation-radius") { a.cyanoPredationRadius = std::stod(next(i, "--cyano-predation-radius")); a.provided.insert(s); }
+        else if (s == "--cyano-conversion-mode") { a.cyanoConversionMode = std::stoi(next(i, "--cyano-conversion-mode")); a.provided.insert(s); }
+        else if (s == "--cyano-hue-jitter") { a.cyanoHueJitter = std::stod(next(i, "--cyano-hue-jitter")); a.provided.insert(s); }
+        // ---- 阳光 ----
+        else if (s == "--sun-base-level") { a.sunBaseLevel = std::stod(next(i, "--sun-base-level")); a.provided.insert(s); }
+        else if (s == "--sun-day-amplitude") { a.sunDayAmplitude = std::stod(next(i, "--sun-day-amplitude")); a.provided.insert(s); }
+        // 需求原文「阳光波动频率」的反向表达：周期越小 = 昼夜交替越快 = 波动频率越高。
+        else if (s == "--sun-day-period-frames") { a.sunDayPeriodFrames = std::stod(next(i, "--sun-day-period-frames")); a.provided.insert(s); }
         else if (s == "--serve") a.serve = true;
         else if (s == "--console") a.console = true;
         else if (s == "--port") { a.port = std::stoi(next(i, "--port")); }
@@ -214,6 +242,19 @@ int main(int argc, char** argv) {
     if (a.provided.count("--trend-interval")) cfg.trendInterval = a.trendInterval;
     if (a.provided.count("--render") || a.provided.count("--no-render")) cfg.visualization = a.visualization;
     if (a.provided.count("--clear") || a.provided.count("--no-clear")) cfg.clearScreen = a.clearScreen;
+    // ---- 蓝细菌 / 阳光：沿用同一覆盖模式（默认值 < 配置文件 < 显式命令行）----
+    if (a.provided.count("--cyano-nodes")) cfg.initialCyanoNodes = a.cyanoNodes;
+    if (a.provided.count("--cyano-colonies")) cfg.cyanoColonies = a.cyanoColonies;
+    if (a.provided.count("--cyano-initial-energy")) cfg.cyanoInitialEnergy = a.cyanoInitialEnergy;
+    if (a.provided.count("--cyano-link-distance")) cfg.cyanoLinkDistance = a.cyanoLinkDistance;
+    if (a.provided.count("--cyano-max-links")) cfg.cyanoMaxLinks = a.cyanoMaxLinks;
+    if (a.provided.count("--cyano-link-check-interval")) cfg.cyanoLinkCheckInterval = a.cyanoLinkCheckInterval;
+    if (a.provided.count("--cyano-predation-radius")) cfg.cyanoPredationRadius = a.cyanoPredationRadius;
+    if (a.provided.count("--cyano-conversion-mode")) cfg.cyanoConversionMode = a.cyanoConversionMode;
+    if (a.provided.count("--cyano-hue-jitter")) cfg.cyanoHueJitter = a.cyanoHueJitter;
+    if (a.provided.count("--sun-base-level")) cfg.sunBaseLevel = a.sunBaseLevel;
+    if (a.provided.count("--sun-day-amplitude")) cfg.sunDayAmplitude = a.sunDayAmplitude;
+    if (a.provided.count("--sun-day-period-frames")) cfg.sunDayPeriodFrames = a.sunDayPeriodFrames;
 
     World world(cfg);
     world.initialize();

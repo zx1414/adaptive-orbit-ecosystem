@@ -117,6 +117,7 @@ cmake --build build
 | 小球动力学 | `ball_damping` `radial_k` `tangential_k` `near_repel_radius` `ball_ball_repel_radius` `ball_ball_repel_k` `ball_same_owner_attract_radius` `ball_same_owner_attract_k` `ball_max_speed_shield` `ball_max_speed_worker` `ball_max_speed_scout` `ball_vel_range` `bounce_restitution` `follow_boost` `follow_coupling` `detach_radius` `ball_loss_cost` |
 | 核动力学 | `nucleus_damping` `attack_k` `avoid_k` `combat_rate` `influence_margin` `forage_k` `forage_radius` `wander_k` `wander_turn_rate` `basal_cost` `speed_cost_k` `speed_cost_exponent` `reproduction_cost_ratio` `child_energy_ratio` `nucleus_init_energy_ratio` `reproduction_offset` `nucleus_min_separation` `nucleus_repel_k` `newborn_grace_frames` |
 | 遗传参数范围 | `affinity_init` `orbit_radius_init` `absorb_preference_init` `repel_strength_init` `attack_range_init` `attack_strength_init` `avoid_range_init` `avoid_strength_init` `max_speed_init` `energy_threshold_init` `mutation_rate_init`（初始化范围）+ 对应 `*_clamp`（变异裁剪） |
+| **蓝细菌** | `initialCyanoNodes` `cyanoColonies` `cyanoInitialEnergy` `cyanoPhotosynthesisRate` `cyanoLightHalfSaturation` `cyanoMetabolismRate` `cyanoLinkDistance` `cyanoMaxLinks` `cyanoLinkCheckInterval` `cyanoTransferRate` `cyanoTransferDeadband` `cyanoBallSpawnCost` `cyanoBallSpawnProbability` `cyanoReproductionCost` `cyanoReproductionProbability` `cyanoReproductionOffset` `cyanoMinNodeSeparation` `cyanoPredationRadius` `cyanoConversionMode` `cyanoConversionRate` `cyanoConversionExponent` `cyanoConversionSpeedRef` `cyanoConversionAccelRef` `cyanoConversionWSpeed` `cyanoConversionWAccel` `cyanoConversionMinRate` `cyanoConversionMaxRate` `cyanoRenderChar` `cyanoRenderLinks` `cyanoHueJitter` `cyanoPreference_init` `cyanoPreference_clamp` `cyanoDigestion_init` `cyanoDigestion_clamp` `maxAccel_init` `maxAccel_clamp` |
 
 ---
 
@@ -183,6 +184,20 @@ $$\mathrm{owner}(b) = \begin{cases}\arg\min_n \|\mathbf{x}_b - \mathbf{x}_n\|, &
 $$\Delta E_n \;+=\; E_{\mathrm{base}}\cdot p_t$$
 
 其中 $E_{\mathrm{base}}$=`base_ball_energy`、$p_t$=`absorbPreference[t]`，小球被移除并由补充机制再生。
+
+### 3.5 蓝细菌捕食（`absorbBalls` 段 1，仅开启时）
+
+核在捕食半径 $R_{\mathrm{pred}}$（=`cyanoPredationRadius`）内捕食蓝细菌节点（每核每帧最多 1 个，取最近）：
+
+$$\Delta E_n \;+=\; E_{\mathrm{node}} \cdot \mathrm{rate}(v_{\max}, a_{\max}, d_c) \cdot p_c$$
+
+其中：
+- $E_{\mathrm{node}}$：节点当前能量（捕食后节点标记死亡、能量归零）
+- $p_c$=`cyanoPreference`（**0 = 完全不捕食**，兼容旧核/关闭模块）
+- $d_c$=`cyanoDigestion`：消化效率
+- $v_{\max}$=`maxSpeed`、$a_{\max}$=`maxAccel`：参与转化率惩罚
+
+转化率 $\mathrm{rate}$ 由 `cyanoConversionMode` 决定（四种公式，见 [docs/CYANO.md](docs/CYANO.md)），最终钳制到 $[\mathrm{minRate}, \mathrm{maxRate}]$。能量走 `EnergyReason::CYANO_GAIN` 独立统计。
 
 ### 4. 核间争斗（`nucleusCombat`）
 
@@ -275,8 +290,58 @@ $$N_{\max} = \max\Bigl(N_{\mathrm{nuc}}^0,\ \tfrac{W \cdot H}{T}\Bigr)$$
 | `maxSpeed` | $v_{\max}$ | 核最大速度 | $[30, 100]$ | $[5, 300]$ |
 | `energyThreshold` | $E_{\mathrm{th}}$ | 繁殖阈值 | $[80, 200]$ | $[20, 1000]$ |
 | `mutationRate` | $\mu$ | 变异幅度 | $[0.01, 0.2]$ | $[0.001, 0.5]$ |
+| `cyanoPreference` | $p_c$ | 蓝细菌捕食意愿 | $[0.0, 1.0]$ | $[0.0, 1.0]$ |
+| `cyanoDigestion` | $d_c$ | 蓝细菌消化效率 | $[0.0, 1.0]$ | $[0.0, 1.0]$ |
+| `maxAccel` | $a_{\max}$ | 最大加速度 | $[1.0, 20.0]$ | $[0.5, 30.0]$ |
 
 进化由三个能量代价旋钮塑造：`basal_cost`/`speed_cost_k`（代谢）、`reproduction_cost_ratio`（繁殖代价）、`ball_loss_cost`（失球惩罚）。配合趋利避害决策（只打弱者、躲避强者），不同策略（掠夺者/逃跑专家/农场主）得以共存。
+
+---
+
+## 蓝细菌模块（可选，零开销）
+
+蓝细菌是**可选的生产者层级**：通过光合作用产生能量，形成连线网络传输能量，核可选择捕食节点获取能量。
+
+### 核心特性
+
+| 特性 | 说明 |
+|------|------|
+| **零开销关闭** | `initialCyanoNodes <= 0` 时模块完全不参与模拟：零内存、零 CPU、零 RNG 调用，主 RNG 序列与基线逐字节一致 |
+| **双 RNG 隔离** | 主 `rng_` 驱动蓝细菌光合/生长/产球；`hueRng_` 仅用色相；关闭时不推进主 RNG |
+| **可进化捕食** | 核携带 3 个新遗传参数：`cyanoPreference`（捕食意愿，0=完全不捕食）、`cyanoDigestion`（消化效率）、`maxAccel`（最大加速度，参与转化率惩罚） |
+| **转化率公式** | 4 种模式（基础/速度惩罚/加速度惩罚/混合），快核捕食效率更低，诱导策略分化 |
+| **确定性存档** | 完整序列化 RNG 状态，载入后逐帧一致；旧存档自动兼容（新字段默认 0 → 不捕食） |
+| **控制台渲染** | 节点字符可选 `*`/`o`/`+`，连线 Bresenham 画线，优先级低于核/球（从不遮挡） |
+
+### 快速启用
+
+```bash
+# env_config.txt 追加
+initialCyanoNodes = 200
+cyanoColonies = 4
+cyanoPredationRadius = 30.0
+cyanoConversionRate = 0.6
+# ... 其余键见 env_config.txt 注释或 docs/CYANO.md
+```
+
+### 关键参数速查
+
+| 参数 | 默认值 | 关键行为 |
+|------|--------|----------|
+| `initialCyanoNodes` | 0 | **≤0 关闭模块**（零开销回归基线） |
+| `cyanoPreference` (遗传) | 0.0 | **0 = 完全不捕食**，兼容旧核 |
+| `cyanoConversionMode` | 0 | 0=基础, 1=速度惩罚, 2=加速度惩罚, 3=混合 |
+| `cyanoRenderChar` | 0 | 0='*', 1='o', 2='+' |
+| `cyanoHueJitter` | 5.0 | 繁殖色相高斯扰动 |
+
+### 采样输出扩展
+
+| 文件 | 新增列 |
+|------|--------|
+| `trend.csv` / `nuclei_XXXXXX.csv` | 末尾追加 `cyanoPreference,cyanoDigestion,maxAccel`（保持原 22 列顺序不变） |
+| `cyano_XXXXXX.csv` | 仅开启且群落非空时输出：`node_id,x,y,energy,link_count` |
+
+详细设计见 [docs/CYANO.md](docs/CYANO.md)。
 
 ---
 
@@ -285,9 +350,10 @@ $$N_{\max} = \max\Bigl(N_{\mathrm{nuc}}^0,\ \tfrac{W \cdot H}{T}\Bigr)$$
 | 输出 | 触发 | 格式 |
 |------|------|------|
 | `balls_XXXXXX.csv` | `--sample-interval` | `x,y,type,ownerId` |
-| `nuclei_XXXXXX.csv` | `--sample-interval` | `x,y,energy` + 22 参数（6 位小数） |
-| `trend.csv` | `--trend-csv` | `frame,nucleus_id,energy` + 22 参数（每采样帧每核一行） |
-| `survivors.csv` | 每次结束 | 存活核完整参数 |
+| `nuclei_XXXXXX.csv` | `--sample-interval` | `x,y,energy` + 25 参数（原 22 + `cyanoPreference,cyanoDigestion,maxAccel`） |
+| `trend.csv` | `--trend-csv` | `frame,nucleus_id,energy` + 25 参数（每采样帧每核一行，列序同 nuclei） |
+| `cyano_XXXXXX.csv` | `--sample-interval` | 仅开启且群落非空：`node_id,x,y,energy,link_count` |
+| `survivors.csv` | 每次结束 | 存活核完整 25 参数 |
 
 脚本（`scripts/`，仅依赖 numpy）：
 
@@ -374,10 +440,15 @@ CMakeLists.txt
 | `BALL_ABSORBED` | 每帧吸收结束后聚合发射一次 | `value`=本帧吸收总能量，`extra`=吸收球数指针 |
 | `NUCLEUS_BORN` | 子核 push_back 之后 | `nucleus`=子核 |
 | `NUCLEUS_DIED` | `EnergySystem::apply` 内部 | `nucleus`=死亡核 |
+| `CYANO_NODE_BORN` | 蓝细菌节点出生（分裂/初始化） | `cyano_node`=节点指针 |
+| `CYANO_NODE_DIED` | 蓝细菌节点死亡（能量耗尽/被捕食） | `cyano_node`=节点指针 |
+| `CYANO_LINK_FORMED` | 蓝细菌连线建立 | `from, to`=节点索引 |
+| `CYANO_LINK_BROKEN` | 蓝细菌连线断开 | `from, to`=节点索引 |
+| `CYANO_BALL_SPAWNED` | 蓝细菌产出自由小球 | `ball`=小球指针 |
 
 ### 能量原因（EnergyReason）
 
-`ABSORB / COMBAT / METABOLISM / REPRODUCTION / AGING / CROWDING / PLAGUE / BALL_LOSS`（后两项供 mod 使用；结束后 `--energy-summary` 可打印按原因汇总的收支）。
+`ABSORB / COMBAT / METABOLISM / REPRODUCTION / AGING / CROWDING / PLAGUE / BALL_LOSS / CYANO_GAIN`（后两项供 mod 使用，`CYANO_GAIN` 为捕食蓝细菌得能；结束后 `--energy-summary` 可打印按原因汇总的收支）。
 
 ### 写一个 mod（完整示例）
 

@@ -1,0 +1,28 @@
+# 材质包调色板（行式 key = r,g,b）
+# mode = type_color  按类型固定颜色（护盾/资源/侦察）
+# mode 缺省 = owner_hue  内置的归属色相模式
+# 尺寸键为**标量**（不带逗号），必须被前端 parseColors 的标量分支接收。
+mode = type_color
+background = 8, 12, 20
+ball_shield = 100, 180, 255
+ball_worker = 120, 220, 130
+ball_scout = 255, 190, 90
+free_ball = 190, 190, 200
+nucleus = 255, 245, 220
+
+# ---- 尺寸标量键 ----
+# 小球按类型分尺寸（护盾 5 > 资源 4 > 侦察 3；自由球 3）
+size_ball_shield = 5
+size_ball_worker = 4
+size_ball_scout = 3
+size_free_ball = 3
+# 核半径倍率（乘到 (3 + 5*frac) 与内芯 2.2 上）——比默认再小一档
+size_nucleus = 0.8
+
+# ---- 蓝细菌 ----
+# cyano_color_mode = colony  按 colonyId 分色（默认，同聚落同色 → 看得见菌落边界）
+# cyano_color_mode = flat    下面两个颜色键生效，蓝细菌整体单色
+cyano_color_mode = colony
+cyano_node = 90, 220, 170
+cyano_link = 60, 140, 110
+cyano_node_size = 2

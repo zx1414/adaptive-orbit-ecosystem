@@ -10,8 +10,13 @@
 width = 4000.0        # 世界宽度
 height = 2000.0       # 世界高度
 seed = 42             # 随机种子（相同种子结果可复现）
-balls = 200          # 初始自由小球数量
-nuclei = 5           # 初始随机核数量
+balls = 200          # 初始自由小球数量（见下方注释：这是刻意偏小的值）
+# 小球是能量的唯一来源。实测：200 -> 600 会让存活核数从 2 涨到 551（指数级爆炸），
+# 所以食物不是越多越好，200 是实测出来的安全值。
+# 初始核数。取 12：在 19 个种子上实测 0 灭绝、max 12、mean 4.0。
+# 5 太少看不出多样性；20~24 过挤，换种子时出现过单一种子冲到 69 个核的爆炸；
+# 16 也可以，但与本文件其余参数的组合下曾出现 1/19 灭绝。
+nuclei = 12           # 初始随机核数量
 frames = 1000000000       # 总模拟帧数
 visualization = off    # 控制台可视化总开关：on/off
 clear_screen = on     # 每次渲染前清屏：on/off；黑屏时设 off
@@ -22,15 +27,77 @@ pause_on_exit = on    # 结束后等待按键（双击运行时防止窗口闪�
 render_interval = 1  # 渲染间隔帧数，0 关闭
 sample_interval = 0   # 场状态采样间隔帧数，0 关闭
 trend_interval = 100  # 核参数时间序列采样间隔帧数
+# 帧率上限。启动器模式下限速实际生效（前端下拉框会自动对齐到这里）。
 max_fps = 30           # 每秒模拟帧数上限；0 = 不限速（跑满 CPU）
+# 蓝细菌节点绘制字符与连线开关（仅影响 --console 控制台模式，不影响启动器画面）。
+cyano_render_links = on   # 控制台是否画节点间连线：on/off
+cyano_render_char = 0     # 蓝细菌字符：0='*' 1='o' 2='+'
 
 # ---- 环境与资源 ----
 max_nuclei = 0            # 环境承载力（核总数上限）；0 表示按世界面积自动计算
+# 承载力估算面积。实测 10000 与 50000 在本套参数下结果完全相同（生态自然停在
+# 2~7 个核，远未触及上限），所以保持默认；它只在参数失控爆炸时才起保险丝作用。
 territory_per_nucleus = 10000.0   # 承载力估算时每个核占用的世界面积
 absorb_radius = 30.0      # 核吸收小球的半径
 ball_spawn_probability = 0.3    # 每帧随机补充自由小球的概率
 base_ball_energy = 1.0    # 吸收单个小球获得的基础能量
 grid_cell_size = 60.0     # 空间哈希网格单元大小
+
+# ============================================================
+# ---- 蓝细菌（生产者 / Cyanobacteria）----
+# 机制：光合作用 → 代谢 → 连接网络 → 能量传输 → 繁殖 → 产球；
+#       核可捕食节点，转化率与 maxSpeed / maxAccel / 消化效率相关（可进化）。
+# 关闭方式：cyano_nodes = 0（退化为原核-小球模拟，与开启前逐位一致）。
+# ============================================================
+cyano_nodes = 0                          # 初始蓝细菌节点总数；0 = 关闭蓝细菌
+# 聚落（菌落）数量。节点围绕各聚落中心高斯散布；调大节点更分散、连接更稀疏。
+cyano_colonies = 4                       # 初始聚落数量
+cyano_initial_energy = 10.0              # 节点初始能量
+cyano_link_distance = 80.0               # 节点自动连接距离；调大连接更密
+cyano_max_links = 6                      # 每节点连接数上限
+# 连接维护间隔帧数。这是蓝细菌的主要性能开关：调大显著省 CPU，但网络响应变慢。
+cyano_link_check_interval = 4            # 连接维护间隔帧数
+cyano_photosynthesis_rate = 0.02         # 光合速率（饱和型吸收）
+cyano_light_half_saturation = 0.5        # 光合半饱和光强
+cyano_metabolism_rate = 0.005            # 节点每帧代谢消耗；调大节点易饿死
+cyano_transfer_rate = 0.05               # 连接上能量传输速率
+# 能量传输死区：两端差值不超过它就不传输（防相邻节点高频微额往复传输）。
+cyano_transfer_deadband = 0.05           # 能量传输死区
+cyano_ball_spawn_cost = 8.0              # 产出一个自由小球的能量成本
+cyano_ball_spawn_probability = 0.002     # 每节点每帧产球概率
+cyano_reproduction_cost = 20.0           # 繁殖一个新节点的能量成本
+cyano_reproduction_probability = 0.001   # 每节点每帧繁殖概率
+cyano_reproduction_offset = 25.0         # 子节点散布距离上限
+cyano_min_node_separation = 15.0         # 节点最小间距；小于该距离繁殖被取消（防重叠）
+
+# ---- 核捕食蓝细菌 ----
+cyano_predation_radius = 30.0            # 核吞节点的判定半径；0 = 禁捕食
+# 转化率函数形态：0=常数 1=速度×加速度反比（取舍） 2=幂律 3=仅加速度。
+# 默认 1：速度快、加速度小的核收益更低 —— 机动性与捕食收益形成权衡。
+cyano_conversion_mode = 1                # 转化率函数形态
+cyano_conversion_rate = 1.0              # 转化率基准系数
+cyano_conversion_exponent = 1.0          # 模式 2 的幂指数
+cyano_conversion_speed_ref = 60.0        # 速度归一化参考值
+cyano_conversion_accel_ref = 3.0         # 加速度归一化参考值
+cyano_conversion_w_speed = 1.0           # 速度项权重
+cyano_conversion_w_accel = 1.0           # 加速度项权重
+cyano_conversion_min_rate = 0.001        # 转化率下限
+cyano_conversion_max_rate = 10.0         # 转化率上限
+cyano_hue_jitter = 8.0                   # 子核色相随机幅度（度）
+
+# ============================================================
+# ---- 阳光（昼夜 + 垂直梯度 + 局部扰动）----
+# 实际光强 = base_level × 昼夜系数 × 垂直梯度 + 局部扰动；生产者能量全靠它。
+# ============================================================
+sun_base_level = 1.0                     # 阳光基准强度
+sun_day_amplitude = 0.7                  # 昼夜波动幅度；0 = 无昼夜
+# 昼夜周期帧数。⚠️ 它即需求中「阳光波动频率」的反向表达：
+#   周期越小 = 昼夜交替越快 = 阳光波动频率越高；周期越大 = 光照越稳定。
+sun_day_period_frames = 1200.0           # 昼夜周期帧数
+sun_vertical_gradient = 0.3              # 垂直光照梯度；0 = 无梯度（顶部更亮）
+sun_noise_amplitude = 0.1                # 局部阳光扰动幅度
+sun_noise_frequency = 0.01               # 局部扰动空间频率
+sun_noise_speed = 0.002                  # 局部扰动时间漂移速度
 
 # ---- 小球动力学 ----
 ball_damping = 0.90                   # 小球速度阻尼
@@ -49,7 +116,24 @@ bounce_restitution = 0.8              # 边界反弹恢复系数
 follow_boost = 1.5                    # 跟随加速：归属球限速 = max(类型上限, 核速×该值)；0 关闭
 follow_coupling = 15.0                 # 跟随耦合：归属核轨道弹簧加强倍数（越大越甩不掉球，0 关闭）
 detach_radius = 400.0                 # 归属球距核超过该距离即脱附
-ball_loss_cost = 5.0                  # 核失去一个归属球（脱附/被抢）扣除的能量
+# 【关键参数】失球罚金——抑制种群繁殖的唯一负反馈。
+#   归属球被别的核抢走时对旧主罚这笔能量（src/World.cpp:287）。而吸收一颗球
+#   最多只赚 base_ball_energy(1.0) × absorbPreference(≤3.0) = 3.0。
+#   实测（8 种子 × 5000 帧，不启用任何 mod，核数固定 8）：
+#     5.0 -> max 2   （罚金远超收益，生态停滞）
+#     2.0 -> max 3，且开始出现真实灭绝
+#     1.75 -> 2/16 灭绝
+#     1.5 -> max 6
+#     1.0 -> max 7  ← 单看这 8 个种子似乎最优，但换种子就会灭绝/爆炸
+#     0.5 -> max 14
+#     0.0 -> max 800 （负反馈消失，种群顶到承载力上限，爆炸）
+#   ⚠️ 低于 1.0 会爆炸，不要下调。
+#   取 1.5 而非 1.0/1.25：两者在换种子时都会出现真实灭绝。
+#   19 个种子（1,2,3,4,5,7,8,11,13,16,23,32,37,42,53,64,99,128,256）× 5000 帧实测：
+#     loss=1.25 n16 -> 全灭 1/19，max 8，mean 3.58   ← 有灭绝，不合格
+#     loss=1.50 n12 -> 全灭 0/19，max 12，mean 4.00  ← 当前值
+#   ⚠️ 低于 1.0 会爆炸，不要下调。
+ball_loss_cost = 1.5                 # 核失去一个归属球（脱附/被抢）扣除的能量
 
 # ---- 核动力学 ----
 nucleus_damping = 0.85   # 核速度阻尼
@@ -64,7 +148,13 @@ wander_turn_rate = 0.1    # 游走方向每帧最大转向角（弧度）；小=
 basal_cost = 0.01        # 基础代谢：每帧固定能量流逝（v=0 也不为 0）
 speed_cost_k = 0.00001    # 速度代价系数
 speed_cost_exponent = 2.0   # 速度代价指数（>1 超线性：能耗 ∝ 速度^指数）
-reproduction_cost_ratio = 0.6   # 繁殖代价：父核消耗 = 该比例 * 繁殖阈值
+# 繁殖代价：父核消耗 = 该比例 * 繁殖阈值。调高使繁殖更谨慎。
+# 这是仅次于 ball_loss_cost 的第二道增长闸门：
+#   0.4（太便宜）-> 留出种子上 max 冲到 147，爆炸
+#   0.6          -> max 13~47，仍偶发爆炸
+#   0.8（太保守）-> max 只有 6，接近"独苗"边缘
+#   0.7          -> max 10~12，均衡点  ← 当前值
+reproduction_cost_ratio = 0.7   # 繁殖代价：父核消耗 = 该比例 * 繁殖阈值
 child_energy_ratio = 0.5        # 子核初始能量 = 该比例 * 繁殖阈值
 nucleus_init_energy_ratio = 0.7 # 初始随机核能量 = 该比例 * 繁殖阈值
 reproduction_offset = 20.0      # 繁殖时子核位置随机偏移（±该值）
@@ -82,7 +172,11 @@ attack_strength_init = 10, 100
 avoid_range_init = 30, 300
 avoid_strength_init = 10, 80
 max_speed_init = 30, 100
-energy_threshold_init = 80, 150
+# 繁殖阈值随机初始化范围。核能量超过阈值即分裂繁殖，所以这是繁殖速度的主开关。
+# 取 100,180：门槛越高繁殖越慢，是最平稳的节流阀。
+#   低于 80 时低门槛核容易连锁繁殖（配合廉价繁殖代价会失控）；
+#   高于 140 则繁殖太慢、只剩独苗。
+energy_threshold_init = 100, 180
 mutation_rate_init = 0.01, 0.2
 
 # ---- 遗传参数：变异裁剪范围（lo, hi）----
@@ -97,3 +191,19 @@ avoid_strength_clamp = 1, 200
 max_speed_clamp = 5, 300
 energy_threshold_clamp = 20, 1000
 mutation_rate_clamp = 0.001, 0.5
+
+# ---- 遗传参数：蓝细菌与机动性范围（lo, hi）----
+# 「捕食偏好」取 0 起：0 = 完全不吃蓝细菌（验收 #9），最大 1 = 极度偏好。
+# maxAccel 是**绝对最大加速度**（世界单位/帧²），不是 maxSpeed 的比值；
+# 它与转化率公式耦合，构成「跑得快 vs 吃得饱」的进化取舍。
+cyano_preference_init = 0.0, 1.0         # 捕食倾向初始化范围
+cyano_digestion_init = 0.1, 1.0          # 消化效率初始化范围
+max_accel_init = 1.0, 20.0               # 最大加速度初始化范围
+cyano_preference_clamp = 0.0, 1.0        # 捕食倾向变异裁剪范围
+cyano_digestion_clamp = 0.05, 1.0        # 消化效率变异裁剪范围
+max_accel_clamp = 0.5, 50.0              # 最大加速度变异裁剪范围
+
+# 想让种群内部策略更分化时，可在 exe 旁的 mods.list 里启用 ball_loss_relief /
+# symbiosis_bond / energy_spill 进一步增加多样性（上面的取值均已在零 mod 下实测）。
+#
+# 实测标定结果：19 个种子 × 5000 帧、零 mod —— 灭绝 0/19、存活核 max 12、mean 4.0。

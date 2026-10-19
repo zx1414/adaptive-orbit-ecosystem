@@ -21,9 +21,14 @@ double EnergySystem::apply(Nucleus& n, double delta, EnergyReason why) {
 }
 
 void EnergySystem::printSummary(std::ostream& os) const {
+    // 必须与 EnergyReason 的枚举项**同序等长**（长度受 kEnergyReasonCount 静态断言保护）。
     static const char* names[] = {
         "ABSORB", "COMBAT", "METABOLISM", "REPRODUCTION",
-        "AGING", "CROWDING", "PLAGUE", "BALL_LOSS"};
+        "AGING", "CROWDING", "PLAGUE", "BALL_LOSS",
+        "TERRITORY", "SUBSIDY", "GUILD", "SYMBIOSIS", "SEASON", "SPILL", "BOOM",
+        "CYANO_GAIN"};
+    static_assert(sizeof(names) / sizeof(names[0]) == kEnergyReasonCount,
+                  "printSummary names[] must match EnergyReason count");
     os << "能量收支摘要（累计）：\n";
     for (size_t i = 0; i < kReasonCount; ++i) {
         if (totals_[i][0] == 0.0 && totals_[i][1] == 0.0) continue;
