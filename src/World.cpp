@@ -1078,13 +1078,7 @@ bool World::applyEnvEvent(EnvEventKind kind, bool playerInitiated, std::string& 
         return false;
     }
     if (playerInitiated) {
-        const int cd = envState_.cooldown[(size_t)kind];
-        if (cd > 0) {
-            char buf[96];
-            std::snprintf(buf, sizeof(buf), "事件冷却中（剩余 %d 帧）", cd);
-            err = buf;
-            return false;
-        }
+        // 手动事件无冷却：只检查影响力，允许连续触发。
         if (envState_.influence + 1e-9 < def->cost) {
             char buf[128];
             std::snprintf(buf, sizeof(buf), "影响力不足（需要 %.0f，当前 %.1f）", def->cost,
@@ -1096,7 +1090,6 @@ bool World::applyEnvEvent(EnvEventKind kind, bool playerInitiated, std::string& 
     applyEnvEventEffect(kind);
     if (playerInitiated) {
         envState_.influence = std::max(0.0, envState_.influence - def->cost);
-        envState_.cooldown[(size_t)kind] = def->cooldownFrames;
         ++envState_.interventions;
     }
     return true;
@@ -1147,10 +1140,8 @@ void World::tickEnvironment() {
     // 影响力恢复（暂停时不推进：tickEnvironment 只在 step() 内调用）。
     envState_.influence = std::min(EnvControl::kInfluenceMax,
                                    envState_.influence + EnvControl::kInfluenceRegenPerFrame);
-    // 事件冷却递减。
-    for (int& cd : envState_.cooldown) {
-        if (cd > 0) --cd;
-    }
+    // 旧存档可能带有 v2.2.0 的冷却值；新规则下手动事件无冷却，统一清零。
+    envState_.cooldown.fill(0);
     // 存活峰值（结算展示）。
     const int alive = aliveNucleusCount();
     if (alive > envState_.peakAlive) envState_.peakAlive = alive;
@@ -1516,9 +1507,7 @@ bool World::readState(std::istream& is, std::string& err) {
             envState_ = loadedEnv;
             envState_.influence =
                 std::clamp(envState_.influence, 0.0, EnvControl::kInfluenceMax);
-            for (int& cd : envState_.cooldown) {
-                if (cd < 0) cd = 0;
-            }
+            envState_.cooldown.fill(0);  // 旧档冷却不复用：手动事件已无冷却
             if (envState_.interventions < 0) envState_.interventions = 0;
             if (envState_.peakAlive < 0) envState_.peakAlive = 0;
         }

@@ -2,7 +2,7 @@
 // 玩家环境调控的单一事实来源（v2.2.0）。
 // 设计目标：
 //   - 4 条环境轴 × 5 档快调；每条轴另有细调键（直接复用 ParamSchema 键）。
-//   - 玩家干预消耗「影响力」，事件有费用/冷却，形成有代价的取舍。
+//   - 玩家干预消耗「影响力」，形成有代价的取舍；玩家手动事件**没有冷却**。
 //   - 本文件不依赖 World.h，避免循环包含；需要 WorldConfig 的函数在 .cpp 中实现。
 #include <array>
 #include <map>
@@ -45,7 +45,7 @@ struct EnvEventDef {
     const char* name;
     const char* desc;
     double cost;
-    int cooldownFrames;
+    int cooldownFrames;  // 兼容旧 JSON/存档字段；玩家手动事件已取消冷却，恒为 0
 };
 
 struct EnvPresetDef {
@@ -60,7 +60,7 @@ struct EnvPresetDef {
 // 跨帧、可存档的玩家环境状态。
 struct EnvState {
     double influence = 50.0;                     // 当前影响力
-    std::array<int, kEnvEventCount> cooldown{};  // 剩余冷却帧数，按 EnvEventKind 下标
+    std::array<int, kEnvEventCount> cooldown{};  // 兼容存档 v2 的旧字段；新规则恒为 0
     int interventions = 0;                       // 本局玩家干预计数
     int peakAlive = 0;                           // 本局存活核峰值（结算展示）
 };

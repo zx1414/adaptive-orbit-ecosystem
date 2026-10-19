@@ -70,7 +70,7 @@ std::string jsonEscape(const std::string& s) {
 }
 
 // POST /env 契约响应：{ok,applied,rejected,influence,cooldowns}（+可选 err）。
-// applied 为成功条数；rejected 为 [{key,reason}]；cooldowns 按事件 id 给出剩余帧。
+// applied 为成功条数；rejected 为 [{key,reason}]；cooldowns 为兼容字段，手动事件无冷却恒为 0。
 std::string envResponseJson(const EnvApplyResult& res, const EnvState& st, bool ok,
                             const std::string& err) {
     std::string out = "{\"ok\":";

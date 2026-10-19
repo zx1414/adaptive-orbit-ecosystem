@@ -2,7 +2,7 @@
 //
 // 设计约束：
 //  * 本文件只放数据表 + 纯配置操作 + JSON，不持有任何世界状态；
-//    World::applyEnvCommand / applyEnvEvent 负责影响力、冷却、事件效果与派生对象同步。
+//    World::applyEnvCommand / applyEnvEvent 负责影响力、事件效果与派生对象同步。
 //  * 四轴五档的具体数值**只写在这里**（前端从 GET /env 读取，不得复制常量）。
 //  * 细调复用 ParamSchema 的键与 min/max：值先钳制再写入，未知键直接拒绝。
 //  * 不消耗任何 RNG（纯配置读写）→ 不影响模拟确定性红线。
@@ -118,15 +118,16 @@ std::vector<EnvAxisDef> buildAxes() {
 }
 
 std::vector<EnvEventDef> buildEvents() {
+    // 手动事件只受「影响力」约束：可以连续触发，不再有冷却。
     return {
         {EnvEventKind::Harvest, "harvest", "丰收",
-         "全体存活核 +8 能量（单次总注入 ≤2000）：快速回血、缓解饥荒", 15.0, 600},
+         "全体存活核 +8 能量（单次总注入 ≤2000）：快速回血、缓解饥荒", 15.0, 0},
         {EnvEventKind::Winter, "winter", "寒冬",
-         "全体存活核 −5 能量（能量 <5 的核跳过）：加速淘汰弱者", 10.0, 600},
+         "全体存活核 −5 能量（能量 <5 的核跳过）：加速淘汰弱者", 10.0, 0},
         {EnvEventKind::Plague, "plague", "瘟疫",
-         "能量 >100 的富核 −12：抑制垄断巨头", 20.0, 900},
+         "能量 >100 的富核 −12：抑制垄断巨头", 20.0, 0},
         {EnvEventKind::Bloom, "bloom", "蓝细菌爆发",
-         "蓝细菌关闭则激活 150 节点；已开启则追加 120 节点", 25.0, 900},
+         "蓝细菌关闭则激活 150 节点；已开启则追加 120 节点", 25.0, 0},
     };
 }
 
@@ -443,7 +444,6 @@ std::string EnvControl::toJson(const EnvState& st, const WorldConfig& cfg,
     for (size_t i = 0; i < events().size(); ++i) {
         if (i > 0) out += ',';
         const EnvEventDef& e = events()[i];
-        const size_t idx = static_cast<size_t>(e.kind);
         out += "{\"id\":\"";
         out += e.id;
         out += "\",\"name\":\"";
@@ -452,11 +452,8 @@ std::string EnvControl::toJson(const EnvState& st, const WorldConfig& cfg,
         out += jsonEscape(e.desc);
         out += "\",\"cost\":";
         out += jsonNum(e.cost);
-        out += ",\"cooldownLeft\":";
-        out += std::to_string(idx < kEnvEventCount ? st.cooldown[idx] : 0);
-        out += ",\"cooldown\":";
-        out += std::to_string(e.cooldownFrames);
-        out += "}";
+        // 兼容字段：玩家手动事件无冷却，恒为 0。
+        out += ",\"cooldownLeft\":0,\"cooldown\":0}";
     }
     out += "]";
 

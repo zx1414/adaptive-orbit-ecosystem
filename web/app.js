@@ -12,7 +12,12 @@ const CYANO_NODE_REC = 24, CYANO_LINK_REC = 8;
 const SNAP_VERSION = 2;   // 只接受 v2 快照
 const FADE = 14;          // 每渲染帧 alpha 衰减量（255 → ~18 帧 ≈ 0.3s 拖尾）
 const FREE_RGB = [158, 158, 158];
-const TYPE_LIGHT = [0.32, 0.58, 0.86];
+// 三类有主球：色相仍来自所属核（谱系），用「明度 + 形状」双重区分。
+// 旧版只有 0.32/0.58/0.86 明度差；3~5px 小方块在深色背景上仍难分辨，
+// 因此 v2.2.1 起改为 方/菱/十字 三种像素形状（见 ballMask），并把暗色抬亮。
+const TYPE_LIGHT = [0.38, 0.62, 0.90];
+const TYPE_NAMES = ['护盾', '资源', '侦察'];
+const TYPE_MARKS = ['■', '◆', '✚'];       // 图例符号：与 ballMask 的形状一一对应
 const OWNER_LUT = 1024;
 // 核记录内字段偏移（v2）：28 = hue f32（0..360，遗传自父核 + 小幅扰动）
 const NUCL_ID_OFF = 24, NUCL_HUE_OFF = 28;
@@ -122,6 +127,10 @@ function rgbCss(rgb, alpha) {
     ? `rgb(${rgb[0]},${rgb[1]},${rgb[2]})`
     : `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${alpha})`;
 }
+// 打包色字（0xAABBGGRR）→ CSS。图例用实际渲染色，避免手写色块与画面不一致。
+function wordCss(w) {
+  return `rgb(${w & 255},${(w >>> 8) & 255},${(w >>> 16) & 255})`;
+}
 function applyPaletteToRenderer(p) {
   palette = p;
   applySizeKeys(p);            // 尺寸键：不依赖着色模式，type_color / owner_hue 都生效
@@ -168,6 +177,86 @@ function applyPaletteToRenderer(p) {
   cyanoLinkCss = rgbCss(cyanoLinkRgb, cyanoLinkAlpha);
   if (p.cyano_color_mode) cyanoColorMode = p.cyano_color_mode;
   canvas.style.background = p.background ? `rgb(${p.background.join(',')})` : '#05070b';
+  refreshLegend();
+}
+
+// ---------- 图例（从真实渲染状态生成，不手写色块） ----------
+// 旧图例的问题：色块是硬编码的（有主球固定 #7ec8f0、蓝细菌固定 #5adcaa），
+// 实际渲染却按核 hue / colonyId 分色；玩家打开图例看到的颜色与画面不一致。
+// 现在色块全部取「当前材质包 + 当前快照」的真实颜色，并标出类型形状。
+let legendSig = '';
+function legendHue() {
+  if (sim && sim.nucleusCount > 0) {
+    return sim.dv.getFloat32(sim.nuclOff + NUCL_HUE_OFF, true);
+  }
+  return 205;   // 菜单态没有快照：用中性蓝作示例，不伪装成真实核
+}
+function legendTypeCss(t, hue) {
+  if (palette && palette.mode === 'type_color' && typeModeColors[t]) {
+    return wordCss(typeModeColors[t]);
+  }
+  return rgbCss(hslToRgb(hue, 0.78, TYPE_LIGHT[t]));
+}
+// 蓝细菌图例：colony 模式用快照里真实的前 3 个菌落色，flat 模式用材质包整色。
+function legendCyano() {
+  if (cyanoColorMode === 'flat') {
+    return { flat: true, dots: [cyanoNodeCss] };
+  }
+  const dots = [];
+  if (sim && sim.cyanoNodeCount > 0) {
+    const seen = new Set();
+    for (let i = 0; i < sim.cyanoNodeCount && dots.length < 3; i++) {
+      const off = sim.cyanoNodeOff + i * CYANO_NODE_REC;
+      const c = sim.dv.getUint16(off + CY_COLONY, true);
+      if (seen.has(c)) continue;
+      seen.add(c);
+      dots.push(rgbCss(liftRgb(hslToRgb((c * 47) % 360, 0.68, 0.55), 150)));
+    }
+  }
+  if (!dots.length) dots.push(cyanoNodeCss);
+  return { flat: false, dots };
+}
+function refreshLegend() {
+  const grid = el('legend-grid');
+  if (!grid) return;
+  const hue = legendHue();
+  const typeMode = !!(palette && palette.mode === 'type_color');
+  const typeCss = [0, 1, 2].map((t) => legendTypeCss(t, hue));
+  const freeCss = wordCss(freeColorWord || freeColor);
+  const nucCss = rgbCss(liftRgb(hslToRgb(hue, 0.85, 0.55), 120));
+  const cy = legendCyano();
+  const sig = [
+    hue.toFixed(1), typeMode ? 1 : 0,
+    typeCss.join(','), freeCss, nucCss, cy.flat ? 'flat' : cy.dots.join(','),
+    cyanoLinkCss, typeSize.join(','), freeSize, cyanoColorMode,
+  ].join('|');
+  if (sig === legendSig) return;
+  legendSig = sig;
+
+  const typeRows = [0, 1, 2].map((t) =>
+    `<span class="lgtype"><i class="lgball" style="color:${typeCss[t]}">${TYPE_MARKS[t]}</i>` +
+    `${TYPE_NAMES[t]} <span class="lnote">${typeSize[t]}px</span></span>`).join('');
+  const colonySw = cy.flat
+    ? `<span class="lsw" style="background:${cy.dots[0]}"></span>`
+    : `<span class="lsw lsw-colony" style="background:linear-gradient(90deg,${
+        cy.dots.map((c, i) => `${c} ${(i * 100 / cy.dots.length).toFixed(1)}% ${((i + 1) * 100 / cy.dots.length).toFixed(1)}%`).join(',')
+      })"></span>`;
+  grid.innerHTML =
+    `<div class="lrow"><span class="lsw" style="background:${freeCss}"></span>自由球 <span class="lnote">${freeSize}px</span></div>` +
+    `<div class="lrow"><span class="lsw lsw-ring" style="border-color:${nucCss}"></span>核 <span class="lnote">能量环+暗 halo</span></div>` +
+    `<div class="lrow full lg-balltypes">${typeRows}</div>` +
+    `<div class="lrow full lnote">${typeMode
+      ? '有主球：当前材质包按类型固定配色；形状 = 类型'
+      : '有主球：色相 = 所属核（谱系），形状 = 类型'}</div>` +
+    `<div class="lrow">${colonySw}蓝细菌节点 <span class="lnote">${cy.flat ? '单色' : '按菌落分色'}</span></div>` +
+    `<div class="lrow"><span class="lline" style="background:${cyanoLinkCss}"></span>菌丝连线</div>` +
+    `<div class="lrow full lhint">环境：底部快调条 4 轴 ± · 事件卡 / 细调抽屉（运行/暂停时可用；消耗影响力，事件无冷却）</div>` +
+    `<div class="lrow full lhint">滚轮缩放（以指针为锚）· 拖拽平移 · 悬停查看核参数 · 双击画布重置视图</div>` +
+    `<div class="lrow full lhint">快捷键：<span class="kbd">空格</span> 暂停/继续 · ` +
+    `<span class="kbd">N</span> 单步 · <span class="kbd">S</span> 保存</div>` +
+    `<div class="lrow full lhint">快捷键：<span class="kbd">R</span> 重置视图 · ` +
+    `<span class="kbd">1-4</span> 切页 · <span class="kbd">+/-</span> 缩放 · ` +
+    `<span class="kbd">Esc</span> 返回菜单</div>`;
 }
 
 // ---------- 全局状态 ----------
@@ -183,7 +272,7 @@ let packsData = null;            // /packs JSON 数组
 let enabledPacks = [];           // 启用材质包有序列表
 let palette = null;              // 应用后的调色板；键名可能是 snake_case（colors.txt）或 camelCase（旧 JSON），读取一律走 pickArr()
 let exiting = false;             // 已请求退出：停止轮询并显示退出提示
-// ---- 环境调控（v2.2.0）：GET /env 是唯一事实来源（轴/档位/事件/费用/冷却全从后端读）----
+// ---- 环境调控（v2.2.0）：GET /env 是唯一事实来源（轴/档位/事件/费用全从后端读）----
 let envData = null;              // 最近一次 GET /env JSON（null = 尚未取到 / 后端未实现）
 let eventsOpen = false;          // 事件卡弹出层是否打开
 let fineOpen = false;            // 右侧细调抽屉是否打开
@@ -280,6 +369,7 @@ function setUiState(s) {
     if (s === 'menu') envData = null;                        // 新一局从干净状态开始
     renderEnvUi();     // 先按新状态重置可用性/提示（菜单态不显示上一局的影响力残余）
     fetchEnv();        // 再拉一次 /env（菜单态后端用 pendingCfg_ 构造只读预览）
+    refreshLegend();   // 状态切换时立即同步图例（不必等下一次渲染节拍）
   }
 }
 
@@ -473,6 +563,23 @@ function fadeTrail() {
   }
 }
 
+// 小球像素形状：0=护盾 实心方块，1=资源 菱形，2=侦察 十字。
+// 尺寸完全由材质包的 size_ball_* 决定；形状只是在该尺寸内做遮罩，不改变球的物理。
+// 为什么不用颜色区分三类：色相承载「所属核/谱系」信息，不能被类型覆盖；
+// 小尺寸下明度差又不够可靠，形状是唯一不牺牲谱系色的稳定区分手段。
+function ballMask(shape, x, y, size) {
+  if (shape === 1) {          // 菱形
+    if (size <= 2) return true;   // 2px 菱形会一个像素都覆盖不到：退化为实心，保证可见
+    const c = (size - 1) / 2;
+    return Math.abs(x - c) + Math.abs(y - c) <= c + 0.01;
+  }
+  if (shape === 2) {          // 十字
+    const c = (size - 1) / 2;
+    return Math.abs(x - c) <= 0.51 || Math.abs(y - c) <= 0.51;
+  }
+  return true;                // 实心方块
+}
+
 function stampBalls() {
   const dv = sim.dv, n = sim.ballCount;
   const sxToW = worldW / 65535, syToW = worldH / 65535;
@@ -504,6 +611,7 @@ function stampBalls() {
     // 材质需求「不同小球大小颜色不同」：尺寸按类型区分（护盾 > 资源 > 侦察）。
     // 锚点仍是左上角 (px,py) —— 改成中心锚点会让弹道观感全变，故不做。
     const size = type < typeSize.length ? typeSize[type] : freeSize;
+    const shape = type < 3 ? type : 0;
     if (size < 2) {   // 1px 的极端档位退化成一个像素，保证小球可见
       if (px >= 0 && px < W && py >= 0 && py < H) buf[py * W + px] = col;
       continue;
@@ -512,9 +620,9 @@ function stampBalls() {
       const y = py + yy;
       if (y < 0 || y >= H) continue;
       for (let xx = 0; xx < size; xx++) {
+        if (!ballMask(shape, xx, yy, size)) continue;
         const x = px + xx;
-        if (x < 0 || x >= W) continue;
-        buf[y * W + x] = col;
+        if (x >= 0 && x < W) buf[y * W + x] = col;
       }
     }
   }
@@ -675,6 +783,9 @@ function renderLoop(now) {
     fpsFrames = 0; fpsT0 = now;
   }
   fpsFrames++;
+  // 图例跟随「真实渲染状态」：快照核 hue / 材质包配色 / 球尺寸都会变。
+  // 每 16 帧刷新一次；refreshLegend 内部用签名去重，只在真的变化时重建 DOM。
+  if ((fpsFrames & 15) === 0) refreshLegend();
   if (sim && (uiState === 'running' || uiState === 'paused' || uiState === 'finished')) {
     fadeTrail();
     simDebug.counts.balls = sim.ballCount;
@@ -1302,7 +1413,7 @@ el('btn-save-mods').addEventListener('click', async () => {
 });
 
 // ---------- 环境调控 UI（v2.2.0） ----------
-// 设计红线：**前端不复制任何轴/档位/事件/费用/冷却常量**，全部从 GET /env 读取渲染。
+// 设计红线：**前端不复制任何轴/档位/事件/费用常量**，全部从 GET /env 读取渲染。
 //   - 快调：点击 chip 的 −/+ → POST `axis.<id>=<目标档位>`
 //   - 事件：事件卡 → POST `event.<id>=1`
 //   - 细调：每轴「应用」→ POST `fine.<key>=<值>`（可多行一次提交，后端逐条裁决）
@@ -1330,7 +1441,8 @@ function showEnvToast(text, ok) {
   envToastTimer = setTimeout(() => { t.className = ''; envToastTimer = 0; }, 3200);
 }
 
-// POST /env 的响应契约（api-dev）：{ok, applied, rejected:[{key,reason}], influence, cooldowns}
+// POST /env 的响应契约（api-dev）：{ok, applied, rejected:[{key,reason}], influence}
+// cooldowns 为旧版兼容字段，手动事件已无冷却，前端不再展示。
 // 混合请求可能 ok=false 但 applied>0 —— 仍按失败提示，并逐条列出被拒原因。
 function envRejectText(json, fallback) {
   if (json && typeof json === 'object') {
@@ -1350,7 +1462,7 @@ function envRejectText(json, fallback) {
     const m = json.err || json.error || json.message;
     if (typeof m === 'string' && m) return m;
   }
-  return fallback || '影响力不足或冷却中';
+  return fallback || '影响力不足';
 }
 
 async function postEnv(body, okText) {
@@ -1377,7 +1489,7 @@ async function postEnv(body, okText) {
     return false;
   }
   showEnvToast(okText, true);
-  fetchEnv();                       // 操作后立即刷新（影响力/冷却/档位）
+  fetchEnv();                       // 操作后立即刷新（影响力/档位）
   return true;
 }
 
@@ -1528,8 +1640,8 @@ function renderEventPop() {
   const cur = inf && Number.isFinite(inf.cur) ? inf.cur : 0;
   const max = inf && Number.isFinite(inf.max) ? inf.max : null;
   const active = envIsActive();
-  // 冷却每秒都在变 → 卡片的可用性/说明必须跟着刷新；按事件状态做签名减少无谓重建
-  const sig = events.map((e) => [e.id, e.cost, e.cooldownLeft, e.cooldown, e.name].join(':')).join('|') +
+  // 影响力随时间恢复 → 卡片可用性/说明要跟着刷新；按状态做签名减少无谓重建
+  const sig = events.map((e) => [e.id, e.cost, e.name].join(':')).join('|') +
     '|' + Math.floor(cur) + '|' + (active ? 1 : 0);
   if (sig === eventsSig) return;
   eventsSig = sig;
@@ -1544,11 +1656,8 @@ function renderEventPop() {
   }
   for (const e of events) {
     const cost = Number(e.cost);
-    const cdLeft = Number(e.cooldownLeft) || 0;
-    const cd = Number(e.cooldown) || 0;
     let reason = '';
     if (!active) reason = '启动后可实时调控';
-    else if (cdLeft > 0) reason = '冷却中：剩余 ' + cdLeft + ' 帧';
     else if (Number.isFinite(cost) && cur < cost) reason = '影响力不足（需 ' + cost + '，当前 ' + Math.floor(cur) + '）';
     const card = document.createElement('button');
     card.type = 'button';
@@ -1570,7 +1679,7 @@ function renderEventPop() {
     ds.textContent = e.desc || '';
     const ft = document.createElement('div');
     ft.className = 'ecard-foot';
-    ft.textContent = reason || ('冷却 ' + cd + ' 帧 · 点击触发');
+    ft.textContent = reason || ('点击触发 · 消耗 ' + (Number.isFinite(cost) ? cost : '?') + ' 影响力');
     card.appendChild(top);
     card.appendChild(ds);
     card.appendChild(ft);
@@ -1857,7 +1966,7 @@ window.addEventListener('resize', () => { if (eventsOpen || fineOpen) layoutEnvP
   const d = el('hud-debug');
   if (d && d.addEventListener) d.addEventListener('toggle', () => { if (eventsOpen || fineOpen) layoutEnvPanels(); });
 })();
-// /env 轮询：运行/暂停态每秒刷新（影响力恢复、事件冷却、档位都可能变）；
+// /env 轮询：运行/暂停态每秒刷新（影响力恢复、档位都可能变）；
 // 打开面板时同样走这条轮询。操作成功/失败后 postEnv/fetchEnv 会立即刷新一次。
 setInterval(() => {
   if (exiting) return;
@@ -1876,6 +1985,7 @@ setInterval(pollState, 50);
 pollStatus();
 fetchEnv();              // 菜单态也先取一次：四轴 chip / 事件费用来自后端，菜单态只读展示
 loadPacks();  // 启动时应用材质包调色板
+refreshLegend();  // 先用默认色填图例；材质包/快照到达后会自动重算
 syncSpeedFromConfig();  // 帧率下拉框对齐 env_config.txt 的 max_fps
 
 // ---------- 存档页 ----------

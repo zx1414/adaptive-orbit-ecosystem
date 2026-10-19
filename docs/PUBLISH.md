@@ -207,6 +207,18 @@ Compress-Archive -Path release\v1.1.0\* -DestinationPath release\自适应核生
 
 - 包内仍不放个人 `env_config.txt`；默认演示由启动器“启用蓝细菌/推荐生态 mod”复选框保证。
 - 根 `env_config.txt` 已调整为演示平衡值（蓝细菌 150、球 300、核 12、食物补充 0.01）。
+
+---
+
+## 8. v2.2.1 发布记录（图例动态化 + 球型 + 手动事件无冷却）
+
+发布日期：本轮。打包产物：`_agent\自适应环绕核生态模拟器-v2.2.1.zip`；
+打包脚本：`_agent\qa\package_v221.ps1`。
+
+- 图例色块改为按当前材质包/快照生成，三类有主球增加形状区分（方/菱/十字）。
+- 手动事件取消冷却，只保留影响力消耗；旧档冷却字段读档清零。
+- 快照 v2 / 存档 NSMS v2 不变；确定性基线 7 个 CSV 哈希与 v2.1.0 一致。
+- 包内不放个人 `env_config.txt`，与 v2.2.0 相同。
 - 版本号三处：`src/main.cpp`、`web/index.html`、本文档/README。
 - 回归：无改动时关/开蓝细菌 5000 帧 CSV 与 v2.1.0 基线逐字节一致；`--schema-check` 通过；
   `tests/baseline/v2.1.0-baseline.txt` 保存基线哈希。

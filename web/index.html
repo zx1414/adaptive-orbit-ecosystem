@@ -197,6 +197,18 @@
   #legend .lhint + .lhint { border-top: 0; padding-top: 0; }
   .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 50%;
             margin-right: 5px; vertical-align: -1px; }
+  /* 图例色块：颜色全部由 JS 按当前材质包/快照写入，避免手写色与画面不一致 */
+  #legend .lsw { display: inline-block; width: 11px; height: 11px; border-radius: 2px;
+                 margin-right: 5px; vertical-align: -1px; image-rendering: pixelated; }
+  #legend .lsw-colony { width: 18px; border-radius: 3px; }
+  #legend .lsw-ring { border: 2px solid var(--text2); background: radial-gradient(circle, #fff 0 2px, transparent 2.5px); }
+  #legend .lline { display: inline-block; width: 18px; height: 2px; border-radius: 0;
+                   margin-right: 5px; vertical-align: 3px; }
+  #legend .lg-balltypes { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center;
+                          margin: 2px 0 0; }
+  #legend .lgtype { display: inline-flex; align-items: center; gap: 3px; white-space: nowrap; }
+  #legend .lgball { font-style: normal; line-height: 1; font-size: 15px;
+                    text-shadow: 0 0 2px rgba(0,0,0,.9); }
 
   /* 暂停角标：底部居中、很淡、不接收指针事件，只看状态不挡操作 */
   #paused-badge { position: absolute; left: 50%; bottom: 62px; z-index: 5;
@@ -470,7 +482,7 @@
 <body>
 <div id="app">
   <div id="topbar">
-    <span class="title">核-小球生态演化模拟器 <span class="ver">v2.2.0</span></span>
+    <span class="title">核-小球生态演化模拟器 <span class="ver">v2.2.1</span></span>
     <span id="badge" class="menu">未运行</span>
     <div id="tabs" role="tablist" aria-label="页面切换">
       <button class="active" data-page="run" title="运行（1）">运行</button>
@@ -594,7 +606,7 @@
           </details>
         </div>
         <!-- 底部快调条（v2.2.0）：影响力 + 四轴 ± + 事件/细调入口。
-             数值（影响力/轴名/档位名/事件费用/冷却）全部来自 GET /env，前端不写死。 -->
+             数值（影响力/轴名/档位名/事件费用）全部来自 GET /env，前端不写死。 -->
         <div id="quickbar">
           <div class="qb-influence">
             <span class="qb-label">影响力</span>
@@ -621,7 +633,7 @@
             <button id="event-close" title="关闭（Esc）">×</button>
           </div>
           <div id="event-list"></div>
-          <div class="ep-note">事件有费用与冷却；名称/描述/费用/冷却均来自后端 GET /env。</div>
+          <div class="ep-note">事件只消耗影响力、没有冷却；名称/描述/费用均来自后端 GET /env。</div>
         </div>
         <div id="fine-drawer" role="dialog" aria-label="环境细调">
           <div class="fd-head">
@@ -635,23 +647,10 @@
         </div>
         <div id="env-toast" role="status" aria-live="polite"></div>
         <details id="legend">
-          <summary title="点击展开/收起图例（快捷键提示也在里面）">图例</summary>
-          <div class="lgrid">
-            <div class="lrow"><span class="swatch" style="background:#9e9e9e"></span>自由球(灰白,3px)</div>
-            <div class="lrow"><span class="swatch" style="background:#7ec8f0"></span>有主球(色相=核,亮度=类型)</div>
-            <div class="lrow"><span class="swatch" style="background:#ffffff;border:1px solid #888"></span>核(能量环+暗 halo,谱系色)</div>
-            <div class="lrow"><span class="swatch" style="background:#5adcaa;box-shadow:0 0 0 1px rgba(0,0,0,.62)"></span>蓝细菌节点(1.6~6px,深色描边)</div>
-            <div class="lrow"><span class="swatch" style="background:rgba(60,140,110,.7);width:14px;height:2px;border-radius:0"></span>菌丝连线 rgba(60,140,110,0.7) · 1.5px</div>
-            <div class="lrow lnote">护盾5/资源4/侦察3px</div>
-            <div class="lrow full lhint">环境：底部快调条 4 轴 ± · 事件卡 / 细调抽屉（运行/暂停时可用；影响力与冷却见 GET /env）</div>
-            <div class="lrow full lhint">滚轮缩放（以指针为锚）· 拖拽平移 · 悬停查看核参数 · 双击画布重置视图</div>
-            <!-- 快捷键拆成固定两行：避免展开时在末行出现单字孤行（D3） -->
-            <div class="lrow full lhint">快捷键：<span class="kbd">空格</span> 暂停/继续 ·
-              <span class="kbd">N</span> 单步 · <span class="kbd">S</span> 保存</div>
-            <div class="lrow full lhint">快捷键：<span class="kbd">R</span> 重置视图 ·
-              <span class="kbd">1-4</span> 切页 · <span class="kbd">+/-</span> 缩放 ·
-              <span class="kbd">Esc</span> 返回菜单</div>
-          </div>
+          <summary title="点击展开/收起图例（颜色与形状均取自当前画面）">图例</summary>
+          <!-- 内容由 app.js 的 refreshLegend() 按当前材质包与快照生成：
+               色块不再手写，避免图例颜色与实际渲染不一致。 -->
+          <div class="lgrid" id="legend-grid"></div>
         </details>
         <div id="paused-badge">已暂停 · 按空格继续</div>
         <div id="tooltip"></div>
