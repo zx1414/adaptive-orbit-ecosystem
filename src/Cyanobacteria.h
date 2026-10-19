@@ -104,6 +104,26 @@ public:
     const std::vector<CyanoLink>& links() const { return links_; }
     const CyanoParams& params() const { return params_; }
     bool empty() const { return nodes_.empty(); }
+    double worldWidth() const { return worldW_; }
+    double worldHeight() const { return worldH_; }
+    uint32_t nextNodeId() const { return nextNodeId_; }
+
+    // ---- v2.2.0：玩家在线调控 / 存档 v2（全部不消耗 RNG 者已在注释标明）----
+    // 更新规则参数（不重建节点；linkDistance 变化时重建内部空间网格）。零 RNG。
+    void setParams(const CyanoParams& p);
+    // 世界尺寸变化（读档/细调世界尺寸）时重建内部空间网格并把节点钳制回世界内。零 RNG。
+    void setWorldSize(double w, double h);
+    // 清空群落并复位 nextNodeId（关闭蓝细菌用）。**零 RNG**。
+    void clear();
+    // 在现有聚落附近追加 count 个节点（玩家 bloom / 在线开启）；返回实际添加数。
+    // **消耗主 rng**（玩家行为），调用顺序固定：聚落中心（仅空群落时）→ 每节点角度/半径。
+    int addNodes(std::mt19937& rng, int count, int colonyCount, double initialEnergy);
+    // 存档 v2：原样导出节点/连接/nextNodeId（不消耗 RNG）。
+    void save(std::vector<CyanoNode>& outNodes, std::vector<CyanoLink>& outLinks,
+              uint32_t& outNextNodeId) const;
+    // 存档 v2 恢复：校验连接端点后重建内部网格与 linkCount 缓存（不消耗 RNG）。
+    bool load(const std::vector<CyanoNode>& inNodes, const std::vector<CyanoLink>& inLinks,
+              uint32_t inNextNodeId);
 
 private:
     double worldW_, worldH_;
@@ -115,4 +135,6 @@ private:
     double cellSize_ = 0.0;
     std::vector<std::vector<uint32_t>> nodeCells_;  // 内部空间网格（节点桶）
     void rebuildGrid();
+    // 按当前 world 尺寸 + linkDistance 重算 cols_/rows_/cellSize_ 并重建网格。
+    void reshapeGrid();
 };

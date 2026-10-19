@@ -63,10 +63,16 @@ let typeSize = [5, 4, 3];      // Shield, Worker, Scout 的像素边长
 let freeSize = 3;              // 自由球的像素边长（自由球按类型仍可用 typeSize，此值为兜底）
 let nucleusSize = 1.0;         // 核半径倍率：1.0 = 默认 (3 + 5*frac) / 内芯 2.2
 let cyanoNodeSize = 2.0;       // 蓝细菌节点基准半径（像素）
+// 节点半径硬夹在 [1.6, 6]：太小会在暗色背景上「看不见」，太大糊成一团（可见性验收项）
+const CYANO_R_MIN = 1.6, CYANO_R_MAX = 6;
+const CYANO_STROKE_CSS = 'rgba(0,0,0,0.62)';   // 节点 1px 深色描边（先描边再填充）
 // ---- 蓝细菌配色（默认绿青，材质包可覆盖）----
 let cyanoNodeCss = 'rgb(90,220,170)';
-let cyanoLinkCss = 'rgba(60,140,110,0.35)';
+let cyanoLinkRgb = [60, 140, 110];       // 连线基色；材质包 cyano_link 可覆盖
+let cyanoLinkAlpha = 0.7;                // 连线默认不透明度 0.7；材质包 cyano_link_alpha(0.35~1) 可覆盖
+let cyanoLinkCss = 'rgba(60,140,110,0.7)';
 let cyanoColorMode = 'colony';   // colony = 按 colonyId 分色（默认）；flat = 用 cyano_node/cyano_link 整色
+let cyanoNodeRgb = [90, 220, 170];       // 材质包 cyano_node（flat 模式生效），提亮后缓存
 const clampSize = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 // 把 [s0,s1,s2] 写回模块级 typeSize（就地修改，便于下次无覆盖时保持）
 function setTypeSize(idx, v) {
@@ -101,9 +107,31 @@ function pickArr(p, camel, snake) {
   if (!Number.isFinite(r) || !Number.isFinite(g) || !Number.isFinite(b)) return null;
   return [clampByte(r), clampByte(g), clampByte(b)];
 }
+// 低亮度提亮：材质包/聚落色可能比背景还暗（深色球/菌丝在 #05070b 上几乎看不见）。
+// 以「最亮通道」为基准等比放大到 minMax —— 色相不变、只抬亮度；已足够亮则原样返回。
+// 这是「全元素可见」的兜底：不改变任何颜色键的语义，只保证画面上真的看得见。
+function liftRgb(rgb, minMax) {
+  const r = clampByte(rgb[0]), g = clampByte(rgb[1]), b = clampByte(rgb[2]);
+  const m = Math.max(r, g, b);
+  if (m >= minMax || m <= 0) return [r, g, b];
+  const k = minMax / m;
+  return [clampByte(r * k), clampByte(g * k), clampByte(b * k)];
+}
+function rgbCss(rgb, alpha) {
+  return alpha === undefined
+    ? `rgb(${rgb[0]},${rgb[1]},${rgb[2]})`
+    : `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${alpha})`;
+}
 function applyPaletteToRenderer(p) {
   palette = p;
   applySizeKeys(p);            // 尺寸键：不依赖着色模式，type_color / owner_hue 都生效
+  // 蓝细菌配色每次先回默认值，避免上一个材质包的键泄漏到当前包（切换材质包后颜色必须可预期）
+  cyanoNodeRgb = [90, 220, 170];
+  cyanoNodeCss = rgbCss(cyanoNodeRgb);
+  cyanoLinkRgb = [60, 140, 110];
+  cyanoLinkAlpha = 0.7;
+  cyanoLinkCss = rgbCss(cyanoLinkRgb, cyanoLinkAlpha);
+  cyanoColorMode = 'colony';
   if (!p) {
     freeColorWord = freeColor;
     typeModeColors.fill(0);
@@ -111,12 +139,13 @@ function applyPaletteToRenderer(p) {
     return;
   }
   // 取色统一走 pickArr：snake_case / camelCase 都能取到，缺键不再静默拿到 undefined。
+  // 所有球色都过一遍 liftRgb：材质包写了过暗颜色也不会在画面上消失。
   const free = pickArr(p, 'freeBall', 'free_ball');
-  freeColorWord = packRgb(free || FREE_RGB);
+  freeColorWord = packRgb(liftRgb(free || FREE_RGB, 96));
   const typeKeys = [['ballShield', 'ball_shield'], ['ballWorker', 'ball_worker'], ['ballScout', 'ball_scout']];
   for (let i = 0; i < typeKeys.length; i++) {
     const rgb = pickArr(p, typeKeys[i][0], typeKeys[i][1]);
-    typeModeColors[i] = rgb ? packRgb(rgb) : 0;
+    typeModeColors[i] = rgb ? packRgb(liftRgb(rgb, 96)) : 0;
   }
   // 兜底阀：type_color 模式下缺色/解析失败（=0）的类型一律回落默认色（owner_hue LUT 第一组）。
   // 保证材质包即使只写了 mode、颜色键全缺，球也是可见的，而不是 alpha=0 隐身。
@@ -126,9 +155,17 @@ function applyPaletteToRenderer(p) {
     }
   }
   const cn = pickArr(p, 'cyanoNode', 'cyano_node');
-  if (cn) cyanoNodeCss = `rgb(${cn.join(',')})`;
+  if (cn) {
+    cyanoNodeRgb = liftRgb(cn, 130);
+    cyanoNodeCss = rgbCss(cyanoNodeRgb);
+  }
   const cl = pickArr(p, 'cyanoLink', 'cyano_link');
-  if (cl) cyanoLinkCss = `rgba(${cl.join(',')},0.35)`;
+  if (cl) cyanoLinkRgb = liftRgb(cl, 110);
+  // 可选键：cyano_link_alpha（0.35~1），缺省 0.7 —— 材质包可以把菌丝调更实/更淡，但不能调到看不见
+  if (Number.isFinite(p.cyano_link_alpha)) {
+    cyanoLinkAlpha = clampSize(p.cyano_link_alpha, 0.35, 1);
+  }
+  cyanoLinkCss = rgbCss(cyanoLinkRgb, cyanoLinkAlpha);
   if (p.cyano_color_mode) cyanoColorMode = p.cyano_color_mode;
   canvas.style.background = p.background ? `rgb(${p.background.join(',')})` : '#05070b';
 }
@@ -146,6 +183,25 @@ let packsData = null;            // /packs JSON 数组
 let enabledPacks = [];           // 启用材质包有序列表
 let palette = null;              // 应用后的调色板；键名可能是 snake_case（colors.txt）或 camelCase（旧 JSON），读取一律走 pickArr()
 let exiting = false;             // 已请求退出：停止轮询并显示退出提示
+// ---- 环境调控（v2.2.0）：GET /env 是唯一事实来源（轴/档位/事件/费用/冷却全从后端读）----
+let envData = null;              // 最近一次 GET /env JSON（null = 尚未取到 / 后端未实现）
+let eventsOpen = false;          // 事件卡弹出层是否打开
+let fineOpen = false;            // 右侧细调抽屉是否打开
+// 统计兜底：env 里若有峰值/干预/存活帧字段则用之，否则结束结算显示 --（后端预留字段）
+let envStats = { peakAlive: null, interventions: null, aliveFrames: null };
+
+// ---------- 渲染自检 ----------
+// HUD「渲染自检」折叠行与自动化截图断言共用同一份数据：
+//   counts = 快照里的实体数；drawn = 本帧真正画到画布上的数量；culled = 被视口剔除的数量。
+// 「实体数 > 0 但绘制数 = 0」是可见性事故的典型信号，HUD 会显示黄色警告。
+const simDebug = {
+  frame: 0,
+  counts: { balls: 0, nuclei: 0, cyanoNodes: 0, cyanoLinks: 0 },
+  drawn: { balls: 0, nuclei: 0, cyanoNodes: 0, cyanoLinks: 0 },
+  culled: 0,
+  thinning: false,
+};
+try { window.__simDebug = simDebug; } catch (e) { /* 非浏览器环境（Node 打桩）忽略 */ }
 
 // ---------- HTTP 小工具 ----------
 async function postBody(path, body) {
@@ -209,7 +265,7 @@ function setUiState(s) {
   el('stage-empty').classList.toggle('show', s === 'menu');
   if (s === 'finished') {
     el('overlay-title').textContent = '模拟已结束';
-    el('overlay-text').textContent = '结束原因：' + reason + ' · 最终帧 ' + frame;
+    updateEndOverlay();
   }
   if (prev !== 'running' && prev !== 'paused' && running) {
     buf.fill(0);           // 新一次运行：清空轨迹
@@ -218,6 +274,49 @@ function setUiState(s) {
   if (prev === 'finished' && s === 'menu') {
     buf.fill(0);
   }
+  // ---- 环境调控 UI（v2.2.0）：状态切换时收起面板/立即刷新一次 /env ----
+  if (prev !== s) {
+    if (s === 'menu' || s === 'finished') closeEnvPanels();   // 菜单/结束态不允许余留面板
+    if (s === 'menu') envData = null;                        // 新一局从干净状态开始
+    renderEnvUi();     // 先按新状态重置可用性/提示（菜单态不显示上一局的影响力残余）
+    fetchEnv();        // 再拉一次 /env（菜单态后端用 pendingCfg_ 构造只读预览）
+  }
+}
+
+// 结束结算：峰值核数 / 干预次数 / 存活帧。
+// 数据来源优先级：GET /env 的统计字段（后端预留）→ 快照帧号兜底；都没有则显示 --。
+function readEnvStats(env) {
+  const out = { peakAlive: null, interventions: null, aliveFrames: null };
+  const roots = [];
+  if (env && typeof env === 'object') {
+    roots.push(env, env.stats, env.sim, env.envStats);
+  }
+  const pickNum = (o, keys) => {
+    if (!o || typeof o !== 'object') return null;
+    for (const k of keys) {
+      const v = o[k];
+      if (typeof v === 'number' && Number.isFinite(v)) return v;
+    }
+    return null;
+  };
+  for (const r of roots) {
+    if (!r) continue;
+    if (out.peakAlive == null) out.peakAlive = pickNum(r, ['peakAlive', 'peak_alive', 'peakNuclei', 'peak']);
+    if (out.interventions == null) out.interventions = pickNum(r, ['interventions', 'interventionCount', 'interventionsCount']);
+    if (out.aliveFrames == null) out.aliveFrames = pickNum(r, ['aliveFrames', 'alive_frames', 'survivedFrames', 'survived_frames']);
+  }
+  return out;
+}
+function updateEndOverlay() {
+  envStats = readEnvStats(envData);
+  const peak = envStats.peakAlive == null ? '--' : Math.round(envStats.peakAlive);
+  const iv = envStats.interventions == null ? '--' : Math.round(envStats.interventions);
+  // 存活帧：优先用后端统计，其次用最后快照帧号（结束态该帧号即存活帧数）
+  const alive = envStats.aliveFrames == null ? frame : Math.round(envStats.aliveFrames);
+  const t = el('overlay-text');
+  if (t) t.textContent = '结束原因：' + reason + ' · 最终帧 ' + frame;
+  const st = el('overlay-stats');
+  if (st) st.textContent = '峰值核数 ' + peak + ' · 干预次数 ' + iv + ' · 存活帧 ' + alive;
 }
 
 async function pollStatus() {
@@ -378,6 +477,8 @@ function stampBalls() {
   const dv = sim.dv, n = sim.ballCount;
   const sxToW = worldW / 65535, syToW = worldH / 65535;
   const typeMode = palette && palette.mode === 'type_color';
+  simDebug.counts.balls = n;
+  let drawn = 0;
   for (let i = 0; i < n; i++) {
     const off = sim.ballOff + i * BALL_REC;
     const wx = dv.getUint16(off, true) * sxToW;
@@ -386,6 +487,7 @@ function stampBalls() {
     const px = ((wx - ox) * scale) | 0;
     const py = ((wy - oy) * scale) | 0;
     if (px < -2 || px >= W + 2 || py < -2 || py >= H + 2) continue;
+    drawn++;
     const type = meta & 3;
     const ownerBits = meta >> 2;
     let col;
@@ -416,10 +518,16 @@ function stampBalls() {
       }
     }
   }
+  simDebug.drawn.balls = drawn;
 }
 
 function drawNuclei() {
   const dv = sim.dv, n = sim.nucleusCount;
+  simDebug.counts.nuclei = n;
+  // 内芯色：材质包 nucleus 键（snake/camel 均可），过 liftRgb 保证不出现「暗核看不见」
+  const nucPack = palette ? pickArr(palette, 'nucleus', 'nucleus') : null;
+  const nucRgb = nucPack || [255, 255, 255];
+  let drawn = 0;
   for (let i = 0; i < n; i++) {
     const off = sim.nuclOff + i * NUCL_REC;
     const wx = dv.getFloat32(off, true), wy = dv.getFloat32(off + 4, true);
@@ -430,28 +538,49 @@ function drawNuclei() {
     const hue = dv.getFloat32(off + NUCL_HUE_OFF, true);
     const sx = (wx - ox) * scale, sy = (wy - oy) * scale;
     if (sx < -30 || sx > W + 30 || sy < -30 || sy > H + 30) continue;
+    drawn++;
     const frac = Math.min(1, Math.max(0.15, threshold > 0 ? energy / threshold : 0.15));
-    const rgb = hslToRgb(hue, 0.85, 0.55);
+    const r = (3 + 5 * frac) * nucleusSize;
+    const rgb = liftRgb(hslToRgb(hue, 0.85, 0.55), 120);   // 低亮度核也提亮到可见
+    // 能量环外的半透明深色 halo：把核从「球群噪点」里托出来（先画 halo 再画环）
     ctx.beginPath();
-    ctx.arc(sx, sy, (3 + 5 * frac) * nucleusSize, 0, Math.PI * 2);
+    ctx.arc(sx, sy, r + 3, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(0,0,0,0.38)';
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(sx, sy, r, 0, Math.PI * 2);
     ctx.lineWidth = 2;
-    ctx.strokeStyle = `rgb(${rgb[0]},${rgb[1]},${rgb[2]})`;
+    ctx.strokeStyle = rgbCss(rgb);
     ctx.stroke();
     ctx.beginPath();
     ctx.arc(sx, sy, 2.2 * nucleusSize, 0, Math.PI * 2);
-    ctx.fillStyle = palette && palette.nucleus ? `rgb(${palette.nucleus.join(',')})` : '#ffffff';
+    ctx.fillStyle = rgbCss(liftRgb(nucRgb, 180));
     ctx.fill();
   }
+  simDebug.drawn.nuclei = drawn;
 }
 
 // ---------- 蓝细菌（快照 v2 附加段） ----------
+// 可见性修复要点（v2.2.0）：
+//   连线：默认 rgba(基色, 0.7)、lineWidth 1.5（材质包可用 cyano_link_alpha 覆盖透明度）。
+//   节点：半径夹在 [1.6, 6]，先画 1px 深色描边再填充（暗背景上也有轮廓）。
+//   flat 模式：进入填充循环前显式设置 fillStyle —— 旧代码只在 colony 分支里设色，
+//   首帧 flat 会沿用 ctx 默认的黑色 fillStyle，整片菌落变成「黑块/看不见」。
 // 关闭态 cyanoNodeCount === 0 → 首行即 return，零开销。
+let cyanoR = new Float32Array(0);
+let cyanoXs = new Float32Array(0);
+let cyanoYs = new Float32Array(0);
+let cyanoCol = new Uint16Array(0);
 function drawCyano() {
   const p = sim.cyanoNodeCount | 0;
+  const linkCount = sim.cyanoLinkCount | 0;
+  simDebug.counts.cyanoNodes = p;
+  simDebug.counts.cyanoLinks = linkCount;
+  simDebug.drawn.cyanoNodes = 0;
+  simDebug.drawn.cyanoLinks = 0;
   if (p <= 0) return;                       // 蓝细菌关闭：立即返回，不做任何工作
   const dv = sim.dv;
   const nodeOff = sim.cyanoNodeOff;
-  const linkCount = sim.cyanoLinkCount | 0;
 
   // ---- 1. 连线（先画，压在节点下面）----
   // 连接记录的两个 u32 是**节点数组下标**（非稳定 id），可 O(1) 直取坐标。
@@ -465,54 +594,74 @@ function drawCyano() {
     }
     const step = linkCount > CY_LINK_DECIMATE_AT ? 4 : 1;   // 抽稀降级，避免每帧几千次 canvas 路径
     LINK_THINNING_FLAG = step > 1;
-    if (step > 1) {
-      ctx.beginPath();                      // 抽稀时合并为一条子路径，单次 stroke
-      for (let i = 0; i < linkCount; i += step) {
-        const o = sim.cyanoLinkOff + i * CYANO_LINK_REC;
-        const a = dv.getUint32(o, true), b = dv.getUint32(o + 4, true);
-        if (a >= p || b >= p) continue;      // 越界下标：跳过，不画（防御性）
-        ctx.moveTo(xs[a], ys[a]);
-        ctx.lineTo(xs[b], ys[b]);
-      }
-      ctx.lineWidth = 1;
-      ctx.strokeStyle = cyanoLinkCss;
-      ctx.stroke();
-    } else {
-      ctx.lineWidth = 1;
-      ctx.strokeStyle = cyanoLinkCss;
-      for (let i = 0; i < linkCount; i++) {
-        const o = sim.cyanoLinkOff + i * CYANO_LINK_REC;
-        const a = dv.getUint32(o, true), b = dv.getUint32(o + 4, true);
-        if (a >= p || b >= p) continue;
-        ctx.beginPath();
-        ctx.moveTo(xs[a], ys[a]);
-        ctx.lineTo(xs[b], ys[b]);
-        ctx.stroke();
-      }
+    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = cyanoLinkCss;
+    ctx.beginPath();                          // 合并为一条路径，单次 stroke（抽稀与否都更快）
+    let drawnLinks = 0;
+    for (let i = 0; i < linkCount; i += step) {
+      const o = sim.cyanoLinkOff + i * CYANO_LINK_REC;
+      const a = dv.getUint32(o, true), b = dv.getUint32(o + 4, true);
+      if (a >= p || b >= p) continue;         // 越界下标：跳过，不画（防御性）
+      const ax = xs[a], ay = ys[a], bx = xs[b], by = ys[b];
+      // 两端都在视口同一侧才剔除；穿过视口的长连线必须保留
+      if ((ax < -2 && bx < -2) || (ax > W + 2 && bx > W + 2) ||
+          (ay < -2 && by < -2) || (ay > H + 2 && by > H + 2)) continue;
+      ctx.moveTo(ax, ay);
+      ctx.lineTo(bx, by);
+      drawnLinks++;
     }
+    ctx.stroke();
+    simDebug.drawn.cyanoLinks = drawnLinks;
   }
 
-  // ---- 2. 节点（实心小圆）----
+  // ---- 2. 节点（深色描边 + 实心小圆）----
   const avg = sim.cyanoAvgEnergy || 0;
   const denom = avg * 2 + 1e-6;
   const byColony = cyanoColorMode !== 'flat';   // 默认按聚落分色；材质包可切成整体单色
+  if (cyanoR.length < p) {   // 缓冲按需扩容（同帧复用，避免每帧分配）
+    cyanoR = new Float32Array(p);
+    cyanoXs = new Float32Array(p);
+    cyanoYs = new Float32Array(p);
+    cyanoCol = new Uint16Array(p);
+  }
+  // pass 1：计算坐标/半径 + 把所有节点圆并入同一条路径 → 一次 stroke 完成深色描边
+  let n = 0;
+  ctx.beginPath();
   for (let i = 0; i < p; i++) {
     const o = nodeOff + i * CYANO_NODE_REC;
     if (!(dv.getUint16(o + CY_FLAGS, true) & 1)) continue;   // flags bit0 = alive
     const energy = dv.getFloat32(o + CY_ENERGY, true);
-    const r = cyanoNodeSize + 3 * Math.min(1, energy / denom);
+    const rRaw = cyanoNodeSize + 3 * Math.min(1, energy / denom);
+    // 半径硬夹：< 1.6px 在暗色背景上会被抗锯齿吃掉，> 6px 会糊成一片
+    const r = rRaw < CYANO_R_MIN ? CYANO_R_MIN : rRaw > CYANO_R_MAX ? CYANO_R_MAX : rRaw;
     const sx = (dv.getFloat32(o + CY_X, true) - ox) * scale;
     const sy = (dv.getFloat32(o + CY_Y, true) - oy) * scale;
     if (sx < -8 || sx > W + 8 || sy < -8 || sy > H + 8) continue;
-    if (byColony) {
-      // 聚落分色：47 与 360 互质，配色散；同聚落同色 → 观感上就是一个「菌落」
-      const rgb = hslToRgb((dv.getUint16(o + CY_COLONY, true) * 47) % 360, 0.65, 0.55);
-      ctx.fillStyle = `rgb(${rgb[0]},${rgb[1]},${rgb[2]})`;
-    }
-    ctx.beginPath();
+    cyanoXs[n] = sx; cyanoYs[n] = sy; cyanoR[n] = r;
+    cyanoCol[n] = dv.getUint16(o + CY_COLONY, true);
+    n++;
+    ctx.moveTo(sx + r, sy);
     ctx.arc(sx, sy, r, 0, Math.PI * 2);
-    ctx.fill();
   }
+  if (n > 0) {
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = CYANO_STROKE_CSS;
+    ctx.stroke();
+    // pass 2：填充。flat 模式必须**先显式设色**（旧代码的「首帧黑块」根因）
+    if (!byColony) ctx.fillStyle = cyanoNodeCss;
+    for (let j = 0; j < n; j++) {
+      if (byColony) {
+        // 聚落分色：47 与 360 互质，配色散；同聚落同色 → 观感上就是一个「菌落」。
+        // 再过 liftRgb：深色聚落（低亮度）也保证在暗背景上可见。
+        const rgb = liftRgb(hslToRgb((cyanoCol[j] * 47) % 360, 0.68, 0.55), 150);
+        ctx.fillStyle = rgbCss(rgb);
+      }
+      ctx.beginPath();
+      ctx.arc(cyanoXs[j], cyanoYs[j], cyanoR[j], 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+  simDebug.drawn.cyanoNodes = n;
   ctx.fillStyle = cyanoNodeCss;   // 还原，避免污染后续绘制的状态
 }
 
@@ -528,14 +677,37 @@ function renderLoop(now) {
   fpsFrames++;
   if (sim && (uiState === 'running' || uiState === 'paused' || uiState === 'finished')) {
     fadeTrail();
+    simDebug.counts.balls = sim.ballCount;
+    simDebug.counts.nuclei = sim.nucleusCount;
+    simDebug.counts.cyanoNodes = sim.cyanoNodeCount;
+    simDebug.counts.cyanoLinks = sim.cyanoLinkCount;
+    simDebug.drawn.balls = 0;
+    simDebug.drawn.nuclei = 0;
+    simDebug.drawn.cyanoNodes = 0;
+    simDebug.drawn.cyanoLinks = 0;
     stampBalls();
     ctx.putImageData(trail, 0, 0);
     drawCyano();
     drawNuclei();
   } else {
+    simDebug.counts.balls = simDebug.counts.nuclei = 0;
+    simDebug.counts.cyanoNodes = simDebug.counts.cyanoLinks = 0;
+    simDebug.drawn.balls = simDebug.drawn.nuclei = 0;
+    simDebug.drawn.cyanoNodes = simDebug.drawn.cyanoLinks = 0;
     ctx.putImageData(trail, 0, 0);
   }
+  // 渲染自检快照：thinning 必须在清标志前捕获（drawCyano 每帧写）
+  const dbgCulled = () => {
+    const c = simDebug.counts, d = simDebug.drawn;
+    const total = c.balls + c.nuclei + c.cyanoNodes + c.cyanoLinks;
+    const drew = d.balls + d.nuclei + d.cyanoNodes + d.cyanoLinks;
+    return total > drew ? total - drew : 0;
+  };
+  simDebug.frame = frame;
+  simDebug.culled = dbgCulled();
+  simDebug.thinning = LINK_THINNING_FLAG;
   LINK_THINNING_FLAG = false;
+  updateDebugHud();
   el('st-frame').textContent = frame;
   el('st-nuclei').textContent = sim ? sim.nucleusCount : 0;
   el('st-balls').textContent = sim ? sim.ballCount : 0;
@@ -558,8 +730,30 @@ function renderLoop(now) {
   el('st-cyanolinks').textContent = sim ? sim.cyanoLinkCount : 0;
   el('st-cyanoenergy').textContent = sim ? sim.cyanoAvgEnergy.toFixed(1) : '0';
   el('st-sun').textContent = sim ? sim.sunLevel.toFixed(2) : '0.00';
-  el('st-cyano').title = LINK_THINNING_FLAG ? '连线已抽稀（每 4 条画 1 条）' : '';
+  el('st-cyano').title = simDebug.thinning ? '连线已抽稀（每 4 条画 1 条）' : '';
   requestAnimationFrame(renderLoop);
+}
+
+// HUD「渲染自检」折叠行：把 simDebug 写到 DOM；实体>0 但绘制=0 时黄色警告。
+function updateDebugHud() {
+  const c = simDebug.counts, d = simDebug.drawn;
+  el('dbg-frame').textContent = simDebug.frame;
+  el('dbg-counts').textContent =
+    c.balls + '/' + c.nuclei + '/' + c.cyanoNodes + '/' + c.cyanoLinks;
+  el('dbg-drawn').textContent =
+    d.balls + '/' + d.nuclei + '/' + d.cyanoNodes + '/' + d.cyanoLinks;
+  el('dbg-culled').textContent = simDebug.culled;
+  el('dbg-thinning').textContent = simDebug.thinning ? '是（每 4 条画 1 条）' : '否';
+  const warn = el('dbg-warn');
+  const total = c.balls + c.nuclei + c.cyanoNodes + c.cyanoLinks;
+  const drew = d.balls + d.nuclei + d.cyanoNodes + d.cyanoLinks;
+  if (total > 0 && drew === 0) {
+    warn.textContent = '⚠ 实体数 ' + total + ' > 0 但绘制数为 0：检查可见性（视口/调色板/渲染路径）';
+    warn.classList.add('show');
+  } else {
+    warn.textContent = '';
+    warn.classList.remove('show');
+  }
 }
 
 // ---------- 视图交互 ----------
@@ -668,6 +862,8 @@ function onGlobalKey(e) {
     case '3': switchTab('mods'); break;
     case '4': switchTab('saves'); break;
     case 'Escape':
+      // 先收面板再回菜单：面板打开时 Esc 只关面板，不打断这一局
+      if (eventsOpen || fineOpen) { closeEnvPanels(); break; }
       if (uiState !== 'menu') postCmd('menu');
       break;
     case '+': case '=':
@@ -684,17 +880,27 @@ function onGlobalKey(e) {
 window.addEventListener('keydown', onGlobalKey);
 
 // ---------- 运行页控制 ----------
+// 兜底值与 index.html 的快速设置默认值保持一致（v2.2.0 演示配置：balls=300 / nuclei=12）。
+// 没有 localStorage 时输入框就是 HTML 默认值；即使用户清空输入框，兜底也不会写回旧的 1000/20。
 function quickParams() {
-  return `seed=${el('q-seed').value || 42}\n` +
-         `balls=${el('q-balls').value || 1000}\n` +
-         `nuclei=${el('q-nuclei').value || 20}\n` +
-         `frames=${el('q-frames').value || 100000}\n`;
+  let body = `seed=${el('q-seed').value || 42}\n` +
+             `balls=${el('q-balls').value || 300}\n` +
+             `nuclei=${el('q-nuclei').value || 12}\n` +
+             `frames=${el('q-frames').value || 100000}\n`;
+  // v2.2.0「启用蓝细菌（生产者）」：勾选时把生产者规模写进启动 body。
+  // 放在 schema 全量参数之后 → 同名键以这里为准（后端 parseKeyValues 后者覆盖前者）。
+  if (el('q-cyano') && el('q-cyano').checked) {
+    body += 'cyano_nodes=150\ncyano_colonies=4\n';
+  }
+  return body;
 }
 // ---------- 快速设置：localStorage 回填 ----------
 // 只记 seed/balls/nuclei/frames 四项快速设置；参数页的全量 schema 仍以后端 env_config.txt
 // 为唯一来源，不写进 localStorage，避免两套配置源互相打架。
 const QUICK_KEY = 'nukesim.quick';
 const QUICK_FIELDS = ['seed', 'balls', 'nuclei', 'frames'];
+// 生态开关（v2.2.0）单独存一个键：不打乱上面 nukesim.quick 的既有格式
+const ENV_PREFS_KEY = 'nukesim.envprefs';
 function loadQuick() {
   try {
     const saved = JSON.parse(localStorage.getItem(QUICK_KEY) || 'null');
@@ -713,6 +919,24 @@ function saveQuick() {
   } catch (e) { /* 忽略写入失败 */ }
 }
 for (const k of QUICK_FIELDS) el('q-' + k).addEventListener('input', saveQuick);
+function saveEnvPrefs() {
+  try {
+    localStorage.setItem(ENV_PREFS_KEY, JSON.stringify({
+      cyano: !!(el('q-cyano') && el('q-cyano').checked),
+      recomods: !!(el('q-recomods') && el('q-recomods').checked),
+    }));
+  } catch (e) { /* 忽略写入失败 */ }
+}
+function loadEnvPrefs() {
+  try {
+    const o = JSON.parse(localStorage.getItem(ENV_PREFS_KEY) || 'null');
+    if (!o || typeof o !== 'object') return;   // 没有记忆 → 保持 HTML 的默认勾选
+    if (typeof o.cyano === 'boolean' && el('q-cyano')) el('q-cyano').checked = o.cyano;
+    if (typeof o.recomods === 'boolean' && el('q-recomods')) el('q-recomods').checked = o.recomods;
+  } catch (e) { /* 无痕模式/禁用 localStorage：保持默认勾选 */ }
+}
+el('q-cyano').addEventListener('change', saveEnvPrefs);
+el('q-recomods').addEventListener('change', saveEnvPrefs);
 
 // ---------- 侧栏折叠 ----------
 // 折叠后 stage 变宽，画面立刻变大；关键点是必须 resizeCanvas() 重建位图，
@@ -739,7 +963,38 @@ function loadSidebar() {
 }
 el('btn-sidebar').addEventListener('click', toggleSidebar);
 
+// 「推荐生态 mod」：失球宽限 + 核间共生 + 能量溢出再分配（三者互补，单独启用效果很弱）。
+// 启动前若当前启用清单与「当前清单 ∪ 推荐项」不同，先 POST /set-mods 再 /run
+// （与 Mod 页「保存 Mod 配置」同一后端接口/同一行式 body）。
+const RECOMMENDED_MODS = ['ball_loss_relief', 'symbiosis_bond', 'energy_spill'];
+async function ensureRecommendedMods() {
+  const cb = el('q-recomods');
+  if (!cb || !cb.checked) return;
+  let info = null;
+  try {
+    const res = await fetch('/mods', { cache: 'no-store' });
+    if (!res.ok) return;                 // 读不到当前清单就不动 mods.list，避免误清空用户配置
+    info = await res.json();
+  } catch (e) { return; }
+  if (!info || !Array.isArray(info.mods)) return;
+  modsData = info;
+  const known = info.mods.filter((m) => m && m.enabled)
+                  .sort((a, b) => a.order - b.order).map((m) => m.id);
+  const desired = known.slice();
+  for (const id of RECOMMENDED_MODS) {
+    if (desired.includes(id)) continue;
+    if (info.mods.some((m) => m && m.id === id)) desired.push(id);   // 只追加后端真实存在的 mod
+  }
+  if (desired.join(',') === known.join(',')) return;                 // 已是目标状态：不重复写
+  await postBody('/set-mods', 'mods=' + desired.join(','));
+  enabledOrder = desired.slice();
+  if (modsData) renderMods();
+  showEnvToast('已启用推荐生态 mod（失球宽限+共生+溢出），本局生效', true);
+}
+
 el('btn-start').addEventListener('click', async () => {
+  closeEnvPanels();
+  await ensureRecommendedMods();          // 先对齐 mod 清单（失败不阻塞启动）
   const body = collectParams() + quickParams();
   await postBody('/run', body);
 });
@@ -1046,15 +1301,580 @@ el('btn-save-mods').addEventListener('click', async () => {
   renderMods();
 });
 
+// ---------- 环境调控 UI（v2.2.0） ----------
+// 设计红线：**前端不复制任何轴/档位/事件/费用/冷却常量**，全部从 GET /env 读取渲染。
+//   - 快调：点击 chip 的 −/+ → POST `axis.<id>=<目标档位>`
+//   - 事件：事件卡 → POST `event.<id>=1`
+//   - 细调：每轴「应用」→ POST `fine.<key>=<值>`（可多行一次提交，后端逐条裁决）
+// 状态机：菜单/结束态只读（显示「启动后可实时调控」），运行/暂停态可操作。
+const ENV_POLL_MS = 1000;          // 运行/暂停态 /env 轮询周期
+let envToastTimer = 0;
+let quickAxesSig = '';
+let eventsSig = '';
+let fineSig = '';
+let fineInputs = Object.create(null);
+let fineDirty = Object.create(null);
+let fineGroupUI = Object.create(null);   // axisId -> { axis, est, apply }（费用/改动预览）
+
+function envIsActive() { return uiState === 'running' || uiState === 'paused'; }
+function setTxt(id, s) { const n = el(id); if (n) n.textContent = s; }
+function setCls(id, cls, on) { const n = el(id); if (n) n.classList.toggle(cls, !!on); }
+
+// ---- toast：成功/失败都给出明确文案；失败优先展示后端 rejected 原因 ----
+function showEnvToast(text, ok) {
+  const t = el('env-toast');
+  if (!t) return;
+  t.textContent = text || (ok ? '操作成功' : '操作失败');
+  t.className = 'show ' + (ok ? 'ok' : 'err');
+  if (envToastTimer) clearTimeout(envToastTimer);
+  envToastTimer = setTimeout(() => { t.className = ''; envToastTimer = 0; }, 3200);
+}
+
+// POST /env 的响应契约（api-dev）：{ok, applied, rejected:[{key,reason}], influence, cooldowns}
+// 混合请求可能 ok=false 但 applied>0 —— 仍按失败提示，并逐条列出被拒原因。
+function envRejectText(json, fallback) {
+  if (json && typeof json === 'object') {
+    const r = json.rejected;
+    if (Array.isArray(r) && r.length) {
+      const parts = [];
+      for (const x of r) {
+        if (x && typeof x === 'object') {
+          const k = x.key !== undefined ? x.key : (x.id !== undefined ? x.id : '');
+          const why = x.reason || x.err || x.error || '被拒绝';
+          parts.push((k ? k + '：' : '') + why);
+        } else parts.push(String(x));
+      }
+      if (json.applied > 0) parts.push('（已应用 ' + json.applied + ' 项）');
+      return parts.join('；');
+    }
+    const m = json.err || json.error || json.message;
+    if (typeof m === 'string' && m) return m;
+  }
+  return fallback || '影响力不足或冷却中';
+}
+
+async function postEnv(body, okText) {
+  let json = null, httpOk = true;
+  try {
+    const res = await fetch('/env', {
+      method: 'POST', headers: { 'Content-Type': 'text/plain' }, body,
+    });
+    httpOk = res.ok !== false;
+    try { json = await res.json(); } catch (e) { json = null; }
+  } catch (e) {
+    showEnvToast('环境指令发送失败（网络错误）', false);
+    return false;
+  }
+  const rejected = json && Array.isArray(json.rejected) ? json.rejected : [];
+  const ok = httpOk && rejected.length === 0 && (!json || json.ok === undefined || !!json.ok);
+  if (!ok) {
+    // 后端未实现 /env（旧版本 404）时不要误报成「影响力不足」
+    const msg = (!httpOk && !json)
+      ? '环境接口不可用（后端未实现 POST /env，可能不是 v2.2.0）'
+      : '操作被拒绝：' + envRejectText(json);
+    showEnvToast(msg, false);
+    fetchEnv();                     // 拒绝也要刷新：可能部分生效/影响力已被扣
+    return false;
+  }
+  showEnvToast(okText, true);
+  fetchEnv();                       // 操作后立即刷新（影响力/冷却/档位）
+  return true;
+}
+
+async function fetchEnv() {
+  let d = null;
+  try {
+    const res = await fetch('/env', { cache: 'no-store' });
+    if (!res.ok) return;
+    d = await res.json();
+  } catch (e) { return; }           // 后端未实现 /env 时静默降级，不阻塞主流程
+  if (!d || typeof d !== 'object') return;
+  envData = d;
+  renderEnvUi();
+}
+
+// ---- 总渲染：影响力 / 轴 chip / 提示 / 面板可用性 / 已打开面板同步 ----
+function renderEnvUi() {
+  if (!el('qb-influence')) return;
+  const env = envData;
+  const inf = env && env.influence && typeof env.influence === 'object' ? env.influence : null;
+  const cur = inf && Number.isFinite(inf.cur) ? inf.cur : null;
+  const max = inf && Number.isFinite(inf.max) ? inf.max : null;
+  const regen = inf && Number.isFinite(inf.regenPerFrame) ? inf.regenPerFrame : null;
+  const active = envIsActive();
+  const idle = uiState === 'menu';       // 菜单态没有进行中的影响力池：显示 --，但仍展示四轴预览
+
+  setTxt('qb-influence', (idle || cur == null) ? '--/--' : (Math.floor(cur) + '/' + (max == null ? '--' : Math.round(max))));
+  const fill = el('qb-influence-fill');
+  if (fill) {
+    const pct = (idle || cur == null || !max) ? 0 : Math.max(0, Math.min(100, cur / max * 100));
+    fill.style.width = pct.toFixed(1) + '%';
+  }
+
+  // 四轴 chip：只在「轴集合 / 档位 / 可用性 / 快调费用」变化时重建，避免每秒轮询抢走按钮焦点。
+  // costs 来自 GET /env 的可选字段（api-dev/sim-dev 提供）；缺失时 chip 提示只写「消耗影响力」。
+  const costs = env && env.costs && typeof env.costs === 'object' ? env.costs : null;
+  const quickCost = costs && Number.isFinite(costs.quick) ? costs.quick : null;
+  const axes = env && Array.isArray(env.axes) ? env.axes : [];
+  const axesSig = axes.map((a) => a.id + ':' + a.level + ':' + ((a.levels || []).length)).join('|') +
+    '|' + (active ? 1 : 0) + '|' + (quickCost == null ? '-' : quickCost);
+  if (axesSig !== quickAxesSig) {
+    quickAxesSig = axesSig;
+    const box = el('qb-axes');
+    if (box) {
+      box.innerHTML = '';
+      for (const a of axes) box.appendChild(buildAxisChip(a, active, quickCost));
+    }
+  }
+
+  // 底部提示：菜单态「启动后可实时调控」；运行/暂停态显示恢复速度与暂停不回蓝
+  const hint = el('qb-hint');
+  if (hint) {
+    let text = '', show = true;
+    if (uiState === 'menu') text = '启动后可实时调控';
+    else if (uiState === 'finished') text = '本局已结束';
+    else if (!env) text = '环境接口连接中…';
+    else {
+      const bits = [];
+      if (regen != null) bits.push('影响力每帧 +' + regen);
+      if (env.paused) bits.push('已暂停（不回蓝）');
+      else bits.push('运行中');
+      text = bits.join(' · ');
+    }
+    hint.textContent = text;
+    hint.classList.toggle('show', !!show);
+  }
+
+  const be = el('btn-events'), bf = el('btn-fine');
+  if (be) be.disabled = !active;
+  if (bf) bf.disabled = !active;
+
+  if (eventsOpen) renderEventPop();
+  if (fineOpen) renderFineDrawer();
+  if (eventsOpen || fineOpen) layoutEnvPanels();
+  if (uiState === 'finished') updateEndOverlay();   // 结束结算统计随 /env 刷新
+}
+
+// ---- 四轴快调 chip ----
+function axisById(id) {
+  const axes = envData && Array.isArray(envData.axes) ? envData.axes : [];
+  for (const a of axes) if (a && a.id === id) return a;
+  return null;
+}
+function buildAxisChip(a, active, quickCost) {
+  const wrap = document.createElement('div');
+  wrap.className = 'qb-axis' + (active ? '' : ' off');
+  const costTxt = quickCost == null ? '消耗影响力（以后端为准）' : '消耗 ' + quickCost + ' 影响力';
+  if (a.hint) wrap.title = (a.name || a.id) + '：' + a.hint + '（每次快调' + costTxt + '）';
+  const name = document.createElement('span');
+  name.className = 'qba-name';
+  name.textContent = a.name || a.id;
+  const levels = Array.isArray(a.levels) ? a.levels : [];
+  const lvIdx = a.level | 0;
+  const dec = document.createElement('button');
+  dec.className = 'qba-btn';
+  dec.textContent = '−';
+  dec.title = (a.name || a.id) + ' 降一档 · ' + costTxt;
+  dec.disabled = !active || lvIdx <= 0;
+  const level = document.createElement('span');
+  level.className = 'qba-level';
+  level.textContent = levels[lvIdx] && levels[lvIdx].label != null ? levels[lvIdx].label : String(lvIdx);
+  level.title = '当前第 ' + (lvIdx + 1) + '/' + (levels.length || 5) + ' 档 · 每次快调' + costTxt;
+  const inc = document.createElement('button');
+  inc.className = 'qba-btn';
+  inc.textContent = '+';
+  inc.title = (a.name || a.id) + ' 升一档 · ' + costTxt;
+  inc.disabled = !active || lvIdx >= levels.length - 1;
+  dec.addEventListener('click', () => envQuickAxis(a.id, -1));
+  inc.addEventListener('click', () => envQuickAxis(a.id, +1));
+  wrap.appendChild(name);
+  wrap.appendChild(dec);
+  wrap.appendChild(level);
+  wrap.appendChild(inc);
+  return wrap;
+}
+function envQuickAxis(id, delta) {
+  if (!envIsActive()) return;
+  const a = axisById(id);
+  if (!a) return;
+  const levels = Array.isArray(a.levels) ? a.levels : [];
+  const target = Math.max(0, Math.min(Math.max(0, levels.length - 1), (a.level | 0) + delta));
+  if (target === a.level) return;
+  const label = levels[target] && levels[target].label != null ? levels[target].label : String(target);
+  postEnv('axis.' + a.id + '=' + target + '\n', '快调成功：' + (a.name || a.id) + ' → ' + label);
+}
+
+// ---- 事件卡弹出层 ----
+function openEvents() {
+  if (!envIsActive()) return;
+  closeFineDrawer();
+  eventsOpen = true;
+  eventsSig = '';
+  setCls('event-pop', 'show', true);
+  renderEventPop();
+  layoutEnvPanels();
+  fetchEnv();
+}
+function closeEvents() {
+  eventsOpen = false;
+  setCls('event-pop', 'show', false);
+}
+function toggleEvents() { if (eventsOpen) closeEvents(); else openEvents(); }
+
+function renderEventPop() {
+  const env = envData;
+  const events = env && Array.isArray(env.events) ? env.events : [];
+  const inf = env && env.influence && typeof env.influence === 'object' ? env.influence : null;
+  const cur = inf && Number.isFinite(inf.cur) ? inf.cur : 0;
+  const max = inf && Number.isFinite(inf.max) ? inf.max : null;
+  const active = envIsActive();
+  // 冷却每秒都在变 → 卡片的可用性/说明必须跟着刷新；按事件状态做签名减少无谓重建
+  const sig = events.map((e) => [e.id, e.cost, e.cooldownLeft, e.cooldown, e.name].join(':')).join('|') +
+    '|' + Math.floor(cur) + '|' + (active ? 1 : 0);
+  if (sig === eventsSig) return;
+  eventsSig = sig;
+  const box = el('event-list');
+  if (!box) return;
+  box.innerHTML = '';
+  if (!events.length) {
+    const d = document.createElement('div');
+    d.className = 'hint';
+    d.textContent = '环境接口尚未就绪（GET /env 没有事件数据）';
+    box.appendChild(d);
+  }
+  for (const e of events) {
+    const cost = Number(e.cost);
+    const cdLeft = Number(e.cooldownLeft) || 0;
+    const cd = Number(e.cooldown) || 0;
+    let reason = '';
+    if (!active) reason = '启动后可实时调控';
+    else if (cdLeft > 0) reason = '冷却中：剩余 ' + cdLeft + ' 帧';
+    else if (Number.isFinite(cost) && cur < cost) reason = '影响力不足（需 ' + cost + '，当前 ' + Math.floor(cur) + '）';
+    const card = document.createElement('button');
+    card.type = 'button';
+    card.className = 'ecard';
+    card.disabled = !!reason;
+    card.title = reason || (e.desc || '');
+    const top = document.createElement('div');
+    top.className = 'ecard-top';
+    const nm = document.createElement('span');
+    nm.className = 'ecard-name';
+    nm.textContent = e.name || e.id;
+    const cst = document.createElement('span');
+    cst.className = 'ecard-cost';
+    cst.textContent = (Number.isFinite(cost) ? cost : '?') + ' 影响力';
+    top.appendChild(nm);
+    top.appendChild(cst);
+    const ds = document.createElement('div');
+    ds.className = 'ecard-desc';
+    ds.textContent = e.desc || '';
+    const ft = document.createElement('div');
+    ft.className = 'ecard-foot';
+    ft.textContent = reason || ('冷却 ' + cd + ' 帧 · 点击触发');
+    card.appendChild(top);
+    card.appendChild(ds);
+    card.appendChild(ft);
+    card.addEventListener('click', () => { if (!card.disabled) envTriggerEvent(e); });
+    box.appendChild(card);
+  }
+  setTxt('event-sum', '影响力 ' + Math.floor(cur) + ' / ' + (max == null ? '--' : Math.round(max)));
+}
+
+function envTriggerEvent(e) {
+  postEnv('event.' + e.id + '=1\n', '事件已触发：' + (e.name || e.id));
+}
+
+// ---- 右侧细调抽屉 ----
+function closeFineDrawer() {
+  fineOpen = false;
+  setCls('fine-drawer', 'show', false);
+}
+// 细调费用：优先读 GET /env 的可选字段 env.costs.fine；后端未提供时只给中性文案
+// （契约要求前端不写死 1/3/5/10 常量）。
+// 当前后端规则（sim-dev + Lead 确认）：同一 POST /env 里按轴合并提交的多个 fine.* 视为**一批**，
+// 整批只扣一次费用；影响不足以支付一批时整批 rejected。UI 文案与预览按「整批」描述。
+function fineCostValue() {
+  const env = envData;
+  const costs = env && env.costs && typeof env.costs === 'object' ? env.costs : null;
+  return costs && Number.isFinite(costs.fine) ? costs.fine : null;
+}
+// 本轴「会被提交」的 fine 键：先按 schema 的 min/max 钳制，再与当前值比较（与 envApplyFine 同一口径）
+function fineChangedList(a) {
+  const fine = Array.isArray(a.fine) ? a.fine : [];
+  const out = [];
+  for (const f of fine) {
+    const rec = fineInputs[f.key];
+    if (!rec) continue;
+    let v = Number(rec.num.value);
+    if (!Number.isFinite(v)) continue;
+    const lo = Number(f.min), hi = Number(f.max);
+    if (Number.isFinite(lo) && v < lo) v = lo;
+    if (Number.isFinite(hi) && v > hi) v = hi;
+    const curN = Number(f.cur);
+    if (!Number.isFinite(curN) || Math.abs(v - curN) > 1e-9) out.push({ f: f, v: v });
+  }
+  return out;
+}
+function updateFineEstimate(axisId) {
+  const ui = fineGroupUI[axisId];
+  if (!ui || !ui.est) return;
+  const changed = fineChangedList(ui.axis);
+  if (!changed.length) {
+    ui.est.textContent = '没有改动（数值与当前一致）';
+    return;
+  }
+  const c = fineCostValue();
+  ui.est.textContent = '本次提交 ' + changed.length + ' 项' +
+    (c == null ? ' · 费用以后端裁决为准' : ' · 整批消耗 ' + c + ' 影响力');
+}
+// 面板可用的垂直空间：上界 = HUD 下沿，下界 = 快调条上沿。
+// 事件卡/细调抽屉都按这个区间定位/限高 → 打开时不会遮住 HUD、控制条、图例与底部快调条。
+function envPanelSpace() {
+  const stage = el('stage'), hud = el('hud'), quick = el('quickbar');
+  if (!stage) return null;
+  const stR = stage.getBoundingClientRect ? stage.getBoundingClientRect() : null;
+  const hudR = hud && hud.getBoundingClientRect ? hud.getBoundingClientRect() : null;
+  const qbR = quick && quick.getBoundingClientRect ? quick.getBoundingClientRect() : null;
+  const stageH = stR && stR.height ? stR.height : (stage.clientHeight || 0);
+  if (!stageH) return null;
+  const stageTop = stR ? stR.top : 0;
+  let top = 12;
+  if (hudR && hudR.height > 0) {
+    const t = Math.round(hudR.bottom - stageTop + 8);
+    if (t > top) top = t;
+  }
+  let bottom = stageH - 62;    // 默认：快调条上方 62px
+  if (qbR && qbR.height > 0) {
+    const b = Math.round(qbR.top - stageTop - 8);
+    if (b < bottom) bottom = b;
+  }
+  return { top, bottom, stageH, avail: Math.max(140, bottom - top) };
+}
+function layoutEnvPanels() {
+  const sp = envPanelSpace();
+  if (!sp) return;
+  const drawer = el('fine-drawer');
+  if (drawer && fineOpen) {
+    drawer.style.top = sp.top + 'px';
+    drawer.style.maxHeight = sp.avail + 'px';
+  }
+  const pop = el('event-pop');
+  if (pop) {
+    // 事件层底部贴住快调条上方；最大高度限制到 HUD 下沿，超出时卡片区内部滚动
+    pop.style.bottom = Math.max(8, sp.stageH - sp.bottom) + 'px';
+    pop.style.maxHeight = sp.avail + 'px';
+  }
+}
+function openFine() {
+  if (!envIsActive()) return;
+  closeEvents();
+  fineOpen = true;
+  fineSig = '';
+  setCls('fine-drawer', 'show', true);
+  renderFineDrawer();
+  layoutEnvPanels();
+  fetchEnv();
+}
+function toggleFine() { if (fineOpen) closeFineDrawer(); else openFine(); }
+function closeEnvPanels() { closeEvents(); closeFineDrawer(); }
+
+function renderFineDrawer() {
+  if (!fineOpen) return;
+  const env = envData;
+  const axes = env && Array.isArray(env.axes) ? env.axes : [];
+  const inf = env && env.influence && typeof env.influence === 'object' ? env.influence : null;
+  const cur = inf && Number.isFinite(inf.cur) ? inf.cur : null;
+  const max = inf && Number.isFinite(inf.max) ? inf.max : null;
+  const regen = inf && Number.isFinite(inf.regenPerFrame) ? inf.regenPerFrame : null;
+  const active = envIsActive();
+  setTxt('fine-influence', cur == null ? '影响力 --' : ('影响力 ' + Math.floor(cur) + ' / ' + (max == null ? '--' : Math.round(max))));
+  // 费用优先取后端可选字段 env.costs.fine；没有就只说明「消耗影响力」（不写死数值）
+  const costs = env && env.costs && typeof env.costs === 'object' ? env.costs : null;
+  const fineCost = costs && Number.isFinite(costs.fine) ? costs.fine : null;
+  setTxt('fine-cost', fineCost == null
+    ? '细调消耗影响力（以服务端裁决为准）'
+    : ('每批细调消耗 ' + fineCost + ' 影响力（同轴多个键合并为一批）'));
+  let note = '暂停时不回蓝';
+  if (regen != null) note = '影响力每帧 +' + regen + ' · ' + (env && env.paused ? '已暂停：不回蓝' : note);
+  else if (env && env.paused) note = '已暂停：暂停时不回蓝';
+  setTxt('fine-note', note);
+
+  // 结构签名：轴集合 / fine 键 / min-max / 档位 / 可用性 / 细调费用；变了才重建 DOM
+  const sig = axes.map((a) => a.id + ':' + a.level + ':' +
+    (Array.isArray(a.fine) ? a.fine.map((f) => f.key + ':' + f.min + ':' + f.max).join(',') : '')).join('|') +
+    '|' + (active ? 1 : 0) + '|' + (fineCostValue() == null ? '-' : fineCostValue());
+  if (sig !== fineSig) {
+    fineSig = sig;
+    fineInputs = Object.create(null);
+    fineGroupUI = Object.create(null);
+    const box = el('fine-list');
+    if (box) {
+      box.innerHTML = '';
+      for (const a of axes) box.appendChild(buildFineGroup(a, active));
+      if (!axes.length) {
+        const d = document.createElement('div');
+        d.className = 'hint';
+        d.textContent = '环境接口尚未就绪（GET /env 没有轴数据）';
+        box.appendChild(d);
+      }
+    }
+  } else {
+    syncFineValues(axes);
+  }
+}
+
+function syncFineValues(axes) {
+  for (const a of axes) {
+    // 每轮 /env 都会生成新的轴对象：把预览用的引用也换成最新的，否则费用/改动预览
+    // 会拿「上一轮」的 fine.cur 做比较，apply 成功后仍显示“本次提交 N 项”。
+    const ui = fineGroupUI[a.id];
+    if (ui) ui.axis = a;
+    const fine = Array.isArray(a.fine) ? a.fine : [];
+    for (const f of fine) {
+      const rec = fineInputs[f.key];
+      if (!rec) continue;
+      rec.cur = f.cur;
+      if (!fineDirty[f.key]) {           // 用户没改过的行才跟随服务端当前值
+        if (rec.range) rec.range.value = String(f.cur);
+        if (rec.num) rec.num.value = String(f.cur);
+      }
+      if (rec.tag) rec.tag.textContent = '当前 ' + f.cur;
+    }
+    updateFineEstimate(a.id);            // 服务端 cur 变了，改动项数/费用预览跟着更新
+  }
+}
+
+function buildFineGroup(a, active) {
+  const g = document.createElement('div');
+  g.className = 'fine-group';
+  const head = document.createElement('div');
+  head.className = 'fine-head';
+  const nm = document.createElement('span');
+  nm.className = 'fine-axis';
+  nm.textContent = a.name || a.id;
+  const lvl = document.createElement('span');
+  lvl.className = 'fine-level';
+  const levels = Array.isArray(a.levels) ? a.levels : [];
+  lvl.textContent = levels[a.level] && levels[a.level].label != null ? levels[a.level].label : ('档 ' + a.level);
+  head.appendChild(nm);
+  head.appendChild(lvl);
+  g.appendChild(head);
+  const fine = Array.isArray(a.fine) ? a.fine : [];
+  if (!fine.length) {
+    const d = document.createElement('div');
+    d.className = 'hint';
+    d.textContent = '该轴没有可细调参数';
+    g.appendChild(d);
+  }
+  for (const f of fine) {
+    const lo = Number(f.min), hi = Number(f.max);
+    const row = document.createElement('div');
+    row.className = 'fine-row';
+    const lab = document.createElement('label');
+    lab.className = 'fine-label';
+    lab.textContent = (f.label || f.key) + (f.unit ? '（' + f.unit + '）' : '');
+    const range = document.createElement('input');
+    range.type = 'range';
+    range.className = 'fine-range';
+    range.step = 'any';
+    if (Number.isFinite(lo)) range.min = String(lo);
+    if (Number.isFinite(hi)) range.max = String(hi);
+    range.value = String(f.cur);
+    const num = document.createElement('input');
+    num.type = 'number';
+    num.className = 'fine-num';
+    num.step = 'any';
+    if (Number.isFinite(lo)) num.min = String(lo);
+    if (Number.isFinite(hi)) num.max = String(hi);
+    num.value = String(f.cur);
+    const tag = document.createElement('span');
+    tag.className = 'fine-cur';
+    tag.textContent = '当前 ' + f.cur;
+    // 滑杆/数字输入双向同步；编辑过的键记为 dirty，轮询刷新时不覆盖用户正在改的值
+    const markDirty = (from) => {
+      fineDirty[f.key] = true;
+      row.classList.add('dirty');
+      if (from === range) num.value = range.value;
+      else if (from === num && Number.isFinite(Number(num.value))) range.value = num.value;
+      updateFineEstimate(a.id);          // 改动项数/费用预览实时更新
+    };
+    range.addEventListener('input', () => markDirty(range));
+    num.addEventListener('input', () => markDirty(num));
+    fineInputs[f.key] = { range, num, tag, cur: f.cur, min: lo, max: hi };
+    row.appendChild(lab);
+    row.appendChild(range);
+    row.appendChild(num);
+    row.appendChild(tag);
+    g.appendChild(row);
+  }
+  const est = document.createElement('span');
+  est.className = 'fine-est';
+  g.appendChild(est);
+  const apply = document.createElement('button');
+  apply.className = 'fine-apply';
+  apply.textContent = '应用「' + (a.name || a.id) + '」细调';
+  apply.disabled = !active;
+  apply.addEventListener('click', () => envApplyFine(a));
+  g.appendChild(apply);
+  fineGroupUI[a.id] = { axis: a, est: est, apply: apply };
+  updateFineEstimate(a.id);
+  return g;
+}
+
+function envApplyFine(a) {
+  if (!envIsActive()) return;
+  // 用最新一轮 /env 的轴对象（按钮闭包里的 a 可能来自上一次渲染，fine.cur 已过期）
+  const axis = axisById(a.id) || a;
+  const fine = Array.isArray(axis.fine) ? axis.fine : [];
+  for (const f of fine) {
+    const rec = fineInputs[f.key];
+    if (rec && !Number.isFinite(Number(rec.num.value))) {
+      showEnvToast('「' + (f.label || f.key) + '」不是有效数字', false);
+      return;
+    }
+  }
+  const changed = fineChangedList(axis);   // 与费用预览同一口径（已按 min/max 钳制）
+  if (!changed.length) {
+    showEnvToast('没有改动（数值与当前一致）', false);
+    return;
+  }
+  const lines = changed.map((c) => 'fine.' + c.f.key + '=' + c.v);
+  // 成功/失败后清 dirty，让轮询回来的服务端当前值接管显示
+  for (const f of fine) fineDirty[f.key] = false;
+  updateFineEstimate(axis.id);
+  postEnv(lines.join('\n') + '\n',
+    '细调已应用：' + (axis.name || axis.id) + '（' + changed.length + ' 项）');
+}
+
+// 面板按钮/关闭按钮/轮询
+el('btn-events').addEventListener('click', toggleEvents);
+el('btn-fine').addEventListener('click', toggleFine);
+el('event-close').addEventListener('click', closeEvents);
+el('fine-close').addEventListener('click', closeFineDrawer);
+// 窗口缩放 / HUD「渲染自检」展开收起都会改变可用高度 → 已打开的面板重新限高定位
+window.addEventListener('resize', () => { if (eventsOpen || fineOpen) layoutEnvPanels(); });
+(function hookHudDebugToggle() {
+  const d = el('hud-debug');
+  if (d && d.addEventListener) d.addEventListener('toggle', () => { if (eventsOpen || fineOpen) layoutEnvPanels(); });
+})();
+// /env 轮询：运行/暂停态每秒刷新（影响力恢复、事件冷却、档位都可能变）；
+// 打开面板时同样走这条轮询。操作成功/失败后 postEnv/fetchEnv 会立即刷新一次。
+setInterval(() => {
+  if (exiting) return;
+  if (envIsActive()) fetchEnv();
+}, ENV_POLL_MS);
+
 // ---------- 启动 ----------
 resizeCanvas();          // 先按 #stage 实际尺寸重建位图，否则 1280×720 位图会被 CSS 拉伸成椭圆
 updateZoomLabel();
 loadSidebar();           // 恢复上次的侧栏折叠状态（会再次触发 resizeCanvas）
 loadQuick();             // 回填上次的快速设置（seed/balls/nuclei/frames）
+loadEnvPrefs();          // 回填「启用蓝细菌 / 推荐生态 mod」勾选状态（默认都勾选）
 requestAnimationFrame(renderLoop);
 setInterval(pollStatus, 400);
 setInterval(pollState, 50);
 pollStatus();
+fetchEnv();              // 菜单态也先取一次：四轴 chip / 事件费用来自后端，菜单态只读展示
 loadPacks();  // 启动时应用材质包调色板
 syncSpeedFromConfig();  // 帧率下拉框对齐 env_config.txt 的 max_fps
 
@@ -1175,14 +1995,15 @@ function showModSub(which) {
   el('btn-save-packs').style.display = which === 'packs' ? '' : 'none';
 }
 
-// colors.txt 解析：颜色键 `key = r, g, b` + 标量键（尺寸）。
+// colors.txt 解析：颜色键 `key = r, g, b` + 标量键（尺寸 / 透明度）。
 // ⚠ 标量分支必须放在 r,g,b 分支**之前**：否则 size_ball_shield = 5 会被
 // 当成颜色解析（parts.length < 3）而**静默丢弃**，材质包的尺寸键全部失效。
 // cyano_node / cyano_link 这两个颜色键语义是"蓝细菌整体配色"，与按类型分色的 ball_* 不同，
 // 故用 cyano_color_mode 开关：colony = 按 colonyId 分色（默认，任务 D），
 // flat = 整体单色（此时 cyano_node / cyano_link 生效）。
+// v2.2.0 新增可选键 cyano_link_alpha（0.35~1）：连线的实际不透明度，缺省 0.7。
 const SCALAR_KEYS = ['size_ball_shield', 'size_ball_worker', 'size_ball_scout',
-                     'size_free_ball', 'size_nucleus', 'cyano_node_size'];
+                     'size_free_ball', 'size_nucleus', 'cyano_node_size', 'cyano_link_alpha'];
 const STRING_KEYS = ['cyano_color_mode'];   // 字符串值键（枚举）
 function parseColors(text) {
   const out = {};

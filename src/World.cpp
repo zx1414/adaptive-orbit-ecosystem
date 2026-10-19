@@ -1,7 +1,10 @@
 #include "World.h"
 #include "ParamSchema.h"
 #include <algorithm>
+#include <cctype>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <random>
 #include <sstream>
@@ -151,6 +154,8 @@ void World::initialize() {
         }
         nuclei_.push_back(n);
     }
+    // 环境状态：开局存活峰值按实际核数记录（之后由 tickEnvironment 每帧刷新）。
+    envState_.peakAlive = std::max(envState_.peakAlive, (int)nuclei_.size());
 }
 
 void World::addNucleus(const Vec2& pos, double energy, const NucleusParams& params) {
@@ -226,6 +231,9 @@ void World::step() {
     removeDeadNuclei();
     replenishBalls();
     ++frame_;
+    // 环境状态推进：影响力恢复 + 事件冷却递减 + 存活峰值（**不消耗 RNG**，
+    // 因此没有玩家命令时与 v2.1.0 的模拟轨迹逐字节一致）。
+    tickEnvironment();
     checkFinish();
     // 事件时机（固定顺序）：++frame 后发 FRAME_START，step 末尾发 FRAME_END。
     {
@@ -774,11 +782,439 @@ double World::averageNucleusEnergy() const {
     return c == 0 ? 0.0 : sum / c;
 }
 
-// ==================== 存档序列化（Phase D） ====================
+// ==================== 玩家实时环境调控（v2.2.0） ====================
+namespace {
+constexpr int kCyanoDefaultNodes = 150;       // cyano=on 激活节点数（契约默认目标）
+constexpr int kBloomExtraNodes = 120;         // 已开启时 bloom 追加节点数
+constexpr double kHarvestDelta = 8.0;         // 丰收：每核 +8
+constexpr double kHarvestInjectionCap = 2000.0;  // 丰收：单次总注入封顶
+constexpr double kWinterDelta = -5.0;         // 寒冬：每核 −5
+constexpr double kWinterSkipBelow = 5.0;      // 寒冬：能量 <5 跳过
+constexpr double kPlagueDelta = -12.0;        // 瘟疫：富核 −12
+constexpr double kPlagueMinEnergy = 100.0;    // 瘟疫：只打能量 >100
+
+std::string trimEnv(const std::string& s) {
+    size_t a = s.find_first_not_of(" \t\r\n");
+    if (a == std::string::npos) return "";
+    size_t b = s.find_last_not_of(" \t\r\n");
+    return s.substr(a, b - a + 1);
+}
+
+std::string lowerEnv(std::string s) {
+    for (char& c : s) c = (char)std::tolower((unsigned char)c);
+    return s;
+}
+
+// 严格整数解析（"3" 通过，"3.0"/"3abc"/"" 拒绝）。
+bool parseStrictIntEnv(const std::string& text, int& out) {
+    const std::string t = trimEnv(text);
+    if (t.empty()) return false;
+    char* end = nullptr;
+    const long v = std::strtol(t.c_str(), &end, 10);
+    if (end == nullptr || static_cast<size_t>(end - t.c_str()) != t.size()) return false;
+    out = (int)v;
+    return true;
+}
+
+// 命令开关值：1/on/true/yes 视为“执行”。
+bool parseTruthyEnv(const std::string& text) {
+    const std::string v = lowerEnv(trimEnv(text));
+    return v == "1" || v == "on" || v == "true" || v == "yes";
+}
+
+// cyano=on|off：仅接受明确的开关值（含 1/0 别名）。
+bool parseSwitchEnv(const std::string& text, bool& on) {
+    const std::string v = lowerEnv(trimEnv(text));
+    if (v == "on" || v == "1" || v == "true" || v == "yes") { on = true; return true; }
+    if (v == "off" || v == "0" || v == "false" || v == "no") { on = false; return true; }
+    return false;
+}
+
+const EnvEventDef* findEventDef(EnvEventKind kind) {
+    for (const EnvEventDef& d : EnvControl::events()) {
+        if (d.kind == kind) return &d;
+    }
+    return nullptr;
+}
+
+// 精确读取 schema 标量字段（按 ParamDef 偏移直接 memcpy）。
+// 用途：axis 同档 no-op 的“改动前后值全等”判定——不能用 ParamSchema::valueString 的
+// %g（6 位有效数字）比较，否则 1.0000000001 与 1.0 会被误判成没有变化。
+double readParamExact(const WorldConfig& cfg, const ParamDef& d) {
+    const char* p = reinterpret_cast<const char*>(&cfg) + d.offA;
+    switch (d.type) {
+        case ParamDef::Type::Int: {
+            int v = 0;
+            std::memcpy(&v, p, sizeof(v));
+            return (double)v;
+        }
+        case ParamDef::Type::Bool: {
+            bool v = false;
+            std::memcpy(&v, p, sizeof(v));
+            return v ? 1.0 : 0.0;
+        }
+        case ParamDef::Type::Double:
+        case ParamDef::Type::Pair: {
+            double v = 0.0;
+            std::memcpy(&v, p, sizeof(v));
+            return v;
+        }
+    }
+    return 0.0;
+}
+
+// 两个配置在某个 schema 键上是否“逐值全等”（精确比较，不做容差）。
+bool paramSameExact(const WorldConfig& a, const WorldConfig& b, const ParamDef& d) {
+    if (d.type == ParamDef::Type::Int || d.type == ParamDef::Type::Bool) {
+        return readParamExact(a, d) == readParamExact(b, d);
+    }
+    const double x = readParamExact(a, d);
+    const double y = readParamExact(b, d);
+    return x == y;  // NaN 时返回 false（视为有变化，宁可扣费）
+}
+}  // namespace
+
+EnvApplyResult World::applyEnvCommand(const std::map<std::string, std::string>& cmds) {
+    EnvApplyResult res;
+    // ---- fine 批量扣费语义（v2.2.0 task-4）----
+    // 前端按轴合并提交，一次 POST /env 里可能有同一轴/多条 `fine.*`；
+    // 一次细调应用只扣一次 kFineCost（不是每键 3）。
+    // 预扫描：本批含 fine 命令但影响力不足一次细调 → 整批 fine 全部拒绝。
+    bool hasFineCmd = false;
+    for (const auto& kv : cmds) {
+        if (kv.first.compare(0, 5, "fine.") == 0) {
+            hasFineCmd = true;
+            break;
+        }
+    }
+    const bool fineBatchUnaffordable =
+        hasFineCmd && envState_.influence + 1e-9 < EnvControl::kFineCost;
+    bool fineCostPaid = false;  // 本批 fine 费用是否已扣（最多一次）
+    for (const auto& kv : cmds) {
+        const std::string& key = kv.first;
+        const std::string value = trimEnv(kv.second);
+        std::string err;
+
+        // ---- axis.<light|food|pressure|producer>=<0..4>：快调一档，费用 1 ----
+        if (key.compare(0, 5, "axis.") == 0) {
+            const std::string id = key.substr(5);
+            const EnvAxisDef* ax = EnvControl::axis(id);
+            if (!ax) {
+                res.rejected.emplace_back(key, "未知环境轴: " + id);
+                continue;
+            }
+            int level = 0;
+            if (!parseStrictIntEnv(value, level)) {
+                res.rejected.emplace_back(key, "档位必须是整数（0..4）");
+                continue;
+            }
+            if (level < 0 || level >= 5) {
+                res.rejected.emplace_back(key, "档位越界（0..4）");
+                continue;
+            }
+            // 同档 true no-op：先把本档写入临时配置，再逐键比对“改动前后值是否全等”。
+            // 为什么不用 axisLevelOf()：它带 1e-12 相对容差，会把“自定义但极接近某档”
+            // 误判成同档；这里用精确值比对，只有真正没有变化才免单（幂等成功）。
+            WorldConfig trial = config_;
+            if (!EnvControl::applyAxisLevel(trial, ax->axis, level, err)) {
+                res.rejected.emplace_back(key, err);
+                continue;
+            }
+            bool changed = false;
+            for (const auto& lv : ax->levels[(size_t)level].values) {
+                const ParamDef* d = ParamSchema::find(lv.first);
+                if (!d || !paramSameExact(config_, trial, *d)) {
+                    changed = true;
+                    break;
+                }
+            }
+            if (!changed) {
+                // 无变化：接受命令（applied=1），但不扣影响力、不增加干预计数、不重建派生对象。
+                ++res.applied;
+                continue;
+            }
+            if (envState_.influence + 1e-9 < EnvControl::kQuickCost) {
+                res.rejected.emplace_back(key, "影响力不足（需要 1）");
+                continue;
+            }
+            config_ = trial;
+            envState_.influence = std::max(0.0, envState_.influence - EnvControl::kQuickCost);
+            ++envState_.interventions;
+            syncDerivedFromConfig();
+            ++res.applied;
+            continue;
+        }
+
+        // ---- fine.<白名单键>=<数值>：细调；本批只扣一次 kFineCost（按 schema min/max 钳制）----
+        if (key.compare(0, 5, "fine.") == 0) {
+            const std::string pk = key.substr(5);
+            if (fineBatchUnaffordable) {
+                res.rejected.emplace_back(key, "影响力不足（需要 3）");
+                continue;
+            }
+            // 先写入临时配置，用于判断“是否真的改变”（无变化不扣费）。
+            WorldConfig trial = config_;
+            if (!EnvControl::applyFine(trial, pk, value, err)) {
+                res.rejected.emplace_back(key, err);
+                continue;
+            }
+            const ParamDef* d = ParamSchema::find(pk);
+            if (d && paramSameExact(config_, trial, *d)) {
+                // 无变化（已是目标值）：幂等成功，不扣费、不计干预。
+                ++res.applied;
+                continue;
+            }
+            config_ = trial;
+            if (!fineCostPaid) {  // 整批 fine 只扣一次
+                envState_.influence =
+                    std::max(0.0, envState_.influence - EnvControl::kFineCost);
+                fineCostPaid = true;
+            }
+            ++envState_.interventions;
+            syncDerivedFromConfig();
+            ++res.applied;
+            continue;
+        }
+
+        // ---- event.<harvest|winter|plague|bloom>=1：事件（费用/冷却见 EnvControl）----
+        if (key.compare(0, 6, "event.") == 0) {
+            const std::string id = key.substr(6);
+            const EnvEventDef* ev = EnvControl::event(id);
+            if (!ev) {
+                res.rejected.emplace_back(key, "未知事件: " + id);
+                continue;
+            }
+            if (!parseTruthyEnv(value)) {
+                res.rejected.emplace_back(key, "事件值必须为 1");
+                continue;
+            }
+            if (!applyEnvEvent(ev->kind, true, err)) {
+                res.rejected.emplace_back(key, err);
+                continue;
+            }
+            ++res.applied;
+            continue;
+        }
+
+        // ---- preset.<balance|bounty|harsh|bloom>=1：四轴档位 + 蓝细菌目标，费用 5 ----
+        if (key.compare(0, 7, "preset.") == 0) {
+            const std::string id = key.substr(7);
+            const EnvPresetDef* p = EnvControl::preset(id);
+            if (!p) {
+                res.rejected.emplace_back(key, "未知预设: " + id);
+                continue;
+            }
+            if (!parseTruthyEnv(value)) {
+                res.rejected.emplace_back(key, "预设值必须为 1");
+                continue;
+            }
+            if (envState_.influence + 1e-9 < EnvControl::kPresetCost) {
+                res.rejected.emplace_back(key, "影响力不足（需要 5）");
+                continue;
+            }
+            if (!EnvControl::applyPresetConfig(config_, *p, err)) {
+                res.rejected.emplace_back(key, err);
+                continue;
+            }
+            // 蓝细菌目标：只增不减（契约：预设目标小于现有数量时不强删）。
+            if (p->cyanoOn) {
+                if (config_.initialCyanoNodes <= 0) {
+                    activateCyano(p->cyanoTarget);
+                } else {
+                    const int have = cyano_.aliveNodeCount();
+                    if (have < p->cyanoTarget) addCyanoNodes(p->cyanoTarget - have);
+                }
+            } else if (config_.initialCyanoNodes > 0) {
+                deactivateCyano();
+            }
+            envState_.influence = std::max(0.0, envState_.influence - EnvControl::kPresetCost);
+            ++envState_.interventions;
+            syncDerivedFromConfig();
+            ++res.applied;
+            continue;
+        }
+
+        // ---- cyano=on|off：在线开关，费用 10，无冷却 ----
+        if (key == "cyano") {
+            bool on = false;
+            if (!parseSwitchEnv(value, on)) {
+                res.rejected.emplace_back(key, "蓝细菌开关值必须为 on 或 off");
+                continue;
+            }
+            const bool currently = config_.initialCyanoNodes > 0;
+            if (on == currently) {
+                res.rejected.emplace_back(key, on ? "蓝细菌已开启" : "蓝细菌已关闭");
+                continue;
+            }
+            if (envState_.influence + 1e-9 < EnvControl::kCyanoToggleCost) {
+                res.rejected.emplace_back(key, "影响力不足（需要 10）");
+                continue;
+            }
+            if (on) {
+                activateCyano(kCyanoDefaultNodes);
+            } else {
+                deactivateCyano();
+            }
+            envState_.influence = std::max(0.0, envState_.influence - EnvControl::kCyanoToggleCost);
+            ++envState_.interventions;
+            ++res.applied;
+            continue;
+        }
+
+        res.rejected.emplace_back(key, "未知命令键");
+    }
+    return res;
+}
+
+bool World::applyEnvEvent(EnvEventKind kind, bool playerInitiated, std::string& err) {
+    err.clear();
+    const EnvEventDef* def = findEventDef(kind);
+    if (!def) {
+        err = "未知事件";
+        return false;
+    }
+    if (aliveNucleusCount() == 0) {
+        err = "无存活核，事件无效";
+        return false;
+    }
+    if (playerInitiated) {
+        const int cd = envState_.cooldown[(size_t)kind];
+        if (cd > 0) {
+            char buf[96];
+            std::snprintf(buf, sizeof(buf), "事件冷却中（剩余 %d 帧）", cd);
+            err = buf;
+            return false;
+        }
+        if (envState_.influence + 1e-9 < def->cost) {
+            char buf[128];
+            std::snprintf(buf, sizeof(buf), "影响力不足（需要 %.0f，当前 %.1f）", def->cost,
+                          envState_.influence);
+            err = buf;
+            return false;
+        }
+    }
+    applyEnvEventEffect(kind);
+    if (playerInitiated) {
+        envState_.influence = std::max(0.0, envState_.influence - def->cost);
+        envState_.cooldown[(size_t)kind] = def->cooldownFrames;
+        ++envState_.interventions;
+    }
+    return true;
+}
+
+void World::applyEnvEventEffect(EnvEventKind kind) {
+    switch (kind) {
+        case EnvEventKind::Harvest: {
+            // 全体存活核 +8；单次总注入 ≤2000（按实际注入量累计）。
+            double injected = 0.0;
+            for (Nucleus& n : nuclei_) {
+                if (!n.alive) continue;
+                if (injected + kHarvestDelta > kHarvestInjectionCap) break;
+                energy_.apply(n, kHarvestDelta, EnergyReason::BOOM);
+                injected += kHarvestDelta;
+            }
+            break;
+        }
+        case EnvEventKind::Winter: {
+            for (Nucleus& n : nuclei_) {
+                if (!n.alive) continue;
+                if (n.energy < kWinterSkipBelow) continue;  // 能量 <5 跳过（防误杀）
+                energy_.apply(n, kWinterDelta, EnergyReason::BOOM);
+            }
+            break;
+        }
+        case EnvEventKind::Plague: {
+            for (Nucleus& n : nuclei_) {
+                if (!n.alive) continue;
+                if (!(n.energy > kPlagueMinEnergy)) continue;  // 只打富核
+                energy_.apply(n, kPlagueDelta, EnergyReason::BOOM);
+            }
+            break;
+        }
+        case EnvEventKind::Bloom:
+        default: {
+            if (config_.initialCyanoNodes <= 0 || cyano_.empty()) {
+                activateCyano(kCyanoDefaultNodes);
+            } else {
+                addCyanoNodes(kBloomExtraNodes);
+            }
+            break;
+        }
+    }
+}
+
+void World::tickEnvironment() {
+    // 影响力恢复（暂停时不推进：tickEnvironment 只在 step() 内调用）。
+    envState_.influence = std::min(EnvControl::kInfluenceMax,
+                                   envState_.influence + EnvControl::kInfluenceRegenPerFrame);
+    // 事件冷却递减。
+    for (int& cd : envState_.cooldown) {
+        if (cd > 0) --cd;
+    }
+    // 存活峰值（结算展示）。
+    const int alive = aliveNucleusCount();
+    if (alive > envState_.peakAlive) envState_.peakAlive = alive;
+}
+
+void World::activateCyano(int nodes) {
+    const int n = (nodes > 0) ? nodes : kCyanoDefaultNodes;
+    syncCyanoParamsFromConfig();
+    if (cyano_.worldWidth() != config_.width || cyano_.worldHeight() != config_.height) {
+        cyano_.setWorldSize(config_.width, config_.height);
+    }
+    // 玩家行为：允许消耗主 rng 撒点（无玩家命令的基线路径不会走到这里）。
+    cyano_.initialize(rng_, n, config_.cyanoColonies, config_.cyanoInitialEnergy);
+    config_.initialCyanoNodes = n;  // 开关标记 = 节点数（>0 即启用）
+}
+
+void World::deactivateCyano() {
+    // 关闭：清空群落并复位开关；**零 RNG**（不推进主随机流）。
+    cyano_.clear();
+    config_.initialCyanoNodes = 0;
+}
+
+void World::addCyanoNodes(int nodes) {
+    if (nodes <= 0) return;
+    if (config_.initialCyanoNodes <= 0) {
+        activateCyano(nodes);  // 关闭态下“追加”等价于直接激活
+        return;
+    }
+    syncCyanoParamsFromConfig();
+    if (cyano_.worldWidth() != config_.width || cyano_.worldHeight() != config_.height) {
+        cyano_.setWorldSize(config_.width, config_.height);
+    }
+    cyano_.addNodes(rng_, nodes, config_.cyanoColonies, config_.cyanoInitialEnergy);
+}
+
+void World::injectBalls(int n) {
+    for (int i = 0; i < n; ++i) spawnFreeBall();
+}
+
+void World::syncSunFromConfig() { sun_ = makeSunParams(config_); }
+
+void World::syncCyanoParamsFromConfig() {
+    cyano_.setParams(makeCyanoParams(config_));
+}
+
+void World::syncDerivedFromConfig() {
+    // 配置（WorldConfig）是唯一事实来源：派生 POD / 群落参数 / 空间网格尺寸都按它重建。
+    syncSunFromConfig();
+    syncCyanoParamsFromConfig();
+    // 世界尺寸可能因细调/读档变化：群落内部网格与节点位置需同步（零 RNG）。
+    if (cyano_.worldWidth() != config_.width || cyano_.worldHeight() != config_.height) {
+        cyano_.setWorldSize(config_.width, config_.height);
+    }
+    // SpatialGrid 没有 reset：按新尺寸整对象重建（隐式拷贝赋值，无 RNG/无副作用）。
+    grid_ = SpatialGrid(config_.width, config_.height, config_.gridCellSize);
+}
+
+// ==================== 存档序列化（Phase D / v2.2.0） ====================
 namespace {
 void wU8(std::ostream& os, uint8_t v) { os.write((const char*)&v, 1); }
+void wU16(std::ostream& os, uint16_t v) { os.write((const char*)&v, 2); }
 void wU32(std::ostream& os, uint32_t v) { os.write((const char*)&v, 4); }
 void wU64(std::ostream& os, uint64_t v) { os.write((const char*)&v, 8); }
+void wF32(std::ostream& os, float v) { os.write((const char*)&v, 4); }
 void wF64(std::ostream& os, double v) { os.write((const char*)&v, 8); }
 void wI32(std::ostream& os, int32_t v) { os.write((const char*)&v, 4); }
 void wStr(std::ostream& os, const std::string& s) {
@@ -786,8 +1222,10 @@ void wStr(std::ostream& os, const std::string& s) {
     os.write(s.data(), (std::streamsize)s.size());
 }
 bool rU8(std::istream& is, uint8_t& v) { return is.read((char*)&v, 1).good(); }
+bool rU16(std::istream& is, uint16_t& v) { return is.read((char*)&v, 2).good(); }
 bool rU32(std::istream& is, uint32_t& v) { return is.read((char*)&v, 4).good(); }
 bool rU64(std::istream& is, uint64_t& v) { return is.read((char*)&v, 8).good(); }
+bool rF32(std::istream& is, float& v) { return is.read((char*)&v, 4).good(); }
 bool rF64(std::istream& is, double& v) { return is.read((char*)&v, 8).good(); }
 bool rI32(std::istream& is, int32_t& v) { return is.read((char*)&v, 4).good(); }
 bool rStr(std::istream& is, std::string& s) {
@@ -808,7 +1246,7 @@ std::string trimLocal(const std::string& s) {
 bool World::writeState(std::ostream& os) const {
     if (!os.good()) return false;
     os.write("NSMS", 4);
-    wU32(os, 1);  // 存档格式版本
+    wU32(os, 2);  // 存档格式版本：v2 = v1 + 色相 RNG + 蓝细菌 + EnvState（mod 状态段由启动器追加）
     // 配置段：schema 键值行（版本演进安全：读取端忽略未知键）。
     std::ostringstream cfgLines;
     for (const ParamDef& d : ParamSchema::all()) {
@@ -867,6 +1305,45 @@ bool World::writeState(std::ostream& os) const {
         wF64(os, n.params.cyanoDigestion);
         wF64(os, n.params.maxAccel);
     }
+
+    // ==================== v2 追加段（必须在原有 mod 状态段之前） ====================
+    // 1) 色相 RNG（与主 rng 独立，但也要保存，读档后色相序列才能续上）。
+    std::ostringstream hueStream;
+    hueStream << hueRng_;
+    wStr(os, hueStream.str());
+
+    // 2) 蓝细菌群落：节点 → 连接 → nextNodeId → enabled。
+    const std::vector<CyanoNode>& cn = cyano_.nodes();
+    const std::vector<CyanoLink>& cl = cyano_.links();
+    wU32(os, (uint32_t)cn.size());
+    for (const CyanoNode& n : cn) {
+        wF32(os, (float)n.pos.x);
+        wF32(os, (float)n.pos.y);
+        wF32(os, (float)n.energy);
+        wU32(os, n.id);
+        wU16(os, n.colonyId);
+        wU16(os, (uint16_t)std::clamp(n.age, 0, 65535));
+        // flags：bit0 = 存活，bit1..2 = 类型（与 WebRenderer 快照 flags 语义一致）。
+        const uint16_t flags =
+            (uint16_t)((n.alive ? 1u : 0u) | ((uint32_t)(n.type & 0x3u) << 1));
+        wU16(os, flags);
+        wU16(os, n.linkCount);
+        wU8(os, n.type);
+    }
+    wU32(os, (uint32_t)cl.size());
+    for (const CyanoLink& l : cl) {
+        wU32(os, l.a);  // nodes_ 数组下标（a < b）
+        wU32(os, l.b);
+        wF64(os, l.flow);
+    }
+    wU32(os, cyano_.nextNodeId());
+    wU8(os, config_.initialCyanoNodes > 0 ? 1 : 0);
+
+    // 3) EnvState：影响力 / 事件冷却[4] / 干预计数 / 存活峰值。
+    wF64(os, envState_.influence);
+    for (int i = 0; i < kEnvEventCount; ++i) wI32(os, (int32_t)envState_.cooldown[(size_t)i]);
+    wI32(os, (int32_t)envState_.interventions);
+    wI32(os, (int32_t)envState_.peakAlive);
     return os.good();
 }
 
@@ -880,7 +1357,8 @@ bool World::readState(std::istream& is, std::string& err) {
     if (std::memcmp(magic, "NSMS", 4) != 0) return fail("不是有效存档（magic 不匹配）");
     uint32_t version = 0;
     if (!rU32(is, version)) return fail("存档版本字段缺失");
-    if (version != 1) return fail("存档版本不支持（当前仅支持 v1）");
+    // v1 = 蓝细菌节点段之前（无 hueRng / 无群落 / 无 EnvState）；v2 = 当前格式。
+    if (version != 1 && version != 2) return fail("存档版本不支持（当前支持 v1/v2）");
     uint32_t cfgCount = 0;
     if (!rU32(is, cfgCount)) return fail("配置段缺失");
     std::string cfgStr;
@@ -948,10 +1426,113 @@ bool World::readState(std::istream& is, std::string& err) {
         if (!rF64(is, n.params.cyanoPreference) || !rF64(is, n.params.cyanoDigestion) ||
             !rF64(is, n.params.maxAccel)) return fail("核蓝细菌字段缺失");
     }
+    // ==================== v2 追加段 ====================
+    std::vector<CyanoNode> cyanoNodes;
+    std::vector<CyanoLink> cyanoLinks;
+    uint32_t cyanoNextId = 1;
+    bool cyanoEnabledSaved = false;
+    bool hasEnvState = false;
+    EnvState loadedEnv;
+    if (version >= 2) {
+        // 1) hueRng 文本流
+        std::string hueStr;
+        if (!rStr(is, hueStr)) return fail("色相 RNG 段缺失");
+        {
+            std::istringstream hs(hueStr);
+            hs >> hueRng_;
+            if (hs.fail()) return fail("色相 RNG 状态恢复失败");
+        }
+        // 2) 蓝细菌节点（f32 x,y,energy；u32 id；u16 colony,age,flags,linkCount；u8 type）
+        uint32_t nodeCount = 0;
+        if (!rU32(is, nodeCount)) return fail("蓝细菌节点数缺失");
+        if (nodeCount > 1000000) return fail("蓝细菌节点数异常（存档损坏）");
+        cyanoNodes.resize((size_t)nodeCount);
+        for (CyanoNode& nd : cyanoNodes) {
+            float fx = 0.0f, fy = 0.0f, fe = 0.0f;
+            if (!rF32(is, fx) || !rF32(is, fy) || !rF32(is, fe)) {
+                return fail("蓝细菌节点数据不完整");
+            }
+            nd.pos.x = fx;
+            nd.pos.y = fy;
+            nd.energy = fe;
+            if (!rU32(is, nd.id)) return fail("蓝细菌节点 ID 缺失");
+            if (!rU16(is, nd.colonyId)) return fail("蓝细菌节点聚落缺失");
+            uint16_t age16 = 0, flags = 0;
+            if (!rU16(is, age16) || !rU16(is, flags)) return fail("蓝细菌节点状态缺失");
+            nd.age = (int)age16;
+            if (!rU16(is, nd.linkCount)) return fail("蓝细菌节点连接数缺失");
+            uint8_t type8 = 0;
+            if (!rU8(is, type8)) return fail("蓝细菌节点类型缺失");
+            nd.type = type8;
+            nd.alive = (flags & 0x1u) ? 1 : 0;  // 与写端 flags 语义一致
+        }
+        // 连接（u32 a,b；f64 flow）
+        uint32_t linkCount = 0;
+        if (!rU32(is, linkCount)) return fail("蓝细菌连接数缺失");
+        if (linkCount > 10000000) return fail("蓝细菌连接数异常（存档损坏）");
+        cyanoLinks.resize((size_t)linkCount);
+        for (CyanoLink& l : cyanoLinks) {
+            if (!rU32(is, l.a) || !rU32(is, l.b) || !rF64(is, l.flow)) {
+                return fail("蓝细菌连接数据不完整");
+            }
+        }
+        if (!rU32(is, cyanoNextId)) return fail("蓝细菌 nextNodeId 缺失");
+        uint8_t enabled8 = 0;
+        if (!rU8(is, enabled8)) return fail("蓝细菌开关标志缺失");
+        cyanoEnabledSaved = (enabled8 != 0);
+        // 3) EnvState
+        if (!rF64(is, loadedEnv.influence)) return fail("影响力段缺失");
+        for (int i = 0; i < kEnvEventCount; ++i) {
+            int32_t cd = 0;
+            if (!rI32(is, cd)) return fail("事件冷却段缺失");
+            loadedEnv.cooldown[(size_t)i] = (int)cd;
+        }
+        int32_t iv = 0, pk = 0;
+        if (!rI32(is, iv) || !rI32(is, pk)) return fail("环境干预计数段缺失");
+        loadedEnv.interventions = (int)iv;
+        loadedEnv.peakAlive = (int)pk;
+        hasEnvState = true;
+    }
+
     frame_ = (int)frame64;
     nextNucleusId_ = (int)next64;
     finished_ = false;
     finishReason_ = "";
+    // 配置（含世界尺寸/阳光/蓝细菌参数）已应用 → 派生对象必须按新配置重建。
+    syncDerivedFromConfig();
+    if (version >= 2) {
+        // 蓝细菌开关标记以存档为准（配置段里的 cyano_nodes 可能被后续在线操作改过）。
+        if (!cyanoEnabledSaved) {
+            config_.initialCyanoNodes = 0;
+            cyano_.clear();
+        } else {
+            if (config_.initialCyanoNodes <= 0) {
+                config_.initialCyanoNodes =
+                    (int)std::max<size_t>(1, cyanoNodes.size());  // 防御：保持“启用”语义
+            }
+            cyano_.load(cyanoNodes, cyanoLinks, cyanoNextId);
+        }
+        if (hasEnvState) {
+            envState_ = loadedEnv;
+            envState_.influence =
+                std::clamp(envState_.influence, 0.0, EnvControl::kInfluenceMax);
+            for (int& cd : envState_.cooldown) {
+                if (cd < 0) cd = 0;
+            }
+            if (envState_.interventions < 0) envState_.interventions = 0;
+            if (envState_.peakAlive < 0) envState_.peakAlive = 0;
+        }
+    } else {
+        // v1 旧档：没有蓝细菌节点段 → 群落只能是空的（不消耗 RNG，也不伪造节点）。
+        // 因此把开关标记归零：GET /env 显示“已关闭”，玩家可显式 cyano=on 重新激活
+        //（激活会消耗主 rng 撒点，属于玩家行为，不会污染“无玩家命令”的确定性红线）。
+        // 环境状态从默认值开始（旧档没有影响力概念）。
+        envState_ = EnvState{};
+        if (config_.initialCyanoNodes > 0) {
+            config_.initialCyanoNodes = 0;
+            cyano_.clear();
+        }
+    }
     buildGrid();
     return true;
 }

@@ -23,6 +23,8 @@ add_executable(simulator
   src/EventBus.h
   src/EnergySystem.cpp
   src/EnergySystem.h
+  src/EnvControl.cpp
+  src/EnvControl.h
   src/Cyanobacteria.cpp
   src/Cyanobacteria.h
   src/ParamSchema.cpp

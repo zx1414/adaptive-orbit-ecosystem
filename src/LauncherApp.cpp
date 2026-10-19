@@ -69,6 +69,39 @@ std::string jsonEscape(const std::string& s) {
     return out;
 }
 
+// POST /env 契约响应：{ok,applied,rejected,influence,cooldowns}（+可选 err）。
+// applied 为成功条数；rejected 为 [{key,reason}]；cooldowns 按事件 id 给出剩余帧。
+std::string envResponseJson(const EnvApplyResult& res, const EnvState& st, bool ok,
+                            const std::string& err) {
+    std::string out = "{\"ok\":";
+    out += ok ? "true" : "false";
+    out += ",\"applied\":" + std::to_string(res.applied);
+    out += ",\"rejected\":[";
+    bool first = true;
+    for (const auto& r : res.rejected) {
+        if (!first) out += ",";
+        first = false;
+        out += "{\"key\":\"" + jsonEscape(r.first) + "\",\"reason\":\"" +
+               jsonEscape(r.second) + "\"}";
+    }
+    out += "],\"influence\":";
+    char num[64];
+    std::snprintf(num, sizeof(num), "%.2f", st.influence);
+    out += num;
+    out += ",\"cooldowns\":{";
+    first = true;
+    for (const EnvEventDef& d : EnvControl::events()) {
+        if (!first) out += ",";
+        first = false;
+        out += "\"" + std::string(d.id) + "\":" +
+               std::to_string(st.cooldown[(int)d.kind]);
+    }
+    out += "}";
+    if (!err.empty()) out += ",\"err\":\"" + jsonEscape(err) + "\"";
+    out += "}";
+    return out;
+}
+
 // 存档/材质包名安全检查：拒绝路径分隔符与 Windows 非法字符。
 bool safeSaveName(const std::string& name) {
     if (name.empty() || name.size() > 64) return false;
@@ -205,6 +238,7 @@ void LauncherApp::runMainLoop() {
         if (st == State::Menu) {
             std::string loadName;
             std::map<std::string, std::string> params;
+            rejectEnvRequest("当前为菜单态，请先开始模拟");  // 兜底：处理终止竞态下的残留命令
             if (takeLoadRequest(loadName)) {
                 std::string err;
                 loadWorldFromSave(loadName, err);
@@ -213,10 +247,12 @@ void LauncherApp::runMainLoop() {
                 } else {
                     paused_.store(true);  // 读档后停在暂停态供查看
                     state_.store((int)State::Running);
+                    refreshEnvCache();
                 }
             } else if (takeRunRequest(params)) {
                 createWorld(params);
                 state_.store((int)State::Running);
+                refreshEnvCache();
             } else {
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
             }
@@ -224,6 +260,7 @@ void LauncherApp::runMainLoop() {
         }
 
         if (st == State::Finished) {
+            rejectEnvRequest("模拟已结束，环境调控不可用");
             if (toMenuRequested_.exchange(false)) {
                 destroyWorld();
                 state_.store((int)State::Menu);
@@ -234,12 +271,16 @@ void LauncherApp::runMainLoop() {
         }
 
         // ---- Running ----
+        // 环境信箱：先于 step 应用（暂停态也应用），保证 /env 的改写在下一帧生效；
+        // 顺序固定为「保存请求（循环顶部）→ 环境命令 → step」。
+        processEnvRequest();
         if (stopRequested_.exchange(false)) {
             world_->stopNow("用户停止");
             web_->render(*world_);
             doEnding();
             finishReason_ = world_->finishReason();
             state_.store((int)State::Finished);
+            refreshEnvCache();
             continue;
         }
         if (world_->finished()) {
@@ -247,10 +288,12 @@ void LauncherApp::runMainLoop() {
             doEnding();
             finishReason_ = world_->finishReason();
             state_.store((int)State::Finished);
+            refreshEnvCache();
             continue;
         }
         if (paused_.load()) {
             if (!consumeStep()) {
+                refreshEnvCache();  // 暂停时每轮刷新，影响力/冷却/参数立即可见
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
                 continue;
             }
@@ -266,6 +309,8 @@ void LauncherApp::runMainLoop() {
         if (cfg.sampleInterval > 0 && world_->frame() % cfg.sampleInterval == 0) {
             sampler_->sample(*world_);
         }
+        // GET /env 缓存每 10 帧重建一次（toJson 有字符串分配，避免每帧开销）。
+        if (world_->frame() % 10 == 0) refreshEnvCache();
         double maxFps = maxFps_.load();
         if (maxFps > 0.0) {
             auto elapsed = clock::now() - t0;
@@ -289,7 +334,12 @@ bool LauncherApp::takeRunRequest(std::map<std::string, std::string>& out) {
 }
 
 void LauncherApp::createWorld(const std::map<std::string, std::string>& params) {
-    WorldConfig cfg = pendingCfg_;  // 参数页当前配置为基准
+    WorldConfig cfg;
+    {
+        // pendingCfg_ 由服务器线程（参数页保存 / 菜单态 POST /env）写入，拷贝必须加锁。
+        std::lock_guard<std::mutex> lk(mutex_);
+        cfg = pendingCfg_;  // 参数页当前配置为基准
+    }
     for (const auto& kv : params) {
         ParamSchema::applyLine(cfg, kv.first, kv.second);
     }
@@ -315,6 +365,7 @@ void LauncherApp::destroyWorld() {
     modApi_.reset();
     world_.reset();
     state_.store((int)State::Menu);
+    refreshEnvCache();  // 回菜单态：GET /env 用 pendingCfg_ 的默认状态重建缓存
 }
 
 void LauncherApp::doEnding() {
@@ -336,6 +387,197 @@ bool LauncherApp::consumeStep() {
     while (v > 0 && !singleStep_.compare_exchange_weak(v, v - 1)) {
     }
     return v > 0;
+}
+
+// ---------- 环境 API：缓存 + 信箱（主线程侧）----------
+
+void LauncherApp::refreshEnvCache() {
+    // World 只能由主线程访问；本函数只允许主线程调用。
+    EnvState st;
+    WorldConfig cfg;
+    int nodes = 0, links = 0;
+    bool cyanoEnabled = false;
+    bool climateMod = false;
+    {
+        std::lock_guard<std::mutex> lk(mutex_);
+        for (const std::string& id : enabledMods_) {
+            if (id == "climate_event") {
+                climateMod = true;
+                break;
+            }
+        }
+    }
+    if (world_) {
+        st = world_->envState();
+        cfg = world_->config();
+        nodes = world_->cyano().aliveNodeCount();
+        links = world_->cyano().aliveLinkCount();
+        cyanoEnabled = world_->cyanoEnabled();
+        // 世界运行中：climate_event 启用时由该 mod 每帧自报 nextClimateIn（它持有周期常量）；
+        // 未启用时这里复位，避免上一局状态残留。
+        if (!climateMod) setEnvModStatus(EnvModStatus{false, 0});
+    } else {
+        // 菜单态/无世界：用参数页当前配置 + 默认 EnvState（影响力 50、无冷却）。
+        std::lock_guard<std::mutex> lk(mutex_);
+        cfg = pendingCfg_;
+        nodes = cfg.initialCyanoNodes;
+        cyanoEnabled = cfg.initialCyanoNodes > 0;
+        setEnvModStatus(EnvModStatus{climateMod, 0});
+    }
+    const bool running = world_ != nullptr && (State)state_.load() == State::Running;
+    const bool paused = paused_.load();
+    std::string json =
+        EnvControl::toJson(st, cfg, nodes, links, cyanoEnabled, running, paused);
+    std::lock_guard<std::mutex> lk(envCacheMutex_);
+    envJson_ = std::move(json);
+    envCacheValid_ = true;
+}
+
+void LauncherApp::processEnvRequest() {
+    std::map<std::string, std::string> cmds;
+    {
+        std::lock_guard<std::mutex> lk(envMutex_);
+        if (!envPending_) return;
+        cmds = envRequest_;
+        envPending_ = false;
+    }
+    EnvApplyResult res;
+    EnvState st;
+    if (!world_) {
+        res.rejected.emplace_back("", "没有运行中的模拟");
+    } else if (world_->finished()) {
+        res.rejected.emplace_back("", "模拟已结束");
+    } else {
+        // 主线程应用：可与存档/step 共用 World 而无需额外加锁（rng 单线程确定性）。
+        res = world_->applyEnvCommand(cmds);
+        st = world_->envState();
+        refreshEnvCache();  // 让随后的 GET /env 立即反映本次改动
+    }
+    {
+        std::lock_guard<std::mutex> lk(envMutex_);
+        envResult_ = std::move(res);
+        envResultState_ = st;
+        envDone_ = true;
+    }
+    envCond_.notify_all();
+}
+
+void LauncherApp::rejectEnvRequest(const std::string& why) {
+    bool had = false;
+    {
+        std::lock_guard<std::mutex> lk(envMutex_);
+        if (!envPending_) return;
+        envPending_ = false;
+        envResult_ = EnvApplyResult{};
+        envResult_.rejected.emplace_back("", why);
+        envResultState_ = EnvState{};
+        envDone_ = true;
+        had = true;
+    }
+    if (had) envCond_.notify_all();
+}
+
+// ---------- 环境 API：服务器线程侧 ----------
+
+// 菜单态：直接写入 pendingCfg_（axis/fine/preset/cyano），不扣影响力、无冷却。
+// 事件必须等模拟开始后走世界信箱，因此这里明确拒绝。
+std::string LauncherApp::handleEnvMenu(const std::map<std::string, std::string>& cmds) {
+    EnvApplyResult res;
+    EnvState st;  // 菜单态用默认 EnvState（影响力 50，冷却全 0）
+    if (cmds.empty()) {
+        res.rejected.emplace_back("", "空请求");
+        return envResponseJson(res, st, false, "");
+    }
+    std::lock_guard<std::mutex> lk(mutex_);
+    for (const auto& kv : cmds) {
+        const std::string& key = kv.first;
+        const std::string& val = kv.second;
+        std::string err;
+        bool ok = false;
+        if (key.rfind("axis.", 0) == 0) {
+            const std::string id = key.substr(5);
+            const EnvAxisDef* a = EnvControl::axis(id);
+            if (!a) {
+                err = "未知环境轴: " + id;
+            } else {
+                int level = -1;
+                bool parsed = false;
+                try {
+                    size_t pos = 0;
+                    int v = std::stoi(val, &pos);
+                    if (pos == val.size()) {
+                        level = v;
+                        parsed = true;
+                    }
+                } catch (...) {
+                }
+                if (!parsed) err = "档位必须是整数 0..4";
+                else ok = EnvControl::applyAxisLevel(pendingCfg_, a->axis, level, err);
+            }
+        } else if (key.rfind("fine.", 0) == 0) {
+            ok = EnvControl::applyFine(pendingCfg_, key.substr(5), val, err);
+        } else if (key.rfind("preset.", 0) == 0) {
+            const EnvPresetDef* p = EnvControl::preset(key.substr(7));
+            if (!p) {
+                err = "未知预设: " + key.substr(7);
+            } else if (EnvControl::applyPresetConfig(pendingCfg_, *p, err)) {
+                ok = true;
+                // 预设的蓝细菌目标直接落到参数页（下次启动生效）。
+                if (p->cyanoOn && p->cyanoTarget > 0) {
+                    pendingCfg_.initialCyanoNodes = p->cyanoTarget;
+                } else if (!p->cyanoOn) {
+                    pendingCfg_.initialCyanoNodes = 0;
+                }
+            }
+        } else if (key == "cyano") {
+            if (val == "on" || val == "1" || val == "true") {
+                if (pendingCfg_.initialCyanoNodes <= 0) pendingCfg_.initialCyanoNodes = 150;
+                ok = true;
+            } else if (val == "off" || val == "0" || val == "false") {
+                pendingCfg_.initialCyanoNodes = 0;
+                ok = true;
+            } else {
+                err = "cyano 取值必须为 on/off";
+            }
+        } else if (key.rfind("event.", 0) == 0) {
+            err = "菜单态无法触发事件（开始模拟后可用）";
+        } else {
+            err = "未知环境命令: " + key;
+        }
+        if (ok) {
+            ++res.applied;
+        } else {
+            if (err.empty()) err = "应用失败";
+            res.rejected.emplace_back(key, err);
+        }
+    }
+    return envResponseJson(res, st, res.rejected.empty() && res.applied > 0, "");
+}
+
+// 运行/暂停态：投递环境信箱，主线程在 step 前应用；条件变量阻塞等待（超时 2s）。
+std::string LauncherApp::handleEnvLive(const std::map<std::string, std::string>& cmds) {
+    {
+        std::lock_guard<std::mutex> lk(envMutex_);
+        envRequest_ = cmds;
+        envPending_ = true;
+        envDone_ = false;
+        envResult_ = EnvApplyResult{};
+        envResultState_ = EnvState{};
+    }
+    std::unique_lock<std::mutex> lk(envMutex_);
+    const bool done = envCond_.wait_for(lk, std::chrono::milliseconds(2000),
+                                        [this] { return envDone_; });
+    if (!done) {
+        // 超时：撤销未处理的投递（主循环卡死/已退出），避免命令稍后被意外应用。
+        envPending_ = false;
+        EnvApplyResult res;
+        res.rejected.emplace_back("", "环境命令超时（主循环无响应）");
+        return envResponseJson(res, EnvState{}, false, "timeout");
+    }
+    EnvApplyResult res = envResult_;
+    EnvState st = envResultState_;
+    const bool ok = res.rejected.empty() && res.applied > 0;
+    return envResponseJson(res, st, ok, "");
 }
 
 // ---------- 请求处理（服务器线程）----------
@@ -402,6 +644,63 @@ bool LauncherApp::route(const std::string& method, const std::string& path,
     if (method == "GET" && path == "/status") {
         resp = statusText();
         contentType = "text/plain; charset=utf-8";
+        return true;
+    }
+    // ---- v2.2.0 环境 API ----
+    if (method == "GET" && path == "/env") {
+        // 菜单态：按参数页当前配置 + 默认 EnvState 现场构造；
+        // 运行/暂停/结束态：返回主线程维护的缓存（World 不跨线程访问）。
+        if ((State)state_.load() == State::Menu) {
+            WorldConfig cfg;
+            bool climateMod = false;
+            {
+                std::lock_guard<std::mutex> lk(mutex_);
+                cfg = pendingCfg_;
+                for (const std::string& id : enabledMods_) {
+                    if (id == "climate_event") {
+                        climateMod = true;
+                        break;
+                    }
+                }
+            }
+            // 菜单态自动气候还没开始跑：只报"是否将在本局启用"，倒计时为 0。
+            setEnvModStatus(EnvModStatus{climateMod, 0});
+            EnvState def;
+            const int nodes = cfg.initialCyanoNodes;
+            resp = EnvControl::toJson(def, cfg, nodes, 0, nodes > 0, false, false);
+        } else {
+            std::string cached;
+            bool valid = false;
+            {
+                std::lock_guard<std::mutex> lk(envCacheMutex_);
+                cached = envJson_;
+                valid = envCacheValid_;
+            }
+            if (valid) {
+                resp = cached;
+            } else {
+                // 缓存尚未生成（启动/读档瞬间）：退回参数页默认视图，避免空响应。
+                WorldConfig cfg;
+                {
+                    std::lock_guard<std::mutex> lk(mutex_);
+                    cfg = pendingCfg_;
+                }
+                EnvState def;
+                const int nodes = cfg.initialCyanoNodes;
+                resp = EnvControl::toJson(def, cfg, nodes, 0, nodes > 0, false, false);
+            }
+        }
+        contentType = "application/json; charset=utf-8";
+        return true;
+    }
+    if (method == "POST" && path == "/env") {
+        const std::map<std::string, std::string> cmds = parseKeyValues(body);
+        if ((State)state_.load() == State::Menu) {
+            resp = handleEnvMenu(cmds);
+        } else {
+            resp = handleEnvLive(cmds);
+        }
+        contentType = "application/json; charset=utf-8";
         return true;
     }
     if (method == "GET" && path == "/schema") {
@@ -597,6 +896,7 @@ std::string LauncherApp::buildModsJson() {
         out += ",\"desc\":\"" + jsonEscape(m.desc) + "\"";
         out += ",\"touches\":\"" + jsonEscape(m.touches) + "\"";
         out += ",\"incompatible\":\"" + jsonEscape(m.incompatible) + "\"";
+        out += ",\"requires\":\"" + jsonEscape(m.requires) + "\"";
         out += ",\"enabled\":" + std::string(enabled ? "true" : "false");
         out += ",\"order\":" + std::to_string(order);
         out += "}";
@@ -687,6 +987,9 @@ void LauncherApp::loadWorldFromSave(const std::string& name, std::string& err) {
             world_.reset();
             return;
         }
+        // 读档后派生对象（sun_/蓝细菌参数/网格）按恢复的 config 重建。
+        // readState 内部也会调用；此处显式再调一次，确保 mod 状态段读取前已一致（幂等）。
+        world_->syncDerivedFromConfig();
         // mod 状态段（占位钩子：无状态 mod 跳过）。
         uint32_t modCount = 0;
         f.read((char*)&modCount, 4);
@@ -707,6 +1010,9 @@ void LauncherApp::loadWorldFromSave(const std::string& name, std::string& err) {
         registerAllMods(*modApi_, enabledMods_);
         web_ = std::make_unique<WebRenderer>(*world_);
         sampler_ = std::make_unique<Sampler>(".");
+        // 读档成功后把世界配置同步回参数页：参数页/四轴档位/细调滑杆与读档世界一致。
+        pendingCfg_ = world_->config();
+        maxFps_.store(pendingCfg_.maxFps);
     }
     paused_.store(true);
     singleStep_.store(0);

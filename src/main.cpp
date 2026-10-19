@@ -25,7 +25,7 @@
 #include "mods_registry.h"
 
 namespace {
-constexpr const char* kVersion = "2.1.0";  // 发布版本（--version 查看）；2.1.0 = 前端修复版（材质包取色键名/画布比例）
+constexpr const char* kVersion = "2.2.0";  // 发布版本（--version 查看）；2.2.0 = 实时环境调控（影响力/四轴/事件/蓝细菌开关）+ 存档 v2
 
 struct Args {
     double width = 2000.0;

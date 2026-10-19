@@ -42,6 +42,11 @@ private:
     std::string buildPacksJson();
     std::vector<uint8_t> snapshotBytes();
 
+    // ---- 环境 API（v2.2.0，GET/POST /env）----
+    // 服务器线程只读 envJson_ 缓存或投递环境信箱；World 只由主线程访问。
+    std::string handleEnvMenu(const std::map<std::string, std::string>& cmds);
+    std::string handleEnvLive(const std::map<std::string, std::string>& cmds);
+
     // ---- 请求处理（服务器线程，只投递请求/写配置，不动世界）----
     void onControl(const std::string& cmd);
     void onRun(const std::string& body);          // key=value 行 → runRequest
@@ -63,6 +68,10 @@ private:
     void doEnding();
     bool doSave(const std::string& name, std::string& err);
     bool consumeStep();
+    // 环境缓存/信箱（主线程侧）
+    void refreshEnvCache();                       // 主线程：重建 envJson_（每 10 帧/暂停时）
+    void processEnvRequest();                     // 主线程：应用信箱命令并回填结果
+    void rejectEnvRequest(const std::string& why);  // 主线程：拒绝未处理命令（结束/菜单态）
 
     std::string webRoot_;
     std::string baseDir_;  // exe 所在目录（env_config.txt / mods.list 等落点）
@@ -86,6 +95,22 @@ private:
     bool savePending_ = false;
     bool saveOk_ = false;
     std::string saveErr_;
+
+    // —— 环境 API（v2.2.0）——
+    // GET /env 缓存：主线程每 10 帧（暂停时每轮）用 EnvControl::toJson 重建，
+    // 服务器线程只读；World 绝不跨线程访问。
+    std::mutex envCacheMutex_;
+    std::string envJson_;
+    bool envCacheValid_ = false;
+    // 环境信箱：服务器线程投递命令 → 主线程在 world_->step() 前应用 → 条件变量回填结果。
+    // 与存档信箱分开，避免共用锁导致 /save 与 /env 相互阻塞。
+    std::mutex envMutex_;
+    std::condition_variable envCond_;
+    std::map<std::string, std::string> envRequest_;
+    bool envPending_ = false;
+    bool envDone_ = false;
+    EnvApplyResult envResult_;
+    EnvState envResultState_;
 
     std::unique_ptr<World> world_;
     std::unique_ptr<WebRenderer> web_;

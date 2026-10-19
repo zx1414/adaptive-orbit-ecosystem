@@ -25,4 +25,7 @@ size_nucleus = 0.8
 cyano_color_mode = colony
 cyano_node = 90, 220, 170
 cyano_link = 60, 140, 110
+# 连线不透明度（可选键，0.35~1，缺省 0.7）：调低更淡、调高更实；
+# 前端不会再把它压到「看不见」的水平，线宽固定 1.5。
+cyano_link_alpha = 0.85
 cyano_node_size = 2

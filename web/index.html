@@ -108,6 +108,11 @@
   #btn-start { width: 100%; padding: 11px; font-size: 14px; letter-spacing: .5px; }
   #sidebar .sidehint { font-size: 11px; color: #6e7681; line-height: 1.65; }
   #sidebar .sidehint .kbd { font-size: 9px; line-height: 13px; }
+  /* 快速设置里的复选框行：与数字输入同一视觉节奏，但不占整行高度 */
+  .field .chk { display: flex; align-items: center; gap: 7px; font-size: 12px;
+                color: var(--text); cursor: pointer; line-height: 1.45; }
+  .field .chk input[type=checkbox] { width: auto; transform: scale(1.15);
+                                     cursor: pointer; flex: 0 0 auto; }
 
   /* 画布区：canvas 位图尺寸由 app.js 的 resizeCanvas 跟随本容器，CSS 只负责铺满 */
   #stage { flex: 1; position: relative; background: #05070b; overflow: hidden; }
@@ -162,8 +167,9 @@
   #hud b { color: var(--text2); font-weight: 600; font-variant-numeric: tabular-nums;
            letter-spacing: .2px; }
 
-  /* 图例：默认收起（不挡画面），summary 上的「?」提示可展开；展开时浮在画布之上 */
-  #legend { position: absolute; left: 12px; bottom: 12px; z-index: 6;
+  /* 图例：默认收起（不挡画面），summary 上的「?」提示可展开；展开时浮在画布之上。
+     v2.2.0：底边留给 #quickbar（快调条），图例与暂停角标整体上移，互不遮挡。 */
+  #legend { position: absolute; left: 12px; bottom: 62px; z-index: 6;
             font-size: 12px; line-height: 1.55; background: rgba(20, 26, 34, .88);
             border: 1px solid var(--line2); border-radius: 10px; padding: 6px 10px;
             pointer-events: none; user-select: none; box-shadow: var(--shadow);
@@ -193,7 +199,7 @@
             margin-right: 5px; vertical-align: -1px; }
 
   /* 暂停角标：底部居中、很淡、不接收指针事件，只看状态不挡操作 */
-  #paused-badge { position: absolute; left: 50%; bottom: 16px; z-index: 5;
+  #paused-badge { position: absolute; left: 50%; bottom: 62px; z-index: 5;
                   transform: translate(-50%, 8px); opacity: 0; pointer-events: none;
                   transition: opacity .18s ease, transform .18s ease;
                   padding: 5px 14px; border-radius: 999px; font-size: 12px;
@@ -214,6 +220,118 @@
   #overlay h2 { font-size: 18px; margin-bottom: 10px; color: var(--text2); }
   #overlay p { font-size: 14px; color: var(--text); margin-bottom: 18px; line-height: 1.6; }
   #overlay .row { display: flex; gap: 10px; justify-content: center; }
+  #overlay .ostats { font-size: 12px; color: var(--muted); margin: -8px 0 18px;
+                     line-height: 1.6; font-variant-numeric: tabular-nums; }
+
+  /* ---------- 环境快调条（v2.2.0） ----------
+     底部横向条：影响力 + 四轴快调 chip + 事件/细调入口。
+     窄屏不换行、横向滚动；左/下留白避开图例与暂停角标（两者已上移到 bottom:62px）。 */
+  #quickbar { position: absolute; left: 12px; right: 12px; bottom: 12px; z-index: 6;
+              display: flex; align-items: center; gap: 8px; flex-wrap: nowrap;
+              overflow-x: auto; overflow-y: hidden; scrollbar-width: thin;
+              background: rgba(20, 26, 34, .92); border: 1px solid var(--line2);
+              border-radius: 10px; padding: 6px 10px; box-shadow: var(--shadow);
+              backdrop-filter: blur(8px); white-space: nowrap; font-size: 12px; }
+  #quickbar .qb-influence { display: flex; align-items: baseline; gap: 6px; flex: 0 0 auto; }
+  #quickbar .qb-label { color: var(--muted); font-size: 11px; letter-spacing: .5px; }
+  #quickbar #qb-influence { color: var(--accent2); font-weight: 700;
+                            font-variant-numeric: tabular-nums; }
+  #quickbar .qb-bar { width: 64px; height: 6px; border-radius: 3px; background: #0d1117;
+                      border: 1px solid var(--line2); overflow: hidden; flex: 0 0 auto; }
+  #quickbar #qb-influence-fill { height: 100%; width: 0;
+                                 background: linear-gradient(90deg, #1f6feb, #58a6ff); }
+  #qb-axes { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+  .qb-axis { display: flex; align-items: center; gap: 4px; flex: 0 0 auto;
+             background: #121821; border: 1px solid var(--line2); border-radius: 8px;
+             padding: 2px 6px; }
+  .qb-axis.off { opacity: .55; }
+  .qba-name { color: var(--muted); font-size: 11px; }
+  .qba-level { color: var(--text2); min-width: 34px; text-align: center; font-weight: 600; }
+  .qba-btn { padding: 1px 6px; font-size: 12px; line-height: 1.2; border-radius: 5px; }
+  .qbar-actions { display: flex; gap: 6px; flex: 0 0 auto; }
+  .qbar-hint { color: var(--muted); font-size: 11px; display: none;
+               margin-left: auto; padding-left: 8px; }
+  .qbar-hint.show { display: inline-block; }
+
+  /* 事件卡弹出层：右下、快调条之上；高度上限避免压到 HUD/控制条 */
+  #event-pop { position: absolute; right: 12px; bottom: 62px; z-index: 8;
+               width: min(340px, calc(100% - 24px));
+               max-height: min(56vh, calc(100% - 240px)); overflow-y: auto;
+               display: none; background: rgba(20, 26, 34, .96);
+               border: 1px solid var(--line2); border-radius: 12px; padding: 10px 12px;
+               box-shadow: var(--shadow); backdrop-filter: blur(8px); }
+  #event-pop.show { display: block; }
+  #event-pop .ep-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px;
+                        color: var(--text2); font-weight: 600; font-size: 13px; }
+  #event-pop .ep-sum { margin-left: auto; color: var(--muted); font-size: 11px;
+                       font-weight: 400; font-variant-numeric: tabular-nums; }
+  #event-pop #event-close { padding: 2px 8px; font-size: 12px; }
+  #event-list { display: flex; flex-direction: column; gap: 7px; }
+  .ecard { display: block; width: 100%; text-align: left; white-space: normal;
+           background: #121821; border: 1px solid var(--line2); border-radius: 9px;
+           padding: 8px 10px; font-size: 12px; cursor: pointer; }
+  .ecard:hover:not(:disabled) { border-color: #3d4757; background: #18202a; }
+  .ecard:disabled { background: #0f141b; border-color: #1d242d; color: #525d6b;
+                    cursor: not-allowed; }
+  .ecard-top { display: flex; align-items: baseline; gap: 8px; }
+  .ecard-name { font-weight: 600; color: var(--text2); font-size: 13px; }
+  .ecard-cost { margin-left: auto; color: var(--accent2); font-size: 11px;
+                font-variant-numeric: tabular-nums; }
+  .ecard:disabled .ecard-name, .ecard:disabled .ecard-cost { color: #6a7482; }
+  .ecard-desc { color: var(--muted); line-height: 1.5; margin: 3px 0 2px; font-size: 11px; }
+  .ecard-foot { color: var(--warn); font-size: 11px; }
+  .ecard:not(:disabled) .ecard-foot { color: var(--muted); }
+  #event-pop .ep-note { margin-top: 8px; font-size: 11px; color: #6e7681; line-height: 1.5; }
+
+  /* 右侧细调抽屉：JS 按 HUD 实际高度把 top 放到 HUD 下方（不遮 HUD/控制条） */
+  #fine-drawer { position: absolute; right: 12px; top: 12px; width: min(340px, 46%);
+                 z-index: 8; display: none; overflow-y: auto;
+                 background: rgba(20, 26, 34, .96); border: 1px solid var(--line2);
+                 border-radius: 12px; padding: 10px 12px; box-shadow: var(--shadow);
+                 backdrop-filter: blur(8px); }
+  #fine-drawer.show { display: block; }
+  #fine-drawer .fd-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+  #fine-drawer .fd-title { font-weight: 600; color: var(--text2); font-size: 13px; }
+  #fine-influence { margin-left: auto; color: var(--accent2); font-weight: 700;
+                    font-variant-numeric: tabular-nums; font-size: 12px; }
+  #fine-drawer #fine-close { padding: 2px 8px; font-size: 12px; }
+  #fine-drawer .fd-note { font-size: 11px; color: #6e7681; line-height: 1.5; margin-bottom: 4px; }
+  .fine-group { border-top: 1px dashed var(--line); padding: 7px 0 5px; }
+  .fine-group:first-child { border-top: 0; }
+  .fine-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; }
+  .fine-axis { font-weight: 600; color: var(--text2); }
+  .fine-level { margin-left: auto; font-size: 11px; color: var(--muted); }
+  .fine-row { display: grid; grid-template-columns: 92px 1fr 70px; gap: 6px;
+              align-items: center; margin-bottom: 2px; }
+  .fine-label { font-size: 11px; color: var(--muted); line-height: 1.4; }
+  .fine-range { width: 100%; accent-color: var(--accent); }
+  .fine-num { width: 100%; padding: 3px 5px; font-size: 12px; }
+  .fine-cur { grid-column: 1 / -1; font-size: 10px; color: #6e7681; margin: 0 0 2px; }
+  .fine-row.dirty .fine-num { border-color: var(--warn); }
+  .fine-apply { margin-top: 4px; width: 100%; padding: 4px 8px; font-size: 12px; }
+  .fine-est { display: block; margin-top: 2px; font-size: 10px; color: #6e7681; line-height: 1.5; }
+
+  /* 环境操作 toast：底部居中、快调条之上；成功/失败不同色 */
+  #env-toast { position: absolute; left: 50%; bottom: 74px; transform: translate(-50%, 6px);
+               z-index: 9; padding: 6px 14px; border-radius: 999px; font-size: 12px;
+               opacity: 0; pointer-events: none; transition: opacity .16s ease, transform .16s ease;
+               background: rgba(20, 26, 34, .95); border: 1px solid var(--line2);
+               box-shadow: var(--shadow); max-width: min(560px, calc(100% - 32px)); }
+  #env-toast.show { opacity: 1; transform: translate(-50%, 0); }
+  #env-toast.ok { color: #7ee787; border-color: rgba(63, 185, 80, .55); }
+  #env-toast.err { color: #ffa198; border-color: rgba(248, 81, 73, .55); }
+
+  /* HUD「渲染自检」：默认收起的一行，网格满宽；实体>0 但绘制=0 时黄色警告 */
+  #hud .hdebug { grid-column: 1 / -1; pointer-events: auto; padding: 6px 10px 7px; }
+  #hud .hdebug summary { cursor: pointer; list-style: none; color: var(--muted);
+                         font-size: 10px; letter-spacing: 1.5px; }
+  #hud .hdebug summary::-webkit-details-marker { display: none; }
+  #hud .hdebug summary::after { content: "▸"; float: right; color: var(--muted); font-size: 9px; }
+  #hud .hdebug[open] summary::after { content: "▾"; }
+  #hud .hdebug .hitems { margin-top: 4px; }
+  #dbg-warn { display: none; margin-top: 4px; color: #e3b341; font-size: 11px;
+              line-height: 1.4; white-space: normal; }
+  #dbg-warn.show { display: block; }
 
   /* ---------- 参数页 ---------- */
   #page-params { flex-direction: column; padding: 16px 20px; gap: 14px; }
@@ -302,6 +420,10 @@
     #hud { width: min(336px, 44%); font-size: 11px; gap: 6px; }
     #hud .hgroup { padding: 6px 8px 7px; }
     #legend { max-width: calc(100% - 24px); }
+    #quickbar { gap: 6px; padding: 5px 8px; font-size: 11px; }
+    #quickbar .qb-bar { width: 52px; }
+    .qba-btn { padding: 1px 5px; }
+    #event-pop, #fine-drawer { width: min(320px, 48%); }
   }
   @media (max-height: 760px) {
     #hud { font-size: 11px; }
@@ -333,6 +455,13 @@
     #hud .hitems span { line-height: 1.4; }
     #legend { max-width: min(340px, calc(100% - 24px)); font-size: 11px; }
     #legend .lgrid { column-gap: 10px; }
+    /* 底部快调条贴边更紧；图例/暂停角标/事件层跟着上移，避免互相遮挡 */
+    #quickbar { left: 8px; right: 8px; bottom: 8px; gap: 5px; padding: 4px 7px; font-size: 11px; }
+    #legend { bottom: 56px; }
+    #paused-badge { bottom: 56px; }
+    #event-pop { bottom: 56px; max-height: min(52vh, calc(100% - 200px)); }
+    #fine-drawer { right: 8px; width: min(300px, 62%); }
+    #env-toast { bottom: 64px; }
     .stage-empty .se-main { font-size: 14px; }
     .stage-empty .se-sub { font-size: 11px; }
   }
@@ -341,7 +470,7 @@
 <body>
 <div id="app">
   <div id="topbar">
-    <span class="title">核-小球生态演化模拟器 <span class="ver">v2.1.0</span></span>
+    <span class="title">核-小球生态演化模拟器 <span class="ver">v2.2.0</span></span>
     <span id="badge" class="menu">未运行</span>
     <div id="tabs" role="tablist" aria-label="页面切换">
       <button class="active" data-page="run" title="运行（1）">运行</button>
@@ -361,11 +490,17 @@
           <div class="field"><label for="q-seed">随机种子 seed</label>
             <input id="q-seed" type="number" value="42"></div>
           <div class="field"><label for="q-balls">初始小球 balls</label>
-            <input id="q-balls" type="number" value="1000" min="0"></div>
+            <input id="q-balls" type="number" value="300" min="0"></div>
           <div class="field"><label for="q-nuclei">初始核 nuclei</label>
-            <input id="q-nuclei" type="number" value="20" min="1"></div>
+            <input id="q-nuclei" type="number" value="12" min="1"></div>
           <div class="field"><label for="q-frames">总帧数 frames</label>
             <input id="q-frames" type="number" value="100000" min="1"></div>
+          <!-- v2.2.0 生态开关：默认勾选，localStorage 记忆；勾选时启动 body 追加
+               cyano_nodes=150 / cyano_colonies=4，并确保推荐的生态 mod 已启用 -->
+          <div class="field"><label class="chk"><input id="q-cyano" type="checkbox" checked>
+            启用蓝细菌（生产者）</label></div>
+          <div class="field"><label class="chk"><input id="q-recomods" type="checkbox" checked>
+            推荐生态 mod（失球宽限+共生+溢出）</label></div>
         </div>
         <button id="btn-start" class="primary" title="按快速设置 + 参数页配置启动模拟">启动模拟</button>
         <div class="hint">完整参数（物理/遗传/代谢等）在「参数」页调节。</div>
@@ -445,16 +580,70 @@
               <span>阳光 <b id="st-sun">0.00</b></span>
             </div>
           </div>
+          <!-- 渲染自检：默认收起；实体数>0 但绘制数为 0 时显示黄色警告（可见性回归的现场证据） -->
+          <details id="hud-debug" class="hgroup hdebug">
+            <summary title="展开查看本帧渲染自检（实体/绘制/剔除/连线抽稀）">渲染自检</summary>
+            <div class="hitems">
+              <span>帧 <b id="dbg-frame">0</b></span>
+              <span>实体 球/核/节点/连线 <b id="dbg-counts">0/0/0/0</b></span>
+              <span>绘制 球/核/节点/连线 <b id="dbg-drawn">0/0/0/0</b></span>
+              <span>剔除 <b id="dbg-culled">0</b></span>
+              <span>抽稀 <b id="dbg-thinning">否</b></span>
+            </div>
+            <div id="dbg-warn"></div>
+          </details>
         </div>
+        <!-- 底部快调条（v2.2.0）：影响力 + 四轴 ± + 事件/细调入口。
+             数值（影响力/轴名/档位名/事件费用/冷却）全部来自 GET /env，前端不写死。 -->
+        <div id="quickbar">
+          <div class="qb-influence">
+            <span class="qb-label">影响力</span>
+            <b id="qb-influence">--/--</b>
+          </div>
+          <div class="qb-bar" title="影响力余额（上限/恢复速度由后端决定）">
+            <div id="qb-influence-fill"></div>
+          </div>
+          <span class="csep" role="separator"></span>
+          <div id="qb-axes" role="group" aria-label="四轴快调"></div>
+          <span class="csep" role="separator"></span>
+          <div class="qbar-actions">
+            <button id="btn-events" disabled
+                    title="事件卡：花费影响力触发全局事件（运行/暂停时可用）">事件</button>
+            <button id="btn-fine" disabled
+                    title="细调抽屉：按轴微调参数（每项消耗影响力，运行/暂停时可用）">细调</button>
+          </div>
+          <span id="qb-hint" class="qbar-hint show">启动后可实时调控</span>
+        </div>
+        <div id="event-pop" role="dialog" aria-label="环境事件">
+          <div class="ep-head">
+            <span>环境事件</span>
+            <span id="event-sum" class="ep-sum">影响力 --</span>
+            <button id="event-close" title="关闭（Esc）">×</button>
+          </div>
+          <div id="event-list"></div>
+          <div class="ep-note">事件有费用与冷却；名称/描述/费用/冷却均来自后端 GET /env。</div>
+        </div>
+        <div id="fine-drawer" role="dialog" aria-label="环境细调">
+          <div class="fd-head">
+            <span class="fd-title">环境细调</span>
+            <b id="fine-influence">影响力 --</b>
+            <button id="fine-close" title="关闭（Esc）">×</button>
+          </div>
+          <div id="fine-cost" class="fd-note"></div>
+          <div id="fine-note" class="fd-note"></div>
+          <div id="fine-list"></div>
+        </div>
+        <div id="env-toast" role="status" aria-live="polite"></div>
         <details id="legend">
           <summary title="点击展开/收起图例（快捷键提示也在里面）">图例</summary>
           <div class="lgrid">
             <div class="lrow"><span class="swatch" style="background:#9e9e9e"></span>自由球(灰白,3px)</div>
             <div class="lrow"><span class="swatch" style="background:#7ec8f0"></span>有主球(色相=核,亮度=类型)</div>
-            <div class="lrow"><span class="swatch" style="background:#ffffff;border:1px solid #888"></span>核(能量环,谱系色)</div>
-            <div class="lrow"><span class="swatch" style="background:#5adcaa"></span>蓝细菌节点(大小=能量)</div>
-            <div class="lrow"><span class="swatch" style="background:#3c8c6e;width:14px;height:2px;border-radius:0"></span>菌丝连线</div>
+            <div class="lrow"><span class="swatch" style="background:#ffffff;border:1px solid #888"></span>核(能量环+暗 halo,谱系色)</div>
+            <div class="lrow"><span class="swatch" style="background:#5adcaa;box-shadow:0 0 0 1px rgba(0,0,0,.62)"></span>蓝细菌节点(1.6~6px,深色描边)</div>
+            <div class="lrow"><span class="swatch" style="background:rgba(60,140,110,.7);width:14px;height:2px;border-radius:0"></span>菌丝连线 rgba(60,140,110,0.7) · 1.5px</div>
             <div class="lrow lnote">护盾5/资源4/侦察3px</div>
+            <div class="lrow full lhint">环境：底部快调条 4 轴 ± · 事件卡 / 细调抽屉（运行/暂停时可用；影响力与冷却见 GET /env）</div>
             <div class="lrow full lhint">滚轮缩放（以指针为锚）· 拖拽平移 · 悬停查看核参数 · 双击画布重置视图</div>
             <!-- 快捷键拆成固定两行：避免展开时在末行出现单字孤行（D3） -->
             <div class="lrow full lhint">快捷键：<span class="kbd">空格</span> 暂停/继续 ·
@@ -470,6 +659,7 @@
           <div class="card">
             <h2 id="overlay-title">模拟已结束</h2>
             <p id="overlay-text"></p>
+            <div id="overlay-stats" class="ostats"></div>
             <div class="row">
               <button id="btn-menu" class="primary">返回菜单</button>
               <button id="btn-exit">退出程序</button>

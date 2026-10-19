@@ -37,20 +37,21 @@
 # 0) 确认环境（应看到 origin = https://github.com/zx1414/adaptive-orbit-ecosystem.git）
 git remote -v && git status --short
 
-# 1) 提交合作开发内容
-git add src mods web resourcepacks docs scripts CMakeLists.txt README.md .gitignore env_config.txt custom_nuclei.txt 启动器.bat
-git commit -m "v1.1.0: 启动器成为主体（参数页/Mod中心/我的存档/材质包）+ mod 基础架构与逐球可视化"
+# 1) 提交本次版本（v2.2.0 白名单，含 tests/ 基线）
+git add src mods web resourcepacks docs scripts tests CMakeLists.txt README.md CHANGELOG.md \
+        .gitignore env_config.txt env_config_balanced.txt custom_nuclei.txt mods.list.example 启动器.bat
+git commit -m "v2.2.0: 全元素可见 + 四轴快调/细调 + 影响力/事件卡 + 蓝细菌存档 v2"
 
 # 2) 打版本标签
-git tag -a v1.1.0 -m "v1.1.0: 启动器 + Mod + 存档 + 材质包，Windows 可直接游玩"
+git tag -a v2.2.0 -m "v2.2.0: 全元素可见 + 实时环境调控 + 存档 v2，Windows 可直接游玩"
 
 # 3) 推送（分支 + 标签）
 git push origin HEAD
-git push origin v1.1.0
+git push origin v2.2.0
 ```
 
 推送需要 GitHub 登录凭证；若提示认证失败，先执行 `git config --global credential.helper manager`
-并手动 push 一次以唤起浏览器登录，再重试。
+并手动 push 一次以唤起浏览器登录，再重试。历史版本命令见 §3–§6。
 
 ---
 
@@ -180,3 +181,32 @@ Compress-Archive -Path release\v1.1.0\* -DestinationPath release\自适应核生
 - 包内**新增 `packs.list`**（默认 `big_beads`），装好即是最新配色；可在 Mod 页切换/关闭。
 - 包内不放 `survivors.csv`（测试残留）与 `mods.list`（蓝细菌默认关闭，需要时复制
   `mods.list.example`）。
+
+---
+
+## 7. v2.2.0 发布记录（全元素可见 + 实时环境调控）
+
+发布日期：本轮。内容：**修复全元素显示 + 四轴快调/细调 + 影响力/事件卡 + 蓝细菌存档 v2**。
+打包产物：`_agent\自适应核生态模拟器-v2.2.0.zip`；打包脚本：`_agent\qa\package_v220.ps1`。
+
+### 7.1 显示修复
+
+- 蓝细菌连线默认 `rgba(...,0.7)` + 线宽 1.5；材质包新增 `cyano_link_alpha`（0.35~1）。
+- 节点半径夹 [1.6,6]、深色描边；`flat` 首帧显式填充色；球/核低亮度提亮与 halo。
+- 新增 `window.__simDebug` 渲染自检与 HUD 折叠行。
+- 存档 v2 保存蓝细菌节点/连接/nextNodeId/色相 RNG/环境状态；读档不再丢失元素。
+
+### 7.2 实时环境调控
+
+- 四轴五档快调 + 细调抽屉（11 个 ParamSchema 键）+ 影响力预算 + 4 张事件卡。
+- 新接口 `GET /env`、`POST /env`；运行/暂停 ≤1 帧生效，菜单写入下次启动配置。
+- `climate_event` 改为自动事件适配器，与事件卡共用 `World::applyEnvEvent`，不重复结算。
+- 详见 `docs/ENV_CONTROLS.md`。
+
+### 7.3 发布/打包注意
+
+- 包内仍不放个人 `env_config.txt`；默认演示由启动器“启用蓝细菌/推荐生态 mod”复选框保证。
+- 根 `env_config.txt` 已调整为演示平衡值（蓝细菌 150、球 300、核 12、食物补充 0.01）。
+- 版本号三处：`src/main.cpp`、`web/index.html`、本文档/README。
+- 回归：无改动时关/开蓝细菌 5000 帧 CSV 与 v2.1.0 基线逐字节一致；`--schema-check` 通过；
+  `tests/baseline/v2.1.0-baseline.txt` 保存基线哈希。

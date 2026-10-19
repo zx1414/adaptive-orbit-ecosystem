@@ -1,0 +1,16 @@
+# v2.2.0 确定性基线：关闭蓝细菌、无 mod（控制台输出基准）
+width = 2000.0
+height = 2000.0
+seed = 42
+balls = 200
+nuclei = 12
+frames = 5000
+visualization = off
+clear_screen = off
+render_interval = 0
+sample_interval = 5000
+max_fps = 0
+lock_console = off
+pause_on_exit = off
+cyano_nodes = 0
+max_nuclei = 0

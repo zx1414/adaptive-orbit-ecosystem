@@ -8,3 +8,10 @@ ball_worker = 120, 220, 130
 ball_scout = 255, 190, 90
 free_ball = 190, 190, 200
 nucleus = 255, 245, 220
+
+# ---- 蓝细菌（v2.2.0 可见性默认值）----
+# 本包不覆盖 cyano_node / cyano_link，蓝细菌走前端默认配色：
+#   节点 rgb(90,220,170) + 1px 深色描边，半径 1.6~6px；
+#   连线 rgba(60,140,110,0.7)，线宽 1.5。
+# cyano_link_alpha 为可选键（0.35~1）：连线不透明度，缺省 0.7。
+cyano_link_alpha = 0.7

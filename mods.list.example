@@ -1,0 +1,14 @@
+# 玩法包示例清单：复制本文件为 mods.list 后生效；顺序 = 优先级 = 事件派发顺序。
+# 推荐组合（实测提升存活与多样性）：失球宽限 + 核间共生 + 能量溢出
+# ball_loss_relief
+# symbiosis_bond
+# energy_spill
+#
+# 自动随机气候（与玩家事件卡共用核心实现；启用后每 800 帧自动触发一次）
+# climate_event
+#
+# 自动季节轮回
+# season_cycle
+#
+# 蓝细菌生产者（v2.2.0 起核心会内部驱动，mod 仅用于接管驱动；一般无需启用）
+# cyanobacteria

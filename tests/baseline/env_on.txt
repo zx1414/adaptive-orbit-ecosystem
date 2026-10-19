@@ -1,0 +1,26 @@
+# v2.2.0 确定性基线：开启蓝细菌、无 mod（固定 seed 的生态输出基准）
+width = 2000.0
+height = 2000.0
+seed = 42
+balls = 200
+nuclei = 12
+frames = 5000
+visualization = off
+clear_screen = off
+render_interval = 0
+sample_interval = 5000
+max_fps = 0
+lock_console = off
+pause_on_exit = off
+
+cyano_nodes = 180
+cyano_colonies = 4
+cyano_initial_energy = 10.0
+cyano_link_distance = 80.0
+cyano_max_links = 6
+cyano_link_check_interval = 4
+cyano_photosynthesis_rate = 0.02
+cyano_metabolism_rate = 0.005
+cyano_reproduction_probability = 0.001
+cyano_predation_radius = 30.0
+max_nuclei = 0

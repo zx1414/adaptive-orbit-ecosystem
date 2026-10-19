@@ -159,6 +159,11 @@ Cyanobacteria::Cyanobacteria(double worldWidth, double worldHeight, const CyanoP
       worldH_((std::isfinite(worldHeight) && worldHeight > 0.0) ? worldHeight : 1.0),
       params_(params) {
     // 网格单元边长取成链距离：邻居查询只需扫描 3×3 单元即可覆盖 linkDistance。
+    // 具体尺寸计算与空网格构建统一交给 reshapeGrid()，避免与 setParams/setWorldSize 漂移。
+    reshapeGrid();
+}
+
+void Cyanobacteria::reshapeGrid() {
     cellSize_ = (params_.linkDistance > 1.0) ? params_.linkDistance : 1.0;
     int c = static_cast<int>(std::ceil(worldW_ / cellSize_));
     if (c < 1) c = 1;
@@ -168,7 +173,7 @@ Cyanobacteria::Cyanobacteria(double worldWidth, double worldHeight, const CyanoP
     else if (r > kMaxGridDim) r = kMaxGridDim;
     cols_ = c;
     rows_ = r;
-    rebuildGrid();  // 空网格
+    rebuildGrid();
 }
 
 void Cyanobacteria::rebuildGrid() {
@@ -628,4 +633,140 @@ double Cyanobacteria::averageNodeEnergy() const {
         ++c;
     }
     return (c > 0) ? (sum / static_cast<double>(c)) : 0.0;
+}
+
+// ==================== v2.2.0：玩家在线调控 / 存档 v2 ====================
+
+void Cyanobacteria::setParams(const CyanoParams& p) {
+    // linkDistance 决定空间网格单元边长；只有它变了才需要重建网格。
+    const bool gridShapeChanged = (p.linkDistance != params_.linkDistance);
+    params_ = p;
+    if (gridShapeChanged) {
+        reshapeGrid();  // 零 RNG
+    }
+}
+
+void Cyanobacteria::setWorldSize(double w, double h) {
+    worldW_ = (std::isfinite(w) && w > 0.0) ? w : 1.0;
+    worldH_ = (std::isfinite(h) && h > 0.0) ? h : 1.0;
+    // 节点位置钳制回新世界范围（读档/运行中缩小世界时防止节点落在界外）。
+    for (size_t i = 0; i < nodes_.size(); ++i) {
+        CyanoNode& nd = nodes_[i];
+        if (nd.pos.x < 0.0) nd.pos.x = 0.0;
+        else if (nd.pos.x > worldW_) nd.pos.x = worldW_;
+        if (nd.pos.y < 0.0) nd.pos.y = 0.0;
+        else if (nd.pos.y > worldH_) nd.pos.y = worldH_;
+    }
+    reshapeGrid();  // 零 RNG
+}
+
+void Cyanobacteria::clear() {
+    nodes_.clear();
+    links_.clear();
+    nextNodeId_ = 1;
+    reshapeGrid();  // 空网格；零 RNG
+}
+
+int Cyanobacteria::addNodes(std::mt19937& rng, int count, int colonyCount, double initialEnergy) {
+    if (count <= 0) return 0;
+    const int colonies = (colonyCount > 0) ? colonyCount : 1;
+    const double e0 = (std::isfinite(initialEnergy) && initialEnergy > 0.0) ? initialEnergy : 0.0;
+
+    // 聚落中心：已有存活节点 → 以存活节点为中心（模拟"菌落扩张/爆发"）；
+    // 空群落 → 随机撒聚落中心（与 initialize 的语义一致）。
+    std::uniform_real_distribution<double> px(0.0, worldW_);
+    std::uniform_real_distribution<double> py(0.0, worldH_);
+    std::uniform_real_distribution<double> unit(0.0, 1.0);
+    std::uniform_real_distribution<double> angle(0.0, kTwoPi);
+
+    std::vector<uint32_t> aliveIdx;
+    for (size_t i = 0; i < nodes_.size(); ++i) {
+        if (nodes_[i].alive != 0) aliveIdx.push_back(static_cast<uint32_t>(i));
+    }
+    std::vector<Vec2> centers(static_cast<size_t>(colonies));
+    if (!aliveIdx.empty()) {
+        for (int i = 0; i < colonies; ++i) {
+            const size_t pick = static_cast<size_t>(i) % aliveIdx.size();
+            centers[static_cast<size_t>(i)] = nodes_[aliveIdx[pick]].pos;
+        }
+    } else {
+        for (int i = 0; i < colonies; ++i) {
+            centers[static_cast<size_t>(i)] = Vec2(px(rng), py(rng));
+        }
+    }
+
+    const double minSide = (worldW_ < worldH_) ? worldW_ : worldH_;
+    const double spread = minSide * 0.12;  // 与 initialize 相同的聚落半径
+
+    int added = 0;
+    for (int k = 0; k < count; ++k) {
+        const int colony = k % colonies;
+        const Vec2 c = centers[static_cast<size_t>(colony)];
+        const double a = angle(rng);
+        const double r = spread * std::sqrt(unit(rng));
+        Vec2 p(c.x + std::cos(a) * r, c.y + std::sin(a) * r);
+        if (p.x < 0.0) p.x = 0.0;
+        else if (p.x > worldW_) p.x = worldW_;
+        if (p.y < 0.0) p.y = 0.0;
+        else if (p.y > worldH_) p.y = worldH_;
+
+        CyanoNode nd;
+        nd.pos = p;
+        nd.energy = e0;
+        nd.id = nextNodeId_++;
+        nd.colonyId = static_cast<uint16_t>(colony % 65536);
+        nd.type = static_cast<uint8_t>(CyanoNodeType::Normal);
+        nd.alive = 1;
+        nd.linkCount = 0;
+        nd.age = 0;
+        nodes_.push_back(nd);
+        ++added;
+    }
+    // 不预建连接：由后续帧的连接维护自动成链（与 initialize 一致）。
+    rebuildGrid();  // 零 RNG
+    return added;
+}
+
+void Cyanobacteria::save(std::vector<CyanoNode>& outNodes, std::vector<CyanoLink>& outLinks,
+                         uint32_t& outNextNodeId) const {
+    outNodes = nodes_;
+    outLinks = links_;
+    outNextNodeId = nextNodeId_;
+}
+
+bool Cyanobacteria::load(const std::vector<CyanoNode>& inNodes, const std::vector<CyanoLink>& inLinks,
+                         uint32_t inNextNodeId) {
+    nodes_ = inNodes;
+    links_.clear();
+    links_.reserve(inLinks.size());
+    uint32_t maxId = 0;
+    for (size_t i = 0; i < nodes_.size(); ++i) {
+        CyanoNode& nd = nodes_[i];
+        if (nd.id > maxId) maxId = nd.id;
+        // 位置钳制回世界范围（存档可能来自不同尺寸的世界）。
+        if (nd.pos.x < 0.0) nd.pos.x = 0.0;
+        else if (nd.pos.x > worldW_) nd.pos.x = worldW_;
+        if (nd.pos.y < 0.0) nd.pos.y = 0.0;
+        else if (nd.pos.y > worldH_) nd.pos.y = worldH_;
+        nd.linkCount = 0;
+    }
+    const size_t n = nodes_.size();
+    for (size_t li = 0; li < inLinks.size(); ++li) {
+        CyanoLink l = inLinks[li];
+        if (l.a >= n || l.b >= n) continue;  // 越界端点：丢弃（存档损坏防御）
+        if (l.a == l.b) continue;            // 自环：丢弃
+        if (l.a > l.b) std::swap(l.a, l.b);  // 契约：a < b（nodes_ 下标）
+        links_.push_back(l);
+    }
+    // 恢复 linkCount 缓存（与 step() 第 6 段口径一致：只计两端存活）。
+    for (size_t li = 0; li < links_.size(); ++li) {
+        const CyanoLink& l = links_[li];
+        if (nodes_[l.a].linkCount < kMaxLinkCountCache) ++nodes_[l.a].linkCount;
+        if (nodes_[l.b].linkCount < kMaxLinkCountCache) ++nodes_[l.b].linkCount;
+    }
+    // nextNodeId 必须大于已用最大 id，否则后续繁殖会撞 id。
+    nextNodeId_ = (inNextNodeId > maxId) ? inNextNodeId : (maxId + 1);
+    if (nextNodeId_ == 0) nextNodeId_ = 1;
+    rebuildGrid();  // 零 RNG
+    return true;
 }

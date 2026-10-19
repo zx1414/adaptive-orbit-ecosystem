@@ -1,5 +1,6 @@
 #pragma once
 #include <istream>
+#include <map>
 #include <ostream>
 #include <string>
 #include <vector>
@@ -7,6 +8,7 @@
 #include "Ball.h"
 #include "Cyanobacteria.h"
 #include "EnergySystem.h"
+#include "EnvControl.h"
 #include "EventBus.h"
 #include "Nucleus.h"
 #include "SpatialGrid.h"
@@ -126,6 +128,16 @@ struct WorldConfig {
     ParamRanges ranges;
 };
 
+// 环境 mod 状态（v2.2.0）：供 EnvControl::toJson 的 "mods" 段渲染。
+// 启动器/_agent 的自动事件 mod 在注册/每帧更新时通过 setEnvModStatus 上报；
+// toJson 只读，不反过来依赖 mods_registry（避免 EnvControl.cpp 拉入 mod 层）。
+struct EnvModStatus {
+    bool climateAuto = false;  // climate_event 自动气候事件是否启用
+    int nextClimateIn = 0;     // 距下一次自动事件的帧数（0/负 = 未知或不适用）
+};
+void setEnvModStatus(const EnvModStatus& st);
+EnvModStatus envModStatus();
+
 // 世界：持有小球与核，并实现每帧的模拟规则。
 class World {
 public:
@@ -168,14 +180,38 @@ public:
     // 必须经由 World 执行——prevOwner_ 是与 balls_ 并行的私有数组，
     // mod 直接 push_back 会导致两数组错位。
     void addFreeBall(const Vec2& pos, const Vec2& vel, BallType type);
-    // 蓝细菌是否启用：等价于配置 initialCyanoNodes > 0（构造期已知，不依赖运行时状态，
-    // 以保证"关闭时与基线逐字节一致"的确定性红线不被破坏）。
+    // 蓝细菌是否启用：等价于配置 initialCyanoNodes > 0。
+    // 默认（无玩家命令）下该值在构造期固定，保证"关闭时与基线逐字节一致"的确定性红线；
+    // v2.2.0 起玩家 cyano=on/off 会在运行期改写它（activateCyano/deactivateCyano），
+    // 因此它不是编译期常量，但"没有玩家命令就不会变"这一不变量仍然成立。
     bool cyanoEnabled() const { return config_.initialCyanoNodes > 0; }
     // 外部驱动开关：mods/cyanobacteria.cpp 注册时置 true，此后由 mod 在 FRAME_START
     // 驱动群落，World::updateCyanobacteria() 主动让位，**避免双重驱动**。
     // 默认 false = World 内部驱动（与 mod 化之前的行为完全一致）。
     void setCyanoExternalDriver(bool v) { cyanoExternalDriver_ = v; }
     bool cyanoExternalDriver() const { return cyanoExternalDriver_; }
+
+    // ---- 玩家实时环境调控（v2.2.0，仅主线程调用）----
+    // 命令键：axis.<light|food|pressure|producer>、fine.<schema_key>、
+    //         event.<harvest|winter|plague|bloom>、preset.<id>、cyano=on|off
+    EnvApplyResult applyEnvCommand(const std::map<std::string, std::string>& cmds);
+    // 事件核心实现：玩家触发时校验影响力/冷却并扣费；mod 自动触发时 playerInitiated=false。
+    // 返回 false 时 err 给出中文原因（影响力不足/冷却中/无存活核等）。
+    bool applyEnvEvent(EnvEventKind kind, bool playerInitiated, std::string& err);
+    // 每帧推进影响力恢复与事件冷却（不消耗 RNG）。
+    void tickEnvironment();
+    const EnvState& envState() const { return envState_; }
+
+    // 蓝细菌在线开关/补充。激活会按主 rng 撒点（玩家行为，进存档状态）。
+    void activateCyano(int nodes);
+    void deactivateCyano();
+    void addCyanoNodes(int nodes);
+    // 注入自由小球（玩家事件/测试）；消耗主 rng。
+    void injectBalls(int n);
+
+    // 配置派生对象（sun_ / cyano_ 参数 / grid_）按当前 config_ 重建。
+    // 读档后必须调用；运行中修改阳光/蓝细菌参数后也由 applyEnvCommand 内部调用。
+    void syncDerivedFromConfig();
 
     bool finished() const { return finished_; }
     const char* finishReason() const { return finishReason_; }
@@ -213,6 +249,9 @@ private:
     void spawnFreeBall();
     double influenceRadius() const;
     void updateCyanobacteria();   // 蓝细菌每帧更新 + 产出自由小球入库
+    void syncSunFromConfig();
+    void syncCyanoParamsFromConfig();
+    void applyEnvEventEffect(EnvEventKind kind);  // 已通过校验/扣费后的纯效果
 
     WorldConfig config_;
     std::vector<Ball> balls_;
@@ -226,6 +265,7 @@ private:
     std::mt19937 hueRng_;
     EventBus events_;              // 事件总线（mod 订阅入口）
     EnergySystem energy_{events_}; // 能量唯一通道（依赖 events_，声明顺序不可换）
+    EnvState envState_;            // 玩家环境状态（影响力/冷却/干预计数/峰值）
     int frame_ = 0;
     int nextNucleusId_ = 0;
     double frameAbsorbEnergy_ = 0.0;  // 本帧吸收总能量（BALL_ABSORBED 聚合事件）

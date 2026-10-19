@@ -175,7 +175,12 @@ mode 3 (混合):        rate = baseRate * (1 - [wSpeed*(maxSpeed/speedRef)^exp +
 
 ## 存档兼容性
 
-### 版本 v1（当前）
+### 版本 v2（v2.2.0 起）
+- 存档格式 `NSMS` version=2：在原有配置/RNG/球/核之后追加色相 RNG、蓝细菌节点/连接/nextNodeId、EnvState（影响力/冷却/干预计数/峰值）。
+- 读档后蓝细菌节点/连线/能量、影响力、冷却全部恢复；世界尺寸/网格/阳光/蓝细菌参数按存档配置重建。
+- v1 旧存档仍可读取；旧档没有蓝细菌段，载入后蓝细菌按关闭处理（不伪造节点、不消耗 RNG），玩家可用 `cyano=on` 重新激活。
+
+### 版本 v1（旧）
 - 配置段：`ParamSchema` 自动包含所有新键
 - 核数据段：在 22 个原有遗传参数后**追加** 3 个蓝细菌字段
   - `cyanoPreference`, `cyanoDigestion`, `maxAccel`

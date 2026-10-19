@@ -9,6 +9,8 @@
 ```
 git clone --depth 1 https://github.com/zx1414/adaptive-orbit-ecosystem.git
 ```
+**v2.2.0** 起，双击进入启动器即可看到完整生态（球/核/蓝细菌节点与连线），并可在运行中通过「快调四轴 + 细调滑杆 + 影响力 + 事件卡」实时干预环境；详见 [docs/ENV_CONTROLS.md](docs/ENV_CONTROLS.md)。
+
 ---
 
 ## 目录
@@ -64,14 +66,15 @@ cmake --build build
 
 双击 exe 自动打开浏览器（`http://127.0.0.1:<端口>/`，端口占用自动 +1），包含四部分：
 
-- **运行页**：快速设置（seed/balls/nuclei/frames）→ 启动模拟；逐球实时渲染（轨迹拖尾、缩放平移、暂停/单步/停止/速度、悬停查看核参数）；运行中可点「保存」把当前世界存为存档；结束后可返回菜单或退出。
+- **运行页**：快速设置（seed/balls/nuclei/frames，默认含蓝细菌与推荐 mod 开关）→ 启动模拟；逐球实时渲染（轨迹拖尾、缩放平移、暂停/单步/停止/速度、悬停查看核参数）；运行中可点「保存」把当前世界存为存档；结束后可返回菜单或退出。
+- **环境调控（v2.2.0）**：底部快调条显示影响力与四轴（光照/食物/压力/生产者）档位，每次换档消耗 1 影响力；「细调」抽屉可精确改 11 个环境参数，一批消耗 3；事件卡可立即触发丰收/寒冬/瘟疫/蓝细菌爆发（费用+冷却）。玩家干预消耗影响力，暂停时不回复；详见 [docs/ENV_CONTROLS.md](docs/ENV_CONTROLS.md)。
 - **参数页**：约 80 个参数按 5 类分组编辑（含范围校验与恢复默认）；「保存为默认」写入 `env_config.txt`，命令行模式同样生效。
 - **Mod 页**：两个标签——「玩法包」：勾选启用、↑↓ 调整优先级（列表中越靠前越先执行）、自动冲突提示（影响相同机制的 mod 给出黄条警告）；「材质包」：勾选启用、↑↓ 调整堆叠顺序（后者覆盖前者），调色板即时生效。配置分别写入 `mods.list` / `packs.list`，下次启动模拟生效。
 - **存档页**：存档列表（缩略图/时间/帧号/种子/存活核），载入/重命名/删除；载入后停在暂停态，继续运行与不中断直跑**逐帧一致**（rng 状态完整往返）。存档文件在 exe 旁的 `saves/<存档名>/`（save.bin + meta.txt + thumb.png）。
 - 材质包制作：在 exe 旁的 `resourcepacks/<包名>/` 放 `pack.txt`（name/desc/version/author）与 `colors.txt`（`mode = type_color` + `background/ball_shield/ball_worker/ball_scout/free_ball/nucleus = r,g,b`）；内置示例 `resourcepacks/classic_flat/`。
 - 前端文件在 exe 旁的 `web/` 目录，开发期直接改文件刷新浏览器即可，无需重编译。
 
-后端接口：`GET /status`（菜单/运行/暂停/结束）、`GET /state`（逐球二进制快照）、`GET /schema`（参数表）、`GET /mods`（mod 清单 + 冲突警告）、`GET /saves`（存档列表）、`GET /packs`（材质包清单）、`POST /run`、`POST /save-config`、`POST /set-mods`、`POST /set-packs`、`POST /save`、`POST /load`、`POST /delete-save`、`POST /rename-save`、`POST /save-thumb`、`POST /control`。
+后端接口：`GET /status`（菜单/运行/暂停/结束）、`GET /state`（逐球二进制快照）、`GET /env`（实时环境状态）、`GET /schema`（参数表）、`GET /mods`（mod 清单 + 冲突警告 + requires 徽章）、`GET /saves`（存档列表）、`GET /packs`（材质包清单）、`POST /run`、`POST /env`（快调/细调/事件/预设/蓝细菌开关）、`POST /save-config`、`POST /set-mods`、`POST /set-packs`、`POST /save`、`POST /load`、`POST /delete-save`、`POST /rename-save`、`POST /save-thumb`、`POST /control`。
 
 ---
 
@@ -393,6 +396,7 @@ src/
   SpatialGrid.h/.cpp    空间哈希网格
   EventBus.h            类型化事件总线（mod 订阅入口）
   EnergySystem.h/.cpp   能量唯一通道（按原因统计 + 统一死亡判定）
+  EnvControl.h/.cpp     玩家环境调控单一事实来源（四轴五档/细调/事件/预设/JSON）
   mod_api.h             ModAPI 接口定义
   mods_registry.h/.cpp  mod 注册表（启用/添加 mod 的唯一地方）
   IRenderer.h           渲染器抽象接口
@@ -404,6 +408,9 @@ src/
 mods/                   mod 实现（example_periodic_drain.cpp 示例）
 docs/PLAN.md            分阶段实施计划（Phase 0 / 0.5）
 docs/PLAN_LAUNCHER.md   启动器 + 可视化 Mod 方案（v2）
+docs/ENV_CONTROLS.md    实时环境调控规则（v2.2.0）
+tests/                  确定性基线、可见性与环境/存档回归测试
+CHANGELOG.md            版本变更记录
 scripts/                批量聚类与回归测试脚本
 env_config.txt          环境配置示例（全部参数 + 注释）
 custom_nuclei.txt       自定义核注入示例
