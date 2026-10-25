@@ -97,7 +97,7 @@ function applySizeKeys(p) {
 //   1) colors.txt 经 parseColors() 解析 → snake_case（ball_shield / free_ball / cyano_node …）；
 //   2) 早期由后端 JSON 下发的调色板 → camelCase（ballShield / freeBall / cyanoNode …）。
 // 旧代码只读 camelCase，而材质包只产出 snake_case → typeModeColors 恒为 0，
-// 0 是「全透明」，stampBalls() 写进像素缓冲后球就整屏隐身（详见 _agent/qa/ROOT_CAUSE.md）。
+// 0 是「全透明」，stampBalls() 写进像素缓冲后球就整屏隐身（根因见提交历史）。
 // 返回合法的 [r,g,b]（0..255 整数）；键缺失或值非法一律返回 null，由调用方决定兜底。
 const clampByte = (v) => {
   const n = Math.round(v);

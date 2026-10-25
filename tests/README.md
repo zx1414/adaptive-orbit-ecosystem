@@ -14,7 +14,7 @@ v2.3.1 回归与红队验收入口。
 复跑（在临时目录，避免污染仓库）：
 
 ```powershell
-$exe = '..\_agent\integration\build\simulator.exe'
+$exe = '..\simulator.exe'
 & $exe --console --no-render --env env_off.txt --seed 42 --balls 200 --nuclei 12 `
        --frames 5000 --sample-interval 5000 --max-fps 0
 # 对 balls_005000.csv / nuclei_005000.csv / survivors.csv 做 SHA256 对比
@@ -27,9 +27,7 @@ $exe = '..\_agent\integration\build\simulator.exe'
 - `tests/qa/lib_sim.ps1`：启动器 HTTP/快照/存档辅助函数。
 - `tests/qa/_smoke.ps1`：环境接口、快照、存档冒烟。
 - `tests/qa/red_visual/`：Node + CDP/PNG 可见性与布局检查（需 Edge）。
-- `_agent/qa/v230_ui_smoke.js`：v2.3.x UI（竖排状态栏/时间轴/分支/细调展开/保存并开始）。
-- `_agent/qa/v230_api_smoke.js`：v2.3.x API（0 球、子代距离 125、暂停帧定位、分支后可保存）。
-- 生成物放 `tests/artifacts/` / `_agent/v230_shot/`（不入库）。
+- 生成物放 `tests/artifacts/`（已 gitignore，不入库）。
 
 ## 启动器接口速查
 

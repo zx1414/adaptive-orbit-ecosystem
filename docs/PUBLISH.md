@@ -253,8 +253,8 @@ Compress-Archive -Path release\v1.1.0\* -DestinationPath release\自适应核生
 
 ## 10. v2.3.1 发布记录（变异系数可调 + 默认觅食半径 800 + 当前默认参数打包）
 
-发布日期：本轮。打包产物：`_agent\自适应核生态模拟器-v2.3.1.zip`；
-打包脚本：`_agent\qa\package_v231.ps1`。
+发布日期：本轮。发布产物：[v2.3.1 Release](https://github.com/zx1414/adaptive-orbit-ecosystem/releases/tag/v2.3.1)；
+本地副本：`release\自适应核生态模拟器-v2.3.1.zip`（一次性打包脚本已清理）。
 
 - 新增全局 `mutation_coefficient`（默认 1.0），参数页可调，并加入「压力」细调高级参数。
 - `forage_radius` 默认 300 → 800。
