@@ -32,11 +32,14 @@ EnvAxisLevel makeLevel(const char* label, std::map<std::string, double> values) 
     return l;
 }
 
-EnvFineKnob makeKnob(const char* key, const char* label, const char* unit) {
+EnvFineKnob makeKnob(const char* key, const char* label, const char* unit,
+                     const char* desc = "", bool advanced = false) {
     EnvFineKnob k;
     k.key = key;
     k.label = label;
     k.unit = unit;
+    k.desc = desc;
+    k.advanced = advanced;
     return k;
 }
 
@@ -55,9 +58,11 @@ std::vector<EnvAxisDef> buildAxes() {
                     makeLevel("标准", {{"sun_base_level", 1.0}, {"sun_day_amplitude", 0.7}}),
                     makeLevel("晴朗", {{"sun_base_level", 1.5}, {"sun_day_amplitude", 0.8}}),
                     makeLevel("灼热", {{"sun_base_level", 2.2}, {"sun_day_amplitude", 0.9}})};
-        a.fine = {makeKnob("sun_base_level", "基准强度", ""),
-                  makeKnob("sun_day_amplitude", "昼夜振幅", ""),
-                  makeKnob("sun_day_period_frames", "昼夜周期", "帧")};
+        a.fine = {makeKnob("sun_base_level", "基准强度", "", "整体光照强弱"),
+                  makeKnob("sun_day_amplitude", "昼夜振幅", "", "白天/黑夜差异"),
+                  makeKnob("sun_day_period_frames", "昼夜周期", "帧", "越小昼夜切换越快", true),
+                  makeKnob("sun_vertical_gradient", "垂直梯度", "", "上下光照差异", true),
+                  makeKnob("sun_noise_amplitude", "局部扰动", "", "光斑强弱", true)};
         v.push_back(std::move(a));
     }
 
@@ -73,8 +78,9 @@ std::vector<EnvAxisDef> buildAxes() {
                     makeLevel("标准", {{"ball_spawn_probability", 0.01}, {"base_ball_energy", 1.0}}),
                     makeLevel("丰饶", {{"ball_spawn_probability", 0.05}, {"base_ball_energy", 1.3}}),
                     makeLevel("泛滥", {{"ball_spawn_probability", 0.2}, {"base_ball_energy", 1.6}})};
-        a.fine = {makeKnob("ball_spawn_probability", "补充概率", ""),
-                  makeKnob("base_ball_energy", "单球能量", "")};
+        a.fine = {makeKnob("ball_spawn_probability", "补充概率", "", "每帧生成自由球的概率"),
+                  makeKnob("base_ball_energy", "单球能量", "", "吃掉一个球获得的能量"),
+                  makeKnob("ball_vel_range", "初速度", "", "新球速度随机范围", true)};
         v.push_back(std::move(a));
     }
 
@@ -90,8 +96,10 @@ std::vector<EnvAxisDef> buildAxes() {
                     makeLevel("标准", {{"basal_cost", 0.01}}),
                     makeLevel("严酷", {{"basal_cost", 0.02}}),
                     makeLevel("炼狱", {{"basal_cost", 0.04}})};
-        a.fine = {makeKnob("basal_cost", "基础代谢", ""),
-                  makeKnob("speed_cost_k", "速度代价", "")};
+        a.fine = {makeKnob("basal_cost", "基础代谢", "", "每帧固定能量消耗"),
+                  makeKnob("speed_cost_k", "速度代价", "", "跑得快的额外消耗"),
+                  makeKnob("speed_cost_exponent", "速度代价指数", "", "越大高速惩罚越狠", true),
+                  makeKnob("reproduction_cost_ratio", "繁殖成本", "", "父核繁殖时扣除比例", true)};
         v.push_back(std::move(a));
     }
 
@@ -107,10 +115,14 @@ std::vector<EnvAxisDef> buildAxes() {
                     makeLevel("标准", {{"cyano_photosynthesis_rate", 0.02}}),
                     makeLevel("繁盛", {{"cyano_photosynthesis_rate", 0.04}}),
                     makeLevel("爆发", {{"cyano_photosynthesis_rate", 0.08}})};
-        a.fine = {makeKnob("cyano_photosynthesis_rate", "光合速率", ""),
-                  makeKnob("cyano_metabolism_rate", "代谢消耗", ""),
-                  makeKnob("cyano_predation_radius", "捕食半径", ""),
-                  makeKnob("cyano_transfer_rate", "传输速率", "")};
+        a.fine = {makeKnob("cyano_photosynthesis_rate", "光合速率", "", "节点积攒能量的速度"),
+                  makeKnob("cyano_metabolism_rate", "代谢消耗", "", "节点每帧消耗能量"),
+                  makeKnob("cyano_reproduction_probability", "繁殖概率", "", "节点分裂出新节点概率", true),
+                  makeKnob("cyano_reproduction_offset", "子代距离", "", "子节点离亲节点多远（默认 125）", true),
+                  makeKnob("cyano_ball_spawn_probability", "产球概率", "", "节点生成自由球概率", true),
+                  makeKnob("cyano_transfer_rate", "传输速率", "", "富节点补贴穷节点速度", true),
+                  makeKnob("cyano_predation_radius", "捕食半径", "", "核吞节点的判定半径", true),
+                  makeKnob("cyano_min_node_separation", "最小间距", "", "过近则取消繁殖", true)};
         v.push_back(std::move(a));
     }
 
@@ -427,7 +439,11 @@ std::string EnvControl::toJson(const EnvState& st, const WorldConfig& cfg,
             out += k.label;
             out += "\",\"unit\":\"";
             out += k.unit;
-            out += "\",\"min\":";
+            out += "\",\"desc\":\"";
+            out += jsonEscape(k.desc);
+            out += "\",\"advanced\":";
+            out += k.advanced ? "true" : "false";
+            out += ",\"min\":";
             out += jsonNum(d ? d->min : 0.0);
             out += ",\"max\":";
             out += jsonNum(d ? d->max : 0.0);

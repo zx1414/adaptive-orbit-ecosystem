@@ -149,10 +149,22 @@
   #st-zoom { min-width: 46px; text-align: center; color: var(--text2); font-weight: 600;
              font-size: 12px; font-variant-numeric: tabular-nums; user-select: none; }
 
-  /* HUD：2×2 等宽卡片；每行「标签 …… 数值」右对齐，数字等宽防跳动 */
+  /* 右侧竖排状态栏（v2.3.0）：从右上角 HUD 改为固定右栏，可折叠。
+     折叠后只保留贴边竖排「状态」按钮；键盘 H 亦可切换。 */
   #hud { position: absolute; right: 12px; top: 12px; z-index: 6; font-size: 12px;
-         display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px;
-         width: min(400px, calc(100% - 24px)); pointer-events: none; user-select: none; }
+         display: flex; flex-direction: column; gap: 8px; width: 232px;
+         max-height: calc(100% - 120px); overflow-y: auto; overflow-x: hidden;
+         pointer-events: auto; user-select: none; padding-bottom: 2px;
+         scrollbar-width: thin; scrollbar-color: var(--line2) transparent; }
+  #hud::-webkit-scrollbar { width: 6px; }
+  #hud::-webkit-scrollbar-thumb { background: var(--line2); border-radius: 3px; }
+  #hud .hud-head { position: sticky; top: 0; z-index: 2; display: flex; align-items: center;
+                   gap: 8px; padding: 5px 8px; border-radius: 9px;
+                   background: rgba(20, 26, 34, .94); border: 1px solid var(--line2);
+                   box-shadow: 0 4px 14px rgba(0,0,0,.25); backdrop-filter: blur(8px); }
+  #hud .hud-title { font-size: 11px; letter-spacing: 2px; color: var(--muted);
+                    text-transform: uppercase; }
+  #hud .hud-head button { margin-left: auto; padding: 2px 8px; font-size: 12px; line-height: 1.3; }
   #hud .hgroup { min-width: 0; padding: 7px 10px 8px; border-radius: 10px;
                  background: rgba(20, 26, 34, .84); border: 1px solid var(--line2);
                  backdrop-filter: blur(8px); box-shadow: 0 4px 14px rgba(0, 0, 0, .25); }
@@ -166,6 +178,14 @@
                       white-space: nowrap; overflow: hidden; }
   #hud b { color: var(--text2); font-weight: 600; font-variant-numeric: tabular-nums;
            letter-spacing: .2px; }
+  /* 折叠后的贴边竖条：不占画面宽度，点击展开 */
+  #hud-tab { position: absolute; right: 0; top: 92px; z-index: 6; display: none;
+             padding: 10px 5px; border-radius: 9px 0 0 9px; border-right: 0;
+             writing-mode: vertical-rl; letter-spacing: 3px; font-size: 11px;
+             background: rgba(20, 26, 34, .90); box-shadow: var(--shadow);
+             backdrop-filter: blur(8px); }
+  body.hud-collapsed #hud { display: none; }
+  body.hud-collapsed #hud-tab { display: block; }
 
   /* 图例：默认收起（不挡画面），summary 上的「?」提示可展开；展开时浮在画布之上。
      v2.2.0：底边留给 #quickbar（快调条），图例与暂停角标整体上移，互不遮挡。 */
@@ -265,6 +285,30 @@
                margin-left: auto; padding-left: 8px; }
   .qbar-hint.show { display: inline-block; }
 
+  /* 存档时间轴（v2.3.0）：底部快调条之上；打开时图例/暂停角标上移。 */
+  #timeline-panel { position: absolute; left: 12px; right: 12px; bottom: 62px; z-index: 7;
+                    display: none; flex-direction: column; gap: 7px; padding: 8px 12px 10px;
+                    background: rgba(20, 26, 34, .96); border: 1px solid var(--line2);
+                    border-radius: 10px; box-shadow: var(--shadow); backdrop-filter: blur(8px);
+                    font-size: 12px; }
+  #timeline-panel.show { display: flex; }
+  #timeline-panel .tl-head { display: flex; align-items: center; gap: 10px; }
+  #timeline-panel .tl-title { font-weight: 600; color: var(--text2); letter-spacing: 1px; }
+  #timeline-panel .tl-source { color: var(--muted); max-width: 40%; overflow: hidden;
+                               text-overflow: ellipsis; white-space: nowrap; }
+  #timeline-panel .tl-current { margin-left: auto; color: var(--accent2); font-weight: 600;
+                                font-variant-numeric: tabular-nums; }
+  #timeline-panel #btn-timeline-close { padding: 1px 8px; font-size: 12px; }
+  #timeline-panel .tl-track { display: flex; align-items: center; gap: 8px; }
+  #timeline-panel #tl-range { flex: 1; min-width: 120px; accent-color: var(--accent); }
+  #timeline-panel #tl-frame { width: 96px; padding: 4px 6px; font-size: 12px; }
+  #timeline-panel .tl-track button { padding: 5px 10px; font-size: 12px; }
+  #timeline-panel .tl-hint { color: var(--muted); font-size: 11px; line-height: 1.5; }
+  body.timeline-open #legend { bottom: 168px; }
+  body.timeline-open #paused-badge { bottom: 168px; }
+  body.timeline-open #event-pop { bottom: 168px; }
+  body.timeline-open #env-toast { bottom: 168px; }
+
   /* 事件卡弹出层：右下、快调条之上；高度上限避免压到 HUD/控制条 */
   #event-pop { position: absolute; right: 12px; bottom: 62px; z-index: 8;
                width: min(340px, calc(100% - 24px));
@@ -302,11 +346,12 @@
                  border-radius: 12px; padding: 10px 12px; box-shadow: var(--shadow);
                  backdrop-filter: blur(8px); }
   #fine-drawer.show { display: block; }
+  #fine-drawer.fine-expanded { width: min(520px, 60%); }
   #fine-drawer .fd-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
   #fine-drawer .fd-title { font-weight: 600; color: var(--text2); font-size: 13px; }
   #fine-influence { margin-left: auto; color: var(--accent2); font-weight: 700;
                     font-variant-numeric: tabular-nums; font-size: 12px; }
-  #fine-drawer #fine-close { padding: 2px 8px; font-size: 12px; }
+  #fine-drawer #fine-expand, #fine-drawer #fine-close { padding: 2px 8px; font-size: 12px; }
   #fine-drawer .fd-note { font-size: 11px; color: #6e7681; line-height: 1.5; margin-bottom: 4px; }
   .fine-group { border-top: 1px dashed var(--line); padding: 7px 0 5px; }
   .fine-group:first-child { border-top: 0; }
@@ -316,12 +361,16 @@
   .fine-row { display: grid; grid-template-columns: 92px 1fr 70px; gap: 6px;
               align-items: center; margin-bottom: 2px; }
   .fine-label { font-size: 11px; color: var(--muted); line-height: 1.4; }
+  .fine-desc { grid-column: 1 / -1; font-size: 10px; color: #6e7681; margin: -1px 0 3px; }
   .fine-range { width: 100%; accent-color: var(--accent); }
   .fine-num { width: 100%; padding: 3px 5px; font-size: 12px; }
   .fine-cur { grid-column: 1 / -1; font-size: 10px; color: #6e7681; margin: 0 0 2px; }
   .fine-row.dirty .fine-num { border-color: var(--warn); }
   .fine-apply { margin-top: 4px; width: 100%; padding: 4px 8px; font-size: 12px; }
   .fine-est { display: block; margin-top: 2px; font-size: 10px; color: #6e7681; line-height: 1.5; }
+  .fine-advanced-tip { color: #6e7681; font-size: 10px; margin-top: 3px; }
+  .fine-advanced-sep { margin: 6px 0 3px; border-top: 1px dashed var(--line); padding-top: 5px;
+                       color: var(--muted); font-size: 10px; letter-spacing: 1px; }
 
   /* 环境操作 toast：底部居中、快调条之上；成功/失败不同色 */
   #env-toast { position: absolute; left: 50%; bottom: 74px; transform: translate(-50%, 6px);
@@ -352,6 +401,17 @@
     background: var(--bg); padding: 8px 0; border-bottom: 1px solid var(--line); }
   .pgroup { background: var(--panel); border: 1px solid var(--line2); border-radius: 10px;
             overflow: hidden; }
+  /* 世界线分支提示条：只在参数页显示，明确“保留当前世界状态”。 */
+  #branch-banner { display: none; align-items: center; gap: 12px; flex-wrap: wrap;
+                   background: rgba(31, 111, 235, .10); border: 1px solid rgba(31, 111, 235, .45);
+                   border-radius: 10px; padding: 10px 14px; }
+  #branch-banner.show { display: flex; }
+  #branch-banner .bb-info { flex: 1; min-width: 240px; display: flex; flex-direction: column; gap: 2px; }
+  #branch-banner b { color: var(--accent2); }
+  #branch-banner .bb-note { font-size: 11px; color: var(--muted); line-height: 1.5; }
+  #branch-banner .bb-frames { font-size: 12px; color: var(--muted); display: flex;
+                              align-items: center; gap: 6px; }
+  #branch-banner .bb-frames input { width: 130px; }
   .pgroup > .phead { padding: 10px 16px; font-weight: 600; color: var(--text2); cursor: pointer;
                      background: #1a222c; user-select: none; transition: background .13s; }
   .pgroup > .phead:hover { background: #202a36; }
@@ -429,13 +489,13 @@
     #controlbar button { padding: 5px 9px; font-size: 12px; }
     #controlbar button.icon { padding: 5px 7px; }
     #speed { padding: 4px 24px 4px 8px; font-size: 12px; }
-    #hud { width: min(336px, 44%); font-size: 11px; gap: 6px; }
+    #hud { width: 208px; max-height: calc(100% - 112px); font-size: 11px; gap: 6px; }
     #hud .hgroup { padding: 6px 8px 7px; }
     #legend { max-width: calc(100% - 24px); }
     #quickbar { gap: 6px; padding: 5px 8px; font-size: 11px; }
     #quickbar .qb-bar { width: 52px; }
     .qba-btn { padding: 1px 5px; }
-    #event-pop, #fine-drawer { width: min(320px, 48%); }
+    #event-pop, #fine-drawer { width: min(320px, 42%); }
   }
   @media (max-height: 760px) {
     #hud { font-size: 11px; }
@@ -460,8 +520,8 @@
     .csep { margin: 0 1px; height: 18px; }
     #speed { padding: 3px 22px 3px 7px; font-size: 11px; }
     #st-zoom { min-width: 40px; font-size: 11px; }
-    /* HUD 单列竖排，字号再小一档；只占右侧一条，不压画面中心 */
-    #hud { grid-template-columns: 1fr; width: min(200px, 46%); gap: 4px; font-size: 10px; }
+    /* 右侧竖排状态栏在窄窗口再收窄一档，依然可折叠 */
+    #hud { width: 188px; max-height: calc(100% - 104px); gap: 4px; font-size: 10px; }
     #hud .hgroup { padding: 5px 7px 6px; }
     #hud .hlabel { font-size: 9px; letter-spacing: 1.2px; margin-bottom: 2px; }
     #hud .hitems span { line-height: 1.4; }
@@ -471,8 +531,14 @@
     #quickbar { left: 8px; right: 8px; bottom: 8px; gap: 5px; padding: 4px 7px; font-size: 11px; }
     #legend { bottom: 56px; }
     #paused-badge { bottom: 56px; }
+    #timeline-panel { left: 8px; right: 8px; bottom: 56px; padding: 7px 9px 8px; }
+    body.timeline-open #legend { bottom: 164px; }
+    body.timeline-open #paused-badge { bottom: 164px; }
+    body.timeline-open #event-pop { bottom: 164px; }
+    body.timeline-open #env-toast { bottom: 164px; }
     #event-pop { bottom: 56px; max-height: min(52vh, calc(100% - 200px)); }
     #fine-drawer { right: 8px; width: min(300px, 62%); }
+    #fine-drawer.fine-expanded { width: min(460px, 74%); }
     #env-toast { bottom: 64px; }
     .stage-empty .se-main { font-size: 14px; }
     .stage-empty .se-sub { font-size: 11px; }
@@ -482,7 +548,7 @@
 <body>
 <div id="app">
   <div id="topbar">
-    <span class="title">核-小球生态演化模拟器 <span class="ver">v2.2.1</span></span>
+    <span class="title">核-小球生态演化模拟器 <span class="ver">v2.3.0</span></span>
     <span id="badge" class="menu">未运行</span>
     <div id="tabs" role="tablist" aria-label="页面切换">
       <button class="active" data-page="run" title="运行（1）">运行</button>
@@ -513,6 +579,11 @@
             启用蓝细菌（生产者）</label></div>
           <div class="field"><label class="chk"><input id="q-recomods" type="checkbox" checked>
             推荐生态 mod（失球宽限+共生+溢出）</label></div>
+          <!-- v2.3.0：开局前决定是否把第 0 帧存为存档；名称留空时后端按种子自动命名 -->
+          <div class="field"><label class="chk"><input id="q-autosave" type="checkbox">
+            开局自动保存存档</label></div>
+          <div class="field"><label for="q-save-name">开局存档名（可留空）</label>
+            <input id="q-save-name" type="text" placeholder="留空 = 自动命名" maxlength="60"></div>
         </div>
         <button id="btn-start" class="primary" title="按快速设置 + 参数页配置启动模拟">启动模拟</button>
         <div class="hint">完整参数（物理/遗传/代谢等）在「参数」页调节。</div>
@@ -542,6 +613,7 @@
           <span class="csep" role="separator"></span>
           <div class="cgroup" role="group" aria-label="数据">
             <button id="btn-save" disabled title="保存当前状态到「存档」页（S）">保存</button>
+            <button id="btn-timeline" disabled title="打开存档时间轴：暂停后拖动查看任意已记录帧">时间轴</button>
             <select id="speed" disabled title="限速（启动时按 env_config.txt 的 max_fps 生效）">
               <option value="0">不限速</option>
               <option value="60">60 FPS</option>
@@ -559,7 +631,13 @@
             <button id="btn-sidebar" title="折叠侧栏（画布变宽）">侧栏</button>
           </div>
         </div>
+        <!-- 右侧竖排状态栏（v2.3.0）：可折叠；折叠后只留贴边竖条「状态」按钮。
+             折叠按钮在栏头，键盘 H 也可切换。 -->
         <div id="hud">
+          <div class="hud-head">
+            <span class="hud-title">状态</span>
+            <button id="btn-hud-collapse" class="icon" title="折叠右侧状态栏（H）">⟩</button>
+          </div>
           <div class="hgroup">
             <div class="hlabel">模拟</div>
             <div class="hitems">
@@ -605,6 +683,7 @@
             <div id="dbg-warn"></div>
           </details>
         </div>
+        <button id="hud-tab" title="展开右侧状态栏（H）">状态</button>
         <!-- 底部快调条（v2.2.0）：影响力 + 四轴 ± + 事件/细调入口。
              数值（影响力/轴名/档位名/事件费用）全部来自 GET /env，前端不写死。 -->
         <div id="quickbar">
@@ -635,10 +714,28 @@
           <div id="event-list"></div>
           <div class="ep-note">事件只消耗影响力、没有冷却；名称/描述/费用均来自后端 GET /env。</div>
         </div>
+        <!-- 存档时间轴（v2.3.0）：拖动定位任意检查点之间的帧；从当前帧可分支新世界线。 -->
+        <div id="timeline-panel" role="dialog" aria-label="存档时间轴">
+          <div class="tl-head">
+            <span class="tl-title">时间轴</span>
+            <span id="tl-source" class="tl-source">存档</span>
+            <span id="tl-current" class="tl-current">帧 0</span>
+            <button id="btn-timeline-close" title="关闭时间轴（Esc）">×</button>
+          </div>
+          <div class="tl-track">
+            <input id="tl-range" type="range" min="0" max="0" step="1" value="0"
+                   aria-label="拖动查看历史帧">
+            <input id="tl-frame" type="number" min="0" step="1" value="0" aria-label="目标帧">
+            <button id="btn-tl-view" class="primary">查看</button>
+            <button id="btn-tl-branch" title="保留当前帧世界状态，调参后从这里开新局">变动世界线</button>
+          </div>
+          <div id="tl-hint" class="tl-hint">拖动进度条或输入帧号，定位后画面会停在该帧。</div>
+        </div>
         <div id="fine-drawer" role="dialog" aria-label="环境细调">
           <div class="fd-head">
             <span class="fd-title">环境细调</span>
             <b id="fine-influence">影响力 --</b>
+            <button id="fine-expand" title="展开更多高级参数">展开更多</button>
             <button id="fine-close" title="关闭（Esc）">×</button>
           </div>
           <div id="fine-cost" class="fd-note"></div>
@@ -672,8 +769,21 @@
     <div id="page-params" class="page">
       <div id="params-toolbar">
         <button id="btn-save-config" class="primary">保存为默认</button>
+        <button id="btn-save-start" class="primary" title="先把当前参数写入 env_config.txt，再按这些参数立即开局">保存并开始</button>
         <button id="btn-restore-defaults">恢复全部默认</button>
         <span class="hint">「保存为默认」写入 env_config.txt，之后启动模拟与命令行模式都会使用。</span>
+      </div>
+      <!-- 世界线分支模式：从存档/时间轴当前帧保留世界状态，改完参数后从这里开新局。 -->
+      <div id="branch-banner" class="branch-banner">
+        <div class="bb-info">
+          <b>从第 <span id="branch-frame">0</span> 帧变动世界线</b>
+          <span class="bb-note">保留当前球/核/蓝细菌；几何尺寸、种子、初始数量不重放。新局可正常保存。</span>
+        </div>
+        <label class="bb-frames">继续帧数
+          <input id="branch-frames" type="number" min="1" max="1000000000" value="100000">
+        </label>
+        <button id="btn-branch-start" class="primary">开始新世界线</button>
+        <button id="btn-branch-cancel">取消</button>
       </div>
       <div id="params-groups"></div>
     </div>

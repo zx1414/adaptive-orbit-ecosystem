@@ -22,5 +22,6 @@ cyano_link_check_interval = 4
 cyano_photosynthesis_rate = 0.02
 cyano_metabolism_rate = 0.005
 cyano_reproduction_probability = 0.001
+cyano_reproduction_offset = 125.0
 cyano_predation_radius = 30.0
 max_nuclei = 0

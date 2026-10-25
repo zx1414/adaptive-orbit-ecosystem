@@ -14,6 +14,13 @@
 class WebRenderer;
 class Sampler;
 
+// 时间轴检查点：保存某一帧的完整世界状态（World::writeState 的原始字节）。
+// 用于「读档后拖动进度条查看任意已记录帧」与「从当前帧变动世界线」。
+struct TimelinePoint {
+    int frame = 0;
+    std::string bytes;
+};
+
 // 启动器应用：菜单 → 运行 → 结束 的状态机 + HTTP 路由。
 // 模拟主循环跑在主线程（rng 单线程确定性），HTTP 在服务器工作线程；
 // 跨线程共享数据一律经 mutex_ 保护或用原子量。
@@ -73,6 +80,22 @@ private:
     void processEnvRequest();                     // 主线程：应用信箱命令并回填结果
     void rejectEnvRequest(const std::string& why);  // 主线程：拒绝未处理命令（结束/菜单态）
 
+    // ---- 时间轴 / 读档拖动 / 世界线分支（v2.3.0）----
+    void processTimelineRequest();               // 主线程：处理 seek/branch 信箱
+    void rejectTimelineRequest(const std::string& why);
+    bool restoreCheckpoint(int frame, std::string& err);
+    bool branchFromCurrent(const std::map<std::string, std::string>& params,
+                           int runFrames, std::string& err);
+    void captureTimelinePoint();                  // 主线程：必要时记录当前帧状态
+    void resetTimeline(const std::string& source, int savedFrame);
+    void refreshTimelineCache();                  // 主线程：发布 /timeline JSON
+    bool loadTimelineFile(const std::string& dir, int savedFrame);
+    bool writeTimelineFile(const std::string& dir) const;
+    std::string uniqueSaveName(const std::string& requested) const;
+    // 服务器线程：投递请求并等待主线程结果（阻塞，超时返回错误 JSON）。
+    std::string handleSeekLive(int frame);
+    std::string handleBranchLive(const std::map<std::string, std::string>& body);
+
     std::string webRoot_;
     std::string baseDir_;  // exe 所在目录（env_config.txt / mods.list 等落点）
     int port_ = 8765;
@@ -111,6 +134,29 @@ private:
     bool envDone_ = false;
     EnvApplyResult envResult_;
     EnvState envResultState_;
+
+    // —— 时间轴 / seek / branch（v2.3.0）——
+    // timeline_ 只由主线程读写；/timeline 读取 timelineJson_ 缓存（timelineMutex_ 保护）。
+    std::vector<TimelinePoint> timeline_;
+    std::string timelineSource_;
+    int timelineSavedFrame_ = 0;
+    std::mutex timelineMutex_;
+    std::string timelineJson_;
+    bool timelineCacheValid_ = false;
+    int timelinePublishedFrame_ = -1;   // JSON 最近发布的 current 帧（避免暂停时每 10ms 重建）
+    // seek/branch 信箱：服务器线程投递 → 主线程执行 → 条件变量回填。
+    enum class TimelineRequest { None, Seek, Branch };
+    std::mutex timelineReqMutex_;
+    std::condition_variable timelineReqCond_;
+    TimelineRequest timelineReq_ = TimelineRequest::None;
+    int timelineSeekFrame_ = 0;
+    std::map<std::string, std::string> timelineBranchParams_;
+    int timelineBranchFrames_ = 100000;
+    bool timelineReqPending_ = false;
+    bool timelineReqDone_ = false;
+    bool timelineReqOk_ = false;
+    std::string timelineReqErr_;
+    int timelineReqResultFrame_ = 0;
 
     std::unique_ptr<World> world_;
     std::unique_ptr<WebRenderer> web_;

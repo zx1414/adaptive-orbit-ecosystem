@@ -1,4 +1,5 @@
 #include "LauncherApp.h"
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -148,6 +149,57 @@ std::map<std::string, std::string> readMetaFile(const std::string& path) {
         return ss.str();
     }());
 }
+
+// ---- 时间轴文件（save/timeline.bin）----
+// 格式：magic "NSTL" + u32 version + u64 savedFrame + u32 count
+//       + count × { u64 frame + u32 bytesLen + bytes }。
+// bytes 是 World::writeState 的原样输出，读回时交给 World::readState。
+constexpr int kTimelineIntervalFrames = 200;
+constexpr size_t kTimelineMaxPoints = 2000;
+constexpr uint32_t kTimelineFileVersion = 1;
+
+void rawU32(std::ostream& os, uint32_t v) { os.write((const char*)&v, 4); }
+void rawU64(std::ostream& os, uint64_t v) { os.write((const char*)&v, 8); }
+bool rawReadU32(std::istream& is, uint32_t& v) { return is.read((char*)&v, 4).good(); }
+bool rawReadU64(std::istream& is, uint64_t& v) { return is.read((char*)&v, 8).good(); }
+
+bool readTimelineFileRaw(const std::string& path, std::vector<TimelinePoint>& out,
+                         int& savedFrame) {
+    std::ifstream f(WinFs::toAnsi(path), std::ios::binary);
+    if (!f.good()) return false;
+    char magic[4];
+    if (!f.read(magic, 4) || std::memcmp(magic, "NSTL", 4) != 0) return false;
+    uint32_t ver = 0;
+    uint64_t saved = 0;
+    uint32_t count = 0;
+    if (!rawReadU32(f, ver) || ver != kTimelineFileVersion) return false;
+    if (!rawReadU64(f, saved)) return false;
+    if (!rawReadU32(f, count) || count > 200000u) return false;
+    std::vector<TimelinePoint> pts;
+    pts.reserve((size_t)count);
+    for (uint32_t i = 0; i < count; ++i) {
+        uint64_t fr = 0;
+        uint32_t len = 0;
+        if (!rawReadU64(f, fr) || !rawReadU32(f, len)) return false;
+        if (len > (64u << 20)) return false;   // 单个检查点上限 64MB（防御损坏文件）
+        TimelinePoint p;
+        p.frame = (int)(std::min<uint64_t>)(fr, 0x7fffffffULL);
+        p.bytes.resize(len);
+        if (len > 0 && !f.read(&p.bytes[0], (std::streamsize)len)) return false;
+        pts.push_back(std::move(p));
+    }
+    if (!f.good() && !f.eof()) return false;
+    std::sort(pts.begin(), pts.end(),
+              [](const TimelinePoint& a, const TimelinePoint& b) { return a.frame < b.frame; });
+    pts.erase(std::unique(pts.begin(), pts.end(),
+                          [](const TimelinePoint& a, const TimelinePoint& b) {
+                              return a.frame == b.frame;
+                          }),
+              pts.end());
+    out = std::move(pts);
+    savedFrame = (int)(std::min<uint64_t>)(saved, 0x7fffffffULL);
+    return !out.empty();
+}
 }  // namespace
 
 LauncherApp::LauncherApp(std::string webRoot, std::string baseDir, int port)
@@ -239,6 +291,7 @@ void LauncherApp::runMainLoop() {
             std::string loadName;
             std::map<std::string, std::string> params;
             rejectEnvRequest("当前为菜单态，请先开始模拟");  // 兜底：处理终止竞态下的残留命令
+            rejectTimelineRequest("当前为菜单态，时间轴不可用");
             if (takeLoadRequest(loadName)) {
                 std::string err;
                 loadWorldFromSave(loadName, err);
@@ -250,7 +303,21 @@ void LauncherApp::runMainLoop() {
                     refreshEnvCache();
                 }
             } else if (takeRunRequest(params)) {
+                const bool wantSave = params.count("save_on_start") &&
+                                      (params["save_on_start"] == "1" ||
+                                       params["save_on_start"] == "on" ||
+                                       params["save_on_start"] == "true");
+                std::string saveName = params.count("save_name") ? params["save_name"] : "";
                 createWorld(params);
+                if (wantSave) {
+                    std::string err;
+                    const std::string n = uniqueSaveName(saveName);
+                    if (doSave(n, err)) {
+                        std::cout << "开局存档已创建: " << n << "\n" << std::flush;
+                    } else {
+                        std::cerr << "开局存档失败: " << err << "\n";
+                    }
+                }
                 state_.store((int)State::Running);
                 refreshEnvCache();
             } else {
@@ -261,6 +328,7 @@ void LauncherApp::runMainLoop() {
 
         if (st == State::Finished) {
             rejectEnvRequest("模拟已结束，环境调控不可用");
+            rejectTimelineRequest("模拟已结束，时间轴不可用");
             if (toMenuRequested_.exchange(false)) {
                 destroyWorld();
                 state_.store((int)State::Menu);
@@ -271,6 +339,8 @@ void LauncherApp::runMainLoop() {
         }
 
         // ---- Running ----
+        // 时间轴 seek / 分支请求优先于本帧 step：拖动进度条时先停在目标帧。
+        processTimelineRequest();
         // 环境信箱：先于 step 应用（暂停态也应用），保证 /env 的改写在下一帧生效；
         // 顺序固定为「保存请求（循环顶部）→ 环境命令 → step」。
         processEnvRequest();
@@ -294,6 +364,9 @@ void LauncherApp::runMainLoop() {
         if (paused_.load()) {
             if (!consumeStep()) {
                 refreshEnvCache();  // 暂停时每轮刷新，影响力/冷却/参数立即可见
+                if (timelinePublishedFrame_ != world_->frame()) {
+                    refreshTimelineCache();  // 暂停帧发生变化（读档/定位）时只重建一次
+                }
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
                 continue;
             }
@@ -308,6 +381,11 @@ void LauncherApp::runMainLoop() {
         }
         if (cfg.sampleInterval > 0 && world_->frame() % cfg.sampleInterval == 0) {
             sampler_->sample(*world_);
+        }
+        // 时间轴：每 200 帧记录一个完整检查点；上限 2000 个，超出时抽稀。
+        if (world_->frame() % kTimelineIntervalFrames == 0) {
+            captureTimelinePoint();
+            refreshTimelineCache();
         }
         // GET /env 缓存每 10 帧重建一次（toJson 有字符串分配，避免每帧开销）。
         if (world_->frame() % 10 == 0) refreshEnvCache();
@@ -345,6 +423,7 @@ void LauncherApp::createWorld(const std::map<std::string, std::string>& params) 
     }
     world_ = std::make_unique<World>(cfg);
     world_->initialize();
+    maxFps_.store(cfg.maxFps);   // /run 的 max_fps 参数立即生效（此前只读 env_config 构造值）
     modApi_ = std::make_unique<ModAPI>(
         ModAPI{*world_, world_->energy(), world_->rng(), world_->events()});
     std::lock_guard<std::mutex> lk(mutex_);
@@ -353,6 +432,7 @@ void LauncherApp::createWorld(const std::map<std::string, std::string>& params) 
     sampler_ = std::make_unique<Sampler>(".");
     paused_.store(false);
     singleStep_.store(0);
+    resetTimeline("新世界线", 0);
     std::cout << "模拟启动 | 世界 " << cfg.width << "x" << cfg.height
               << " | 小球 " << cfg.initialBalls << " | 核 " << cfg.initialNuclei
               << " | 帧数 " << cfg.maxFrames << " | 种子 " << cfg.seed << "\n" << std::flush;
@@ -365,6 +445,10 @@ void LauncherApp::destroyWorld() {
     modApi_.reset();
     world_.reset();
     state_.store((int)State::Menu);
+    timeline_.clear();
+    timelineSource_.clear();
+    timelineSavedFrame_ = 0;
+    refreshTimelineCache();
     refreshEnvCache();  // 回菜单态：GET /env 用 pendingCfg_ 的默认状态重建缓存
 }
 
@@ -387,6 +471,334 @@ bool LauncherApp::consumeStep() {
     while (v > 0 && !singleStep_.compare_exchange_weak(v, v - 1)) {
     }
     return v > 0;
+}
+
+// ==================== 时间轴 / 读档拖动 / 世界线分支（v2.3.0） ====================
+
+void LauncherApp::captureTimelinePoint() {
+    if (!world_) return;
+    const int f = world_->frame();
+    if (!timeline_.empty() && timeline_.back().frame == f) return;
+    std::ostringstream ss(std::ios::out | std::ios::binary);
+    if (!world_->writeState(ss)) return;
+    TimelinePoint p;
+    p.frame = f;
+    p.bytes = ss.str();
+    auto it = std::lower_bound(timeline_.begin(), timeline_.end(), f,
+                               [](const TimelinePoint& a, int frame) { return a.frame < frame; });
+    if (it != timeline_.end() && it->frame == f) {
+        it->bytes = std::move(p.bytes);
+        return;
+    }
+    timeline_.insert(it, std::move(p));
+    // 长时间运行不会无限增长：超过上限时保留第 0 个 + 每 2 个，检查点间隔自动翻倍。
+    if (timeline_.size() > kTimelineMaxPoints) {
+        std::vector<TimelinePoint> kept;
+        kept.reserve(timeline_.size() / 2 + 1);
+        for (size_t i = 0; i < timeline_.size(); ++i) {
+            if (i == 0 || (i % 2) == 0) kept.push_back(std::move(timeline_[i]));
+        }
+        timeline_.swap(kept);
+    }
+}
+
+void LauncherApp::resetTimeline(const std::string& source, int savedFrame) {
+    timeline_.clear();
+    timelineSource_ = source;
+    timelineSavedFrame_ = savedFrame;
+    captureTimelinePoint();
+    refreshTimelineCache();
+}
+
+void LauncherApp::refreshTimelineCache() {
+    std::string out = "{\"ok\":";
+    if (!world_) {
+        out += "false,\"err\":\"当前没有运行中的世界\",\"checkpoints\":[],\"min\":0,\"max\":0,"
+               "\"savedFrame\":0,\"current\":0,\"source\":\"\"}";
+        timelinePublishedFrame_ = -1;
+    } else {
+        out += "true,\"source\":\"" + jsonEscape(timelineSource_) + "\"";
+        out += ",\"savedFrame\":" + std::to_string(timelineSavedFrame_);
+        out += ",\"current\":" + std::to_string(world_->frame());
+        const int maxFrame = timeline_.empty()
+            ? world_->frame()
+            : (std::max)(timeline_.back().frame, world_->frame());
+        out += ",\"min\":" + std::to_string(timeline_.empty() ? 0 : timeline_.front().frame);
+        out += ",\"max\":" + std::to_string(maxFrame);
+        out += ",\"checkpoints\":[";
+        for (size_t i = 0; i < timeline_.size(); ++i) {
+            if (i > 0) out += ',';
+            out += std::to_string(timeline_[i].frame);
+        }
+        out += "]}";
+        timelinePublishedFrame_ = world_->frame();
+    }
+    std::lock_guard<std::mutex> lk(timelineMutex_);
+    timelineJson_ = std::move(out);
+    timelineCacheValid_ = true;
+}
+
+bool LauncherApp::loadTimelineFile(const std::string& dir, int savedFrame) {
+    std::vector<TimelinePoint> pts;
+    int saved = savedFrame;
+    if (!readTimelineFileRaw(dir + "/timeline.bin", pts, saved)) return false;
+    timeline_ = std::move(pts);
+    timelineSavedFrame_ = saved;
+    return !timeline_.empty();
+}
+
+bool LauncherApp::writeTimelineFile(const std::string& dir) const {
+    if (timeline_.empty()) return false;
+    std::ofstream f(WinFs::toAnsi(dir + "/timeline.bin"), std::ios::binary);
+    if (!f.good()) return false;
+    f.write("NSTL", 4);
+    rawU32(f, kTimelineFileVersion);
+    rawU64(f, (uint64_t)timelineSavedFrame_);
+    rawU32(f, (uint32_t)timeline_.size());
+    for (const TimelinePoint& p : timeline_) {
+        rawU64(f, (uint64_t)p.frame);
+        rawU32(f, (uint32_t)p.bytes.size());
+        if (!p.bytes.empty()) f.write(p.bytes.data(), (std::streamsize)p.bytes.size());
+    }
+    return f.good();
+}
+
+std::string LauncherApp::uniqueSaveName(const std::string& requested) const {
+    std::string base = trim(requested);
+    if (!safeSaveName(base)) {
+        const int seed = world_ ? world_->config().seed : 42;
+        base = "开局-种子" + std::to_string(seed);
+        if (!safeSaveName(base)) base = "auto-save";
+    }
+    std::string name = base;
+    for (int i = 2; WinFs::exists(baseDir_ + "/saves/" + name); ++i) {
+        name = base + "-" + std::to_string(i);
+        if (i > 10000) break;
+    }
+    return name;
+}
+
+bool LauncherApp::restoreCheckpoint(int frame, std::string& err) {
+    if (!world_) {
+        err = "当前没有运行中的世界";
+        return false;
+    }
+    if (timeline_.empty()) {
+        err = "时间轴还是空的";
+        return false;
+    }
+    const int upper = (std::max)(timeline_.back().frame, world_->frame());
+    const int target = (std::max)(timeline_.front().frame, (std::min)(frame, upper));
+    auto it = std::upper_bound(timeline_.begin(), timeline_.end(), target,
+                               [](int f, const TimelinePoint& p) { return f < p.frame; });
+    if (it == timeline_.begin()) {
+        err = "目标帧之前没有可用检查点";
+        return false;
+    }
+    --it;
+    std::istringstream ss(it->bytes, std::ios::in | std::ios::binary);
+    std::unique_ptr<World> fresh = std::make_unique<World>(WorldConfig{});
+    std::string readErr;
+    if (!fresh->readState(ss, readErr)) {
+        err = "检查点损坏: " + readErr;
+        return false;
+    }
+    fresh->syncDerivedFromConfig();
+    // 先释放依赖旧 world 的对象，再替换 world。
+    web_.reset();
+    sampler_.reset();
+    modApi_.reset();
+    world_ = std::move(fresh);
+    modApi_ = std::make_unique<ModAPI>(
+        ModAPI{*world_, world_->energy(), world_->rng(), world_->events()});
+    {
+        std::lock_guard<std::mutex> lk(mutex_);
+        registerAllMods(*modApi_, enabledMods_);
+        pendingCfg_ = world_->config();
+        maxFps_.store(pendingCfg_.maxFps);
+    }
+    web_ = std::make_unique<WebRenderer>(*world_);
+    sampler_ = std::make_unique<Sampler>(".");
+    while (world_->frame() < target && !world_->finished()) {
+        world_->step();
+    }
+    paused_.store(true);
+    singleStep_.store(0);
+    web_->render(*world_);
+    refreshEnvCache();
+    refreshTimelineCache();
+    std::cout << "时间轴定位: 帧 " << world_->frame() << "（检查点 " << it->frame << "）\n"
+              << std::flush;
+    return true;
+}
+
+bool LauncherApp::branchFromCurrent(const std::map<std::string, std::string>& params,
+                                    int runFrames, std::string& err) {
+    if (!world_) {
+        err = "当前没有运行中的世界";
+        return false;
+    }
+    WorldConfig cfg = world_->config();
+    // 分支保留当前实体：几何尺寸、种子、初始数量等“开局参数”不在此处重放。
+    static const char* skip[] = {
+        "width", "height", "seed", "balls", "nuclei", "frames",
+        "cyano_nodes", "cyano_colonies", "save_on_start", "save_name",
+    };
+    for (const auto& kv : params) {
+        bool ignored = false;
+        for (const char* s : skip) {
+            if (kv.first == s) {
+                ignored = true;
+                break;
+            }
+        }
+        if (ignored) continue;
+        std::string applyErr;
+        if (!ParamSchema::applyLine(cfg, kv.first, kv.second)) {
+            // 未知键/非法值不让整条世界线失败：用户仍可用其余合法参数开始。
+            std::cerr << "分支参数被忽略: " << kv.first << "=" << kv.second << "\n";
+        }
+        (void)applyErr;
+    }
+    const int frames = (std::max)(1, (std::min)(runFrames, 1000000000));
+    world_->rebranch(cfg, frames);
+    timeline_.clear();
+    timelineSource_ = "世界线分支";
+    timelineSavedFrame_ = world_->frame();
+    captureTimelinePoint();
+    paused_.store(false);
+    singleStep_.store(0);
+    state_.store((int)State::Running);
+    finishReason_.clear();
+    {
+        std::lock_guard<std::mutex> lk(mutex_);
+        pendingCfg_ = world_->config();
+        maxFps_.store(pendingCfg_.maxFps);
+    }
+    web_->render(*world_);
+    refreshEnvCache();
+    refreshTimelineCache();
+    std::cout << "世界线已分支: 从帧 " << world_->frame() << " 继续 " << frames << " 帧\n"
+              << std::flush;
+    return true;
+}
+
+void LauncherApp::processTimelineRequest() {
+    TimelineRequest req = TimelineRequest::None;
+    int target = 0;
+    int frames = 100000;
+    std::map<std::string, std::string> params;
+    {
+        std::lock_guard<std::mutex> lk(timelineReqMutex_);
+        if (!timelineReqPending_) return;
+        req = timelineReq_;
+        target = timelineSeekFrame_;
+        frames = timelineBranchFrames_;
+        params = timelineBranchParams_;
+        timelineReqPending_ = false;
+    }
+    bool ok = false;
+    std::string err;
+    if (req == TimelineRequest::Seek) {
+        ok = restoreCheckpoint(target, err);
+    } else if (req == TimelineRequest::Branch) {
+        ok = branchFromCurrent(params, frames, err);
+    } else {
+        err = "未知时间轴请求";
+    }
+    {
+        std::lock_guard<std::mutex> lk(timelineReqMutex_);
+        timelineReqOk_ = ok;
+        timelineReqErr_ = err;
+        timelineReqResultFrame_ = world_ ? world_->frame() : 0;
+        timelineReqDone_ = true;
+    }
+    timelineReqCond_.notify_all();
+}
+
+void LauncherApp::rejectTimelineRequest(const std::string& why) {
+    bool had = false;
+    {
+        std::lock_guard<std::mutex> lk(timelineReqMutex_);
+        if (!timelineReqPending_) return;
+        timelineReqPending_ = false;
+        timelineReqOk_ = false;
+        timelineReqErr_ = why;
+        timelineReqResultFrame_ = world_ ? world_->frame() : 0;
+        timelineReqDone_ = true;
+        had = true;
+    }
+    if (had) timelineReqCond_.notify_all();
+}
+
+std::string LauncherApp::handleSeekLive(int frame) {
+    {
+        std::lock_guard<std::mutex> lk(timelineReqMutex_);
+        if (timelineReqPending_) {
+            return "{\"ok\":false,\"err\":\"已有时间轴请求正在处理\"}";
+        }
+        timelineReq_ = TimelineRequest::Seek;
+        timelineSeekFrame_ = frame;
+        timelineReqPending_ = true;
+        timelineReqDone_ = false;
+        timelineReqOk_ = false;
+        timelineReqErr_.clear();
+        timelineReqResultFrame_ = 0;
+    }
+    paused_.store(true);
+    std::unique_lock<std::mutex> lk(timelineReqMutex_);
+    const bool done = timelineReqCond_.wait_for(
+        lk, std::chrono::milliseconds(30000), [this] { return timelineReqDone_; });
+    if (!done) {
+        timelineReqPending_ = false;
+        return "{\"ok\":false,\"err\":\"定位超时（目标帧可能太远）\"}";
+    }
+    std::string out = "{\"ok\":";
+    out += timelineReqOk_ ? "true" : "false";
+    out += ",\"frame\":" + std::to_string(timelineReqResultFrame_);
+    if (!timelineReqOk_) out += ",\"err\":\"" + jsonEscape(timelineReqErr_) + "\"";
+    out += "}";
+    return out;
+}
+
+std::string LauncherApp::handleBranchLive(const std::map<std::string, std::string>& body) {
+    int frames = 100000;
+    auto it = body.find("frames");
+    if (it != body.end()) {
+        try {
+            frames = std::stoi(it->second);
+        } catch (...) {
+            frames = 100000;
+        }
+    }
+    {
+        std::lock_guard<std::mutex> lk(timelineReqMutex_);
+        if (timelineReqPending_) {
+            return "{\"ok\":false,\"err\":\"已有时间轴请求正在处理\"}";
+        }
+        timelineReq_ = TimelineRequest::Branch;
+        timelineBranchParams_ = body;
+        timelineBranchFrames_ = (std::max)(1, frames);
+        timelineReqPending_ = true;
+        timelineReqDone_ = false;
+        timelineReqOk_ = false;
+        timelineReqErr_.clear();
+        timelineReqResultFrame_ = 0;
+    }
+    paused_.store(true);
+    std::unique_lock<std::mutex> lk(timelineReqMutex_);
+    const bool done = timelineReqCond_.wait_for(
+        lk, std::chrono::milliseconds(30000), [this] { return timelineReqDone_; });
+    if (!done) {
+        timelineReqPending_ = false;
+        return "{\"ok\":false,\"err\":\"分支超时\"}";
+    }
+    std::string out = "{\"ok\":";
+    out += timelineReqOk_ ? "true" : "false";
+    out += ",\"frame\":" + std::to_string(timelineReqResultFrame_);
+    if (!timelineReqOk_) out += ",\"err\":\"" + jsonEscape(timelineReqErr_) + "\"";
+    out += "}";
+    return out;
 }
 
 // ---------- 环境 API：缓存 + 信箱（主线程侧）----------
@@ -703,6 +1115,45 @@ bool LauncherApp::route(const std::string& method, const std::string& path,
         contentType = "application/json; charset=utf-8";
         return true;
     }
+    // ---- v2.3.0 时间轴：查看历史帧 / 从当前帧分支世界线 ----
+    if (method == "GET" && path == "/timeline") {
+        std::lock_guard<std::mutex> lk(timelineMutex_);
+        if (timelineCacheValid_) {
+            resp = timelineJson_;
+        } else {
+            resp = "{\"ok\":false,\"err\":\"时间轴尚未就绪\",\"checkpoints\":[],\"min\":0,\"max\":0}";
+        }
+        contentType = "application/json; charset=utf-8";
+        return true;
+    }
+    if (method == "POST" && path == "/seek") {
+        const auto kv = parseKeyValues(body);
+        int target = 0;
+        auto it = kv.find("frame");
+        if (it != kv.end()) {
+            try {
+                target = std::stoi(it->second);
+            } catch (...) {
+                target = 0;
+            }
+        }
+        if ((State)state_.load() != State::Running) {
+            resp = "{\"ok\":false,\"err\":\"只有运行/暂停中的世界可以定位时间轴\"}";
+        } else {
+            resp = handleSeekLive(target);
+        }
+        contentType = "application/json; charset=utf-8";
+        return true;
+    }
+    if (method == "POST" && path == "/branch") {
+        if ((State)state_.load() != State::Running) {
+            resp = "{\"ok\":false,\"err\":\"只有运行/暂停中的世界可以分支\"}";
+        } else {
+            resp = handleBranchLive(parseKeyValues(body));
+        }
+        contentType = "application/json; charset=utf-8";
+        return true;
+    }
     if (method == "GET" && path == "/schema") {
         resp = buildSchemaJson();
         contentType = "application/json; charset=utf-8";
@@ -737,7 +1188,7 @@ bool LauncherApp::route(const std::string& method, const std::string& path,
         return true;
     }
     if (method == "POST" && path == "/save") {
-        onSaveRequest(body);  // 阻塞等待主线程完成（≤2s）
+        onSaveRequest(body);  // 阻塞等待主线程完成（≤5s，含时间轴写入）
         std::lock_guard<std::mutex> lk(saveMutex_);
         resp = saveOk_ ? "{\"ok\":true}" : "{\"ok\":false,\"err\":\"" + jsonEscape(saveErr_) + "\"}";
         contentType = "application/json; charset=utf-8";
@@ -1014,9 +1465,19 @@ void LauncherApp::loadWorldFromSave(const std::string& name, std::string& err) {
         pendingCfg_ = world_->config();
         maxFps_.store(pendingCfg_.maxFps);
     }
+    // 时间轴：新存档带 timeline.bin 时可拖动查看历史帧；旧存档只有当前帧。
+    timelineSource_ = name;
+    timelineSavedFrame_ = world_->frame();
+    if (!loadTimelineFile(baseDir_ + "/saves/" + name, world_->frame())) {
+        timeline_.clear();
+        captureTimelinePoint();
+        timelineSavedFrame_ = world_->frame();
+    }
+    refreshTimelineCache();
     paused_.store(true);
     singleStep_.store(0);
-    std::cout << "已载入存档: " << name << "（帧 " << world_->frame() << "）\n" << std::flush;
+    std::cout << "已载入存档: " << name << "（帧 " << world_->frame()
+              << "，时间轴 " << timeline_.size() << " 点）\n" << std::flush;
 }
 
 bool LauncherApp::doSave(const std::string& name, std::string& err) {
@@ -1033,6 +1494,9 @@ bool LauncherApp::doSave(const std::string& name, std::string& err) {
         err = "目录创建失败";
         return false;
     }
+    // 存档帧本身也写入时间轴，保证读档后进度条能精确定位到保存帧。
+    captureTimelinePoint();
+    timelineSavedFrame_ = world_->frame();
     std::ofstream f(WinFs::toAnsi(dir + "/save.bin"), std::ios::binary);
     if (!f.good()) {
         err = "无法创建存档文件";
@@ -1084,6 +1548,10 @@ bool LauncherApp::doSave(const std::string& name, std::string& err) {
     }
     mf << "mods = " << mods << "\n";
     mf.close();
+    if (!writeTimelineFile(dir)) {
+        std::cerr << "警告: 时间轴文件写入失败（存档仍可用，只是不能拖动历史帧）\n";
+    }
+    refreshTimelineCache();
     std::cout << "已保存存档: " << name << "（帧 " << world_->frame() << "）\n" << std::flush;
     return true;
 }
@@ -1128,7 +1596,7 @@ void LauncherApp::onSaveRequest(const std::string& body) {
         saveErr_ = "存档超时（可能没有运行中的模拟）";
     }
     std::unique_lock<std::mutex> lk(saveMutex_);
-    saveCond_.wait_for(lk, std::chrono::milliseconds(2000),
+    saveCond_.wait_for(lk, std::chrono::milliseconds(5000),
                        [this] { return !savePending_; });
 }
 

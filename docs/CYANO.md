@@ -66,7 +66,7 @@ World::step() 每帧顺序：
 | `cyanoBallSpawnProbability` | double | 0.02 | 产球概率/帧/节点 |
 | `cyanoReproductionCost` | double | 40.0 | 分裂繁殖能量成本 |
 | `cyanoReproductionProbability` | double | 0.01 | 分裂概率/帧/节点 |
-| `cyanoReproductionOffset` | double | 15.0 | 子节点位置偏移 |
+| `cyanoReproductionOffset` | double | 125.0 | 子节点相对亲节点的散布距离（v2.3.0 起为旧值 25 的 5 倍；可在参数页/环境细调高级参数中修改） |
 | `cyanoMinNodeSeparation` | double | 12.0 | 节点最小间距（防重叠） |
 | `cyanoPredationRadius` | double | 30.0 | 核捕食判定半径 |
 | `cyanoConversionMode` | int | 0 | 转化率公式：0=基础, 1=速度惩罚, 2=加速度惩罚, 3=混合 |

@@ -1,4 +1,4 @@
-# 实时环境调控（v2.2.1）
+# 实时环境调控（v2.3.0）
 
 玩家扮演“环境意志”：不直接操控核，而是通过光照、食物、压力、生产者四条轴塑造选择压力，让不同策略在演化中此消彼长。
 
@@ -15,16 +15,16 @@
 - 每次快调一档消耗 **1 影响力**；档位未变化时幂等成功、不扣费。
 - 四轴具体数值只写在 `src/EnvControl.cpp`，前端通过 `GET /env` 读取，不复制常量。
 
-## 2. 细调：精确滑杆
+## 2. 细调：精确滑杆（可展开高级参数）
 
-细调抽屉按轴列出可调键（均来自 `ParamSchema`）：
+细调抽屉按轴列出可调键（均来自 `ParamSchema`）。默认只显示基础键，点右上角「展开更多」显示高级键，并附一句简短说明：
 
-- 光照：`sun_base_level`、`sun_day_amplitude`、`sun_day_period_frames`
-- 食物：`ball_spawn_probability`、`base_ball_energy`
-- 压力：`basal_cost`、`speed_cost_k`
-- 生产者：`cyano_photosynthesis_rate`、`cyano_metabolism_rate`、`cyano_predation_radius`、`cyano_transfer_rate`
+- 光照：`sun_base_level`、`sun_day_amplitude`；高级：`sun_day_period_frames`、`sun_vertical_gradient`、`sun_noise_amplitude`
+- 食物：`ball_spawn_probability`、`base_ball_energy`；高级：`ball_vel_range`
+- 压力：`basal_cost`、`speed_cost_k`；高级：`speed_cost_exponent`、`reproduction_cost_ratio`
+- 生产者：`cyano_photosynthesis_rate`、`cyano_metabolism_rate`；高级：`cyano_reproduction_probability`、`cyano_reproduction_offset`（默认 125）、`cyano_ball_spawn_probability`、`cyano_transfer_rate`、`cyano_predation_radius`、`cyano_min_node_separation`
 
-一次提交（一次 `POST /env`）中所有 `fine.*` **合计只扣 3 影响力**（无论几个键）；影响力不足 3 时整批拒绝；无变化不扣费。白名单外的配置键（如 `width/height/seed`）返回“该参数不支持实时细调”。
+**调节后立即应用**：松开滑杆或离开数字框即自动提交（也可点「立即应用本轴」按钮）。一次提交（一次 `POST /env`）中所有 `fine.*` **合计只扣 3 影响力**（无论几个键）；影响力不足 3 时整批拒绝；无变化不扣费。白名单外的配置键（如 `width/height/seed`）返回“该参数不支持实时细调”。
 
 ## 3. 影响力
 
@@ -77,6 +77,15 @@ cyano=on
 返回 `{ok, applied, rejected:[{key,reason}], influence, cooldowns}`；`cooldowns` 仅为旧版兼容字段，手动事件已无冷却、恒为 0。
 菜单态写入下一次启动配置（不扣影响力）；运行/暂停态在下一帧生效；结束态拒绝。
 
-## 7. 存档
+## 7. 存档时间轴与世界线分支（v2.3.0）
+
+- 运行中每 200 帧记录一个完整世界检查点（内存上限 2000 个，超出后自动抽稀）。
+- 保存时写 `saves/<名字>/timeline.bin`；读档后前端自动打开时间轴，可拖动/输入帧号查看历史帧（内部从最近检查点快进到目标帧）。
+- `GET /timeline`：`{ok, source, savedFrame, current, min, max, checkpoints:[...]}`。
+- `POST /seek`：`frame=N`，暂停并定位到该帧。
+- `POST /branch`：`frames=N` + 任意 schema `key=value`，保留当前球/核/蓝细菌状态，从当前帧开始新世界线（几何尺寸、seed、初始数量、初始蓝细菌数量不重放）。新世界线可继续保存。
+- 旧存档没有 `timeline.bin` 时只能查看保存帧；继续运行并保存后会积累时间轴。
+
+## 8. 存档格式
 
 存档 v2 额外保存：光色相 RNG、蓝细菌节点/连接/nextNodeId、EnvState（影响力/旧冷却字段/干预计数/峰值）。读档后节点、连线、影响力与画面立即恢复；旧档里的冷却值会被清零（手动事件已无冷却）。v1 旧存档可读，但旧档不含蓝细菌状态，载入后按关闭处理，可再用 `cyano=on` 激活。

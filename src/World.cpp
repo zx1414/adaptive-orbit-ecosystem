@@ -728,13 +728,11 @@ void World::removeDeadNuclei() {
 }
 
 void World::replenishBalls() {
+    // v2.3.0：取消「场上球数不低于初始值」的保底补球。
+    // 现在所有补充球都只由概率决定（ball_spawn_probability + 蓝细菌产球），
+    // 因此场上可以暂时甚至长期无球，玩家必须自己调控食物轴或蓝细菌。
     std::bernoulli_distribution spawn(config_.ballSpawnProbability);
     if (spawn(rng_)) {
-        spawnFreeBall();
-    }
-    // 维持小球总数不低于初始值。
-    int deficit = config_.initialBalls - (int)balls_.size();
-    for (int k = 0; k < deficit; ++k) {
         spawnFreeBall();
     }
 }
@@ -1185,6 +1183,19 @@ void World::syncSunFromConfig() { sun_ = makeSunParams(config_); }
 
 void World::syncCyanoParamsFromConfig() {
     cyano_.setParams(makeCyanoParams(config_));
+}
+
+void World::rebranch(const WorldConfig& cfg, int runFrames) {
+    const int current = frame_;
+    config_ = cfg;
+    if (runFrames > 0) {
+        config_.maxFrames = current + runFrames;
+    } else if (config_.maxFrames <= current) {
+        config_.maxFrames = current + 100000;
+    }
+    finished_ = false;
+    finishReason_ = "";
+    syncDerivedFromConfig();
 }
 
 void World::syncDerivedFromConfig() {

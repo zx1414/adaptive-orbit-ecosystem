@@ -75,7 +75,7 @@ const std::vector<ParamDef>& buildTable() {
         DEF("cyano_ball_spawn_probability", GRP_ENV, "每节点每帧产球概率；调大自由小球补给更快", Double, cyanoBallSpawnProbability, 0, 1),
         DEF("cyano_reproduction_cost", GRP_ENV, "繁殖一个新节点的能量成本；调大扩张更慢", Double, cyanoReproductionCost, 0, 1000),
         DEF("cyano_reproduction_probability", GRP_ENV, "每节点每帧繁殖概率；调大菌落扩张更快", Double, cyanoReproductionProbability, 0, 1),
-        DEF("cyano_reproduction_offset", GRP_ENV, "子节点相对父节点的散布距离上限；调大菌落更松散", Double, cyanoReproductionOffset, 0, 1000),
+        DEF("cyano_reproduction_offset", GRP_ENV, "子节点相对父节点的散布距离（默认 125，至少旧值 25 的 5 倍）；调大菌落更松散、子代不贴脸", Double, cyanoReproductionOffset, 0, 1000),
         DEF("cyano_min_node_separation", GRP_ENV, "节点最小间距；小于该距离时繁殖被取消（防重叠）", Double, cyanoMinNodeSeparation, 0, 1000),
         DEF("cyano_predation_radius", GRP_ENV, "核捕食蓝细菌节点的判定半径；0 = 禁捕食", Double, cyanoPredationRadius, 0, 1000),
         DEF("cyano_conversion_mode", GRP_ENV, "转化率函数形态：0=常数 1=速度×加速度反比（取舍） 2=幂律 3=仅加速度", Int, cyanoConversionMode, 0, 3),

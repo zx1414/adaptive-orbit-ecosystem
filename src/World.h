@@ -57,7 +57,7 @@ struct WorldConfig {
     double cyanoBallSpawnProbability = 0.002;     // cyano_ball_spawn_probability
     double cyanoReproductionCost = 20.0;          // cyano_reproduction_cost
     double cyanoReproductionProbability = 0.001;  // cyano_reproduction_probability
-    double cyanoReproductionOffset = 25.0;        // cyano_reproduction_offset
+    double cyanoReproductionOffset = 125.0;       // cyano_reproduction_offset（默认 5× 旧值，避免子代贴脸）
     double cyanoMinNodeSeparation = 15.0;         // cyano_min_node_separation
     double cyanoPredationRadius = 30.0;           // cyano_predation_radius  核吞节点的判定半径
     int    cyanoConversionMode = 1;               // cyano_conversion_mode   0=常数 1=速度×加速度反比 2=幂律 3=仅加速度
@@ -212,6 +212,11 @@ public:
     // 配置派生对象（sun_ / cyano_ 参数 / grid_）按当前 config_ 重建。
     // 读档后必须调用；运行中修改阳光/蓝细菌参数后也由 applyEnvCommand 内部调用。
     void syncDerivedFromConfig();
+
+    // 世界线分支（v2.3.0）：保留当前球/核/蓝细菌状态，只替换运行参数，
+    // 并把结束帧改为「当前帧 + runFrames」。不消耗 RNG，不重置实体。
+    // 仅允许在暂停/查看帧后调用；几何尺寸、seed 等由调用方过滤。
+    void rebranch(const WorldConfig& cfg, int runFrames);
 
     bool finished() const { return finished_; }
     const char* finishReason() const { return finishReason_; }

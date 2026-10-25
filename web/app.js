@@ -250,10 +250,10 @@ function refreshLegend() {
       : '有主球：色相 = 所属核（谱系），形状 = 类型'}</div>` +
     `<div class="lrow">${colonySw}蓝细菌节点 <span class="lnote">${cy.flat ? '单色' : '按菌落分色'}</span></div>` +
     `<div class="lrow"><span class="lline" style="background:${cyanoLinkCss}"></span>菌丝连线</div>` +
-    `<div class="lrow full lhint">环境：底部快调条 4 轴 ± · 事件卡 / 细调抽屉（运行/暂停时可用；消耗影响力，事件无冷却）</div>` +
+    `<div class="lrow full lhint">环境：底部快调条 4 轴 ± · 事件卡 / 细调抽屉（细调可展开高级参数，调完自动应用；事件无冷却）</div>` +
     `<div class="lrow full lhint">滚轮缩放（以指针为锚）· 拖拽平移 · 悬停查看核参数 · 双击画布重置视图</div>` +
     `<div class="lrow full lhint">快捷键：<span class="kbd">空格</span> 暂停/继续 · ` +
-    `<span class="kbd">N</span> 单步 · <span class="kbd">S</span> 保存</div>` +
+    `<span class="kbd">N</span> 单步 · <span class="kbd">S</span> 保存 · <span class="kbd">H</span> 折叠状态栏</div>` +
     `<div class="lrow full lhint">快捷键：<span class="kbd">R</span> 重置视图 · ` +
     `<span class="kbd">1-4</span> 切页 · <span class="kbd">+/-</span> 缩放 · ` +
     `<span class="kbd">Esc</span> 返回菜单</div>`;
@@ -268,6 +268,7 @@ let fitScale = 1;                // fitView() 时的 scale = 缩放显示的 100
 let modsData = null;             // { mods: [...], warnings: [...] }
 let enabledOrder = [];           // 启用 mod id 的有序列表（= 优先级）
 let schemaData = null;           // /schema JSON 数组
+let schemaReq = 0;               // 防止并发 loadSchema 旧响应覆盖新响应
 let packsData = null;            // /packs JSON 数组
 let enabledPacks = [];           // 启用材质包有序列表
 let palette = null;              // 应用后的调色板；键名可能是 snake_case（colors.txt）或 camelCase（旧 JSON），读取一律走 pickArr()
@@ -276,6 +277,14 @@ let exiting = false;             // 已请求退出：停止轮询并显示退�
 let envData = null;              // 最近一次 GET /env JSON（null = 尚未取到 / 后端未实现）
 let eventsOpen = false;          // 事件卡弹出层是否打开
 let fineOpen = false;            // 右侧细调抽屉是否打开
+// ---- 存档时间轴 / 世界线分支（v2.3.0）----
+let timelineData = null;         // GET /timeline 的最近结果
+let timelineOpen = false;        // 时间轴面板是否打开
+let timelineBusy = false;        // 正在 seek/branch，防止重复提交
+let timelineDragging = false;    // 正在拖动进度条（避免轮询覆盖滑块）
+let autoTimeline = false;        // 刚读档：等状态变 paused 后自动打开时间轴
+let branchMode = false;          // 参数页正在编辑“从当前帧分支”的参数
+let branchFrame = 0;             // 分支起始帧
 // 统计兜底：env 里若有峰值/干预/存活帧字段则用之，否则结束结算显示 --（后端预留字段）
 let envStats = { peakAlive: null, interventions: null, aliveFrames: null };
 
@@ -321,7 +330,10 @@ function switchTab(page) {
   }
   if (page === 'saves') loadSaves();
   // 运行页在后台时 #stage 尺寸读不到（display:none），切回来必须重建一次位图尺寸
-  if (page === 'run') resizeCanvas();
+  if (page === 'run') {
+    resizeCanvas();
+    if (eventsOpen || fineOpen) layoutEnvPanels();
+  }
 }
 document.querySelectorAll('#tabs button').forEach((b) => {
   b.addEventListener('click', () => switchTab(b.dataset.page));
@@ -341,11 +353,13 @@ function setUiState(s) {
   const running = s === 'running' || s === 'paused';
   const simActive = running || s === 'finished';
   el('btn-start').disabled = simActive;
+  el('btn-save-start').disabled = simActive;
   el('btn-pause').disabled = !running;
   el('btn-resume').disabled = !running;
   el('btn-step').disabled = !running;
   el('btn-stop').disabled = !running;
   el('btn-save').disabled = !simActive;
+  el('btn-timeline').disabled = s !== 'paused';
   el('speed').disabled = !running;
   el('overlay').classList.toggle('show', s === 'finished');
   // 暂停角标：只在画布上叠一个很淡的状态提示，不挡内容（CSS pointer-events:none）
@@ -365,8 +379,16 @@ function setUiState(s) {
   }
   // ---- 环境调控 UI（v2.2.0）：状态切换时收起面板/立即刷新一次 /env ----
   if (prev !== s) {
-    if (s === 'menu' || s === 'finished') closeEnvPanels();   // 菜单/结束态不允许余留面板
-    if (s === 'menu') envData = null;                        // 新一局从干净状态开始
+    if (s === 'menu' || s === 'finished') {
+      closeEnvPanels();   // 菜单/结束态不允许余留面板
+      closeTimelinePanel();
+    }
+    if (s === 'menu') {
+      envData = null;                        // 新一局从干净状态开始
+      timelineData = null;
+      autoTimeline = false;
+      cancelBranchMode();
+    }
     renderEnvUi();     // 先按新状态重置可用性/提示（菜单态不显示上一局的影响力残余）
     fetchEnv();        // 再拉一次 /env（菜单态后端用 pendingCfg_ 构造只读预览）
     refreshLegend();   // 状态切换时立即同步图例（不必等下一次渲染节拍）
@@ -417,7 +439,13 @@ async function pollStatus() {
     const text = (await res.text()).trim();
     if (text === 'menu') setUiState('menu');
     else if (text === 'running') setUiState('running');
-    else if (text === 'paused') setUiState('paused');
+    else if (text === 'paused') {
+      setUiState('paused');
+      if (autoTimeline) {
+        autoTimeline = false;
+        openTimelinePanel();
+      }
+    }
     else if (text.startsWith('finished:')) {
       reason = text.slice(9);
       setUiState('finished');
@@ -480,6 +508,10 @@ async function pollState() {
     if (status === 1) {
       reason = new TextDecoder('utf-8').decode(reasonBytes.subarray(0, reasonLen));
       setUiState('finished');
+    }
+    if (timelineOpen && !timelineBusy && !timelineDragging) {
+      setTxt('tl-current', '当前帧 ' + frame);
+      renderTimelinePanel();
     }
   } catch (e) { /* 轮询间隙服务器忙：忽略 */ }
 }
@@ -973,9 +1005,14 @@ function onGlobalKey(e) {
     case '3': switchTab('mods'); break;
     case '4': switchTab('saves'); break;
     case 'Escape':
-      // 先收面板再回菜单：面板打开时 Esc 只关面板，不打断这一局
+      // 先收面板/分支再回菜单：面板打开时 Esc 只关面板，不打断这一局
       if (eventsOpen || fineOpen) { closeEnvPanels(); break; }
+      if (timelineOpen) { closeTimelinePanel(); break; }
+      if (branchMode) { cancelBranchMode(); break; }
       if (uiState !== 'menu') postCmd('menu');
+      break;
+    case 'h': case 'H':
+      toggleHud();
       break;
     case '+': case '=':
       zoomBy(ZOOM_STEP);
@@ -1035,6 +1072,8 @@ function saveEnvPrefs() {
     localStorage.setItem(ENV_PREFS_KEY, JSON.stringify({
       cyano: !!(el('q-cyano') && el('q-cyano').checked),
       recomods: !!(el('q-recomods') && el('q-recomods').checked),
+      autosave: !!(el('q-autosave') && el('q-autosave').checked),
+      saveName: (el('q-save-name') && el('q-save-name').value) || '',
     }));
   } catch (e) { /* 忽略写入失败 */ }
 }
@@ -1044,10 +1083,14 @@ function loadEnvPrefs() {
     if (!o || typeof o !== 'object') return;   // 没有记忆 → 保持 HTML 的默认勾选
     if (typeof o.cyano === 'boolean' && el('q-cyano')) el('q-cyano').checked = o.cyano;
     if (typeof o.recomods === 'boolean' && el('q-recomods')) el('q-recomods').checked = o.recomods;
+    if (typeof o.autosave === 'boolean' && el('q-autosave')) el('q-autosave').checked = o.autosave;
+    if (typeof o.saveName === 'string' && el('q-save-name')) el('q-save-name').value = o.saveName;
   } catch (e) { /* 无痕模式/禁用 localStorage：保持默认勾选 */ }
 }
 el('q-cyano').addEventListener('change', saveEnvPrefs);
 el('q-recomods').addEventListener('change', saveEnvPrefs);
+el('q-autosave').addEventListener('change', saveEnvPrefs);
+el('q-save-name').addEventListener('input', saveEnvPrefs);
 
 // ---------- 侧栏折叠 ----------
 // 折叠后 stage 变宽，画面立刻变大；关键点是必须 resizeCanvas() 重建位图，
@@ -1073,6 +1116,27 @@ function loadSidebar() {
   } catch (e) { /* 无痕模式/禁用 localStorage：保持展开 */ }
 }
 el('btn-sidebar').addEventListener('click', toggleSidebar);
+
+// ---------- 右侧竖排状态栏折叠（v2.3.0） ----------
+const HUD_KEY = 'nukesim.hudcollapsed';
+function applyHudCollapsed(collapsed) {
+  document.body.classList.toggle('hud-collapsed', collapsed);
+  const b = el('btn-hud-collapse');
+  if (b) b.title = collapsed ? '展开右侧状态栏（H）' : '折叠右侧状态栏（H）';
+  if (typeof layoutEnvPanels === 'function' && (eventsOpen || fineOpen)) layoutEnvPanels();
+}
+function toggleHud() {
+  const collapsed = !document.body.classList.contains('hud-collapsed');
+  applyHudCollapsed(collapsed);
+  try { localStorage.setItem(HUD_KEY, collapsed ? '1' : '0'); } catch (e) { /* 忽略 */ }
+}
+function loadHud() {
+  try {
+    if (localStorage.getItem(HUD_KEY) === '1') applyHudCollapsed(true);
+  } catch (e) { /* 无痕模式：保持展开 */ }
+}
+el('btn-hud-collapse').addEventListener('click', toggleHud);
+el('hud-tab').addEventListener('click', toggleHud);
 
 // 「推荐生态 mod」：失球宽限 + 核间共生 + 能量溢出再分配（三者互补，单独启用效果很弱）。
 // 启动前若当前启用清单与「当前清单 ∪ 推荐项」不同，先 POST /set-mods 再 /run
@@ -1103,10 +1167,23 @@ async function ensureRecommendedMods() {
   showEnvToast('已启用推荐生态 mod（失球宽限+共生+溢出），本局生效', true);
 }
 
+// 开局前决定是否保存存档：只有勾选时才把 save_on_start 写进 /run 请求。
+// save_name 留空时后端按 seed 自动命名；后端会做文件名安全校验与重名避让。
+function startSaveParams() {
+  if (!el('q-autosave') || !el('q-autosave').checked) return '';
+  let body = 'save_on_start=1\n';
+  const name = (el('q-save-name') && el('q-save-name').value || '').replace(/[\r\n]/g, '').trim();
+  if (name) body += 'save_name=' + name + '\n';
+  return body;
+}
+
 el('btn-start').addEventListener('click', async () => {
   closeEnvPanels();
+  closeTimelinePanel();
+  autoTimeline = false;
+  timelineData = null;
   await ensureRecommendedMods();          // 先对齐 mod 清单（失败不阻塞启动）
-  const body = collectParams() + quickParams();
+  const body = collectParams() + quickParams() + startSaveParams();
   await postBody('/run', body);
 });
 el('btn-pause').addEventListener('click', () => postCmd('pause'));
@@ -1166,9 +1243,12 @@ const GROUP_HINTS = {
 };
 
 async function loadSchema() {
+  const token = ++schemaReq;
   try {
     const res = await fetch('/schema', { cache: 'no-store' });
-    schemaData = await res.json();
+    const data = await res.json();
+    if (token !== schemaReq) return;   // 已有更新的请求：丢弃旧响应
+    schemaData = data;
   } catch (e) { return; }
   const groups = el('params-groups');
   groups.innerHTML = '';
@@ -1284,6 +1364,28 @@ el('btn-save-config').addEventListener('click', async () => {
   const badge = el('badge');
   badge.textContent = '已保存';
   setTimeout(() => setUiState(uiState), 1200);
+});
+// 「先调参后保存并开始」：参数页一次完成写 env_config.txt + 用同一批参数开局。
+el('btn-save-start').addEventListener('click', async () => {
+  if (uiState !== 'menu') {
+    showEnvToast('模拟已在运行；如需重开请先停止并返回菜单', false);
+    return;
+  }
+  if (!schemaData) await loadSchema();
+  const body = collectParams();
+  if (!body) { showEnvToast('参数尚未加载完成，请稍后重试', false); return; }
+  el('btn-save-start').disabled = true;
+  try {
+    await postBody('/save-config', body);
+    await postBody('/run', body);
+    closeTimelinePanel();
+    timelineData = null;
+    cancelBranchMode();
+    switchTab('run');
+    showEnvToast('参数已保存，并按当前参数开始模拟', true);
+  } finally {
+    el('btn-save-start').disabled = true;
+  }
 });
 el('btn-restore-defaults').addEventListener('click', () => {
   if (!schemaData) return;
@@ -1426,6 +1528,8 @@ let fineSig = '';
 let fineInputs = Object.create(null);
 let fineDirty = Object.create(null);
 let fineGroupUI = Object.create(null);   // axisId -> { axis, est, apply }（费用/改动预览）
+let fineExpanded = false;                // 细调抽屉是否展开显示高级参数
+let fineAutoTimers = Object.create(null); // axisId -> 自动应用防抖定时器
 
 function envIsActive() { return uiState === 'running' || uiState === 'paused'; }
 function setTxt(id, s) { const n = el(id); if (n) n.textContent = s; }
@@ -1736,28 +1840,36 @@ function updateFineEstimate(axisId) {
   ui.est.textContent = '本次提交 ' + changed.length + ' 项' +
     (c == null ? ' · 费用以后端裁决为准' : ' · 整批消耗 ' + c + ' 影响力');
 }
-// 面板可用的垂直空间：上界 = HUD 下沿，下界 = 快调条上沿。
-// 事件卡/细调抽屉都按这个区间定位/限高 → 打开时不会遮住 HUD、控制条、图例与底部快调条。
+// 面板可用空间：右侧状态栏是竖排覆盖层，面板放在状态栏左侧；上界给控制条，
+// 下界给底部快调条 / 打开中的时间轴。这样面板不会被右侧状态栏挡住。
 function envPanelSpace() {
   const stage = el('stage'), hud = el('hud'), quick = el('quickbar');
   if (!stage) return null;
   const stR = stage.getBoundingClientRect ? stage.getBoundingClientRect() : null;
   const hudR = hud && hud.getBoundingClientRect ? hud.getBoundingClientRect() : null;
   const qbR = quick && quick.getBoundingClientRect ? quick.getBoundingClientRect() : null;
+  const tlR = timelineOpen && el('timeline-panel')
+    ? el('timeline-panel').getBoundingClientRect() : null;
   const stageH = stR && stR.height ? stR.height : (stage.clientHeight || 0);
   if (!stageH) return null;
   const stageTop = stR ? stR.top : 0;
+  const cbR = el('controlbar') && el('controlbar').getBoundingClientRect
+    ? el('controlbar').getBoundingClientRect() : null;
   let top = 12;
-  if (hudR && hudR.height > 0) {
-    const t = Math.round(hudR.bottom - stageTop + 8);
-    if (t > top) top = t;
-  }
-  let bottom = stageH - 62;    // 默认：快调条上方 62px
+  if (cbR && cbR.height > 0) top = Math.round(cbR.bottom - stageTop + 8);
+  const hudCollapsed = document.body.classList.contains('hud-collapsed');
+  const rightOffset = (!hudCollapsed && hudR && hudR.width > 0)
+    ? Math.round(hudR.width + 24) : 12;
+  let bottom = stageH - 62;
   if (qbR && qbR.height > 0) {
     const b = Math.round(qbR.top - stageTop - 8);
     if (b < bottom) bottom = b;
   }
-  return { top, bottom, stageH, avail: Math.max(140, bottom - top) };
+  if (tlR && tlR.height > 0) {
+    const b = Math.round(tlR.top - stageTop - 8);
+    if (b < bottom) bottom = b;
+  }
+  return { top, bottom, stageH, right: rightOffset, avail: Math.max(140, bottom - top) };
 }
 function layoutEnvPanels() {
   const sp = envPanelSpace();
@@ -1765,11 +1877,13 @@ function layoutEnvPanels() {
   const drawer = el('fine-drawer');
   if (drawer && fineOpen) {
     drawer.style.top = sp.top + 'px';
+    drawer.style.right = sp.right + 'px';
     drawer.style.maxHeight = sp.avail + 'px';
   }
   const pop = el('event-pop');
   if (pop) {
-    // 事件层底部贴住快调条上方；最大高度限制到 HUD 下沿，超出时卡片区内部滚动
+    // 事件层底部贴住快调条/时间轴上方；最大高度限制到控制条下沿，超出时内部滚动
+    pop.style.right = sp.right + 'px';
     pop.style.bottom = Math.max(8, sp.stageH - sp.bottom) + 'px';
     pop.style.maxHeight = sp.avail + 'px';
   }
@@ -1806,16 +1920,19 @@ function renderFineDrawer() {
   let note = '暂停时不回蓝';
   if (regen != null) note = '影响力每帧 +' + regen + ' · ' + (env && env.paused ? '已暂停：不回蓝' : note);
   else if (env && env.paused) note = '已暂停：暂停时不回蓝';
-  setTxt('fine-note', note);
+  setTxt('fine-note', note + ' · 松开滑杆/离开数字框后自动应用');
 
-  // 结构签名：轴集合 / fine 键 / min-max / 档位 / 可用性 / 细调费用；变了才重建 DOM
+  // 结构签名：轴集合 / fine 键 / min-max / 档位 / 可用性 / 细调费用 / 展开状态
   const sig = axes.map((a) => a.id + ':' + a.level + ':' +
     (Array.isArray(a.fine) ? a.fine.map((f) => f.key + ':' + f.min + ':' + f.max).join(',') : '')).join('|') +
-    '|' + (active ? 1 : 0) + '|' + (fineCostValue() == null ? '-' : fineCostValue());
+    '|' + (active ? 1 : 0) + '|' + (fineCostValue() == null ? '-' : fineCostValue()) +
+    '|' + (fineExpanded ? 1 : 0);
   if (sig !== fineSig) {
     fineSig = sig;
     fineInputs = Object.create(null);
     fineGroupUI = Object.create(null);
+    setCls('fine-drawer', 'fine-expanded', fineExpanded);
+    setTxt('fine-expand', fineExpanded ? '收起高级' : '展开更多');
     const box = el('fine-list');
     if (box) {
       box.innerHTML = '';
@@ -1875,7 +1992,7 @@ function buildFineGroup(a, active) {
     d.textContent = '该轴没有可细调参数';
     g.appendChild(d);
   }
-  for (const f of fine) {
+  const addRow = (f) => {
     const lo = Number(f.min), hi = Number(f.max);
     const row = document.createElement('div');
     row.className = 'fine-row';
@@ -1899,38 +2016,72 @@ function buildFineGroup(a, active) {
     const tag = document.createElement('span');
     tag.className = 'fine-cur';
     tag.textContent = '当前 ' + f.cur;
-    // 滑杆/数字输入双向同步；编辑过的键记为 dirty，轮询刷新时不覆盖用户正在改的值
+    // 滑杆/数字输入双向同步；编辑过的键记为 dirty，轮询刷新时不覆盖用户正在改的值。
+    // 改动在「松开滑杆 / 离开数字框（change）」后自动提交 → 调完立即生效。
     const markDirty = (from) => {
       fineDirty[f.key] = true;
       row.classList.add('dirty');
       if (from === range) num.value = range.value;
       else if (from === num && Number.isFinite(Number(num.value))) range.value = num.value;
-      updateFineEstimate(a.id);          // 改动项数/费用预览实时更新
+      updateFineEstimate(a.id);
+    };
+    const queueAuto = () => {
+      if (!active) return;
+      if (fineAutoTimers[a.id]) clearTimeout(fineAutoTimers[a.id]);
+      fineAutoTimers[a.id] = setTimeout(() => {
+        fineAutoTimers[a.id] = 0;
+        if (envIsActive()) envApplyFine(a, true);
+      }, 320);
     };
     range.addEventListener('input', () => markDirty(range));
     num.addEventListener('input', () => markDirty(num));
-    fineInputs[f.key] = { range, num, tag, cur: f.cur, min: lo, max: hi };
+    range.addEventListener('change', queueAuto);
+    num.addEventListener('change', queueAuto);
+    fineInputs[f.key] = { row, range, num, tag, cur: f.cur, min: lo, max: hi };
     row.appendChild(lab);
     row.appendChild(range);
     row.appendChild(num);
     row.appendChild(tag);
     g.appendChild(row);
+    if (f.desc) {
+      const desc = document.createElement('div');
+      desc.className = 'fine-desc';
+      desc.textContent = f.desc;
+      g.appendChild(desc);
+    }
+  };
+  const basic = fine.filter((f) => !f.advanced);
+  const advanced = fine.filter((f) => f.advanced);
+  basic.forEach(addRow);
+  if (advanced.length) {
+    if (fineExpanded) {
+      const sep = document.createElement('div');
+      sep.className = 'fine-advanced-sep';
+      sep.textContent = '高级参数';
+      g.appendChild(sep);
+      advanced.forEach(addRow);
+    } else {
+      const tip = document.createElement('div');
+      tip.className = 'fine-advanced-tip';
+      tip.textContent = '还有 ' + advanced.length + ' 个高级参数：点右上角「展开更多」';
+      g.appendChild(tip);
+    }
   }
   const est = document.createElement('span');
   est.className = 'fine-est';
   g.appendChild(est);
   const apply = document.createElement('button');
   apply.className = 'fine-apply';
-  apply.textContent = '应用「' + (a.name || a.id) + '」细调';
+  apply.textContent = '立即应用「' + (a.name || a.id) + '」细调';
   apply.disabled = !active;
-  apply.addEventListener('click', () => envApplyFine(a));
+  apply.addEventListener('click', () => envApplyFine(a, false));
   g.appendChild(apply);
   fineGroupUI[a.id] = { axis: a, est: est, apply: apply };
   updateFineEstimate(a.id);
   return g;
 }
 
-function envApplyFine(a) {
+async function envApplyFine(a, auto) {
   if (!envIsActive()) return;
   // 用最新一轮 /env 的轴对象（按钮闭包里的 a 可能来自上一次渲染，fine.cur 已过期）
   const axis = axisById(a.id) || a;
@@ -1944,15 +2095,21 @@ function envApplyFine(a) {
   }
   const changed = fineChangedList(axis);   // 与费用预览同一口径（已按 min/max 钳制）
   if (!changed.length) {
-    showEnvToast('没有改动（数值与当前一致）', false);
+    if (!auto) showEnvToast('没有改动（数值与当前一致）', false);
     return;
   }
   const lines = changed.map((c) => 'fine.' + c.f.key + '=' + c.v);
-  // 成功/失败后清 dirty，让轮询回来的服务端当前值接管显示
-  for (const f of fine) fineDirty[f.key] = false;
+  const ok = await postEnv(lines.join('\n') + '\n',
+    (auto ? '已立即应用：' : '细调已应用：') + (axis.name || axis.id) +
+    '（' + changed.length + ' 项）');
+  if (!ok) return;
+  // 成功后才清 dirty；失败时保留用户输入，方便重试。
+  for (const f of fine) {
+    fineDirty[f.key] = false;
+    const rec = fineInputs[f.key];
+    if (rec && rec.row) rec.row.classList.remove('dirty');
+  }
   updateFineEstimate(axis.id);
-  postEnv(lines.join('\n') + '\n',
-    '细调已应用：' + (axis.name || axis.id) + '（' + changed.length + ' 项）');
 }
 
 // 面板按钮/关闭按钮/轮询
@@ -1960,6 +2117,12 @@ el('btn-events').addEventListener('click', toggleEvents);
 el('btn-fine').addEventListener('click', toggleFine);
 el('event-close').addEventListener('click', closeEvents);
 el('fine-close').addEventListener('click', closeFineDrawer);
+el('fine-expand').addEventListener('click', () => {
+  fineExpanded = !fineExpanded;
+  fineSig = '';                     // 强制重建：高级参数行要插入/移除
+  renderFineDrawer();
+  layoutEnvPanels();
+});
 // 窗口缩放 / HUD「渲染自检」展开收起都会改变可用高度 → 已打开的面板重新限高定位
 window.addEventListener('resize', () => { if (eventsOpen || fineOpen) layoutEnvPanels(); });
 (function hookHudDebugToggle() {
@@ -1977,6 +2140,7 @@ setInterval(() => {
 resizeCanvas();          // 先按 #stage 实际尺寸重建位图，否则 1280×720 位图会被 CSS 拉伸成椭圆
 updateZoomLabel();
 loadSidebar();           // 恢复上次的侧栏折叠状态（会再次触发 resizeCanvas）
+loadHud();               // 恢复右侧状态栏的折叠状态
 loadQuick();             // 回填上次的快速设置（seed/balls/nuclei/frames）
 loadEnvPrefs();          // 回填「启用蓝细菌 / 推荐生态 mod」勾选状态（默认都勾选）
 requestAnimationFrame(renderLoop);
@@ -2007,9 +2171,195 @@ async function saveCurrent() {
     const b64 = dataUrl.slice(dataUrl.indexOf(',') + 1);
     await postBody('/save-thumb', 'name=' + name + '\n' + b64);
   } catch (e) { /* 缩略图失败不阻塞 */ }
+  if (timelineOpen) { await fetchTimelineData(); renderTimelinePanel(); }
   alert('已保存存档「' + name + '」，可在「存档」页查看');
 }
 el('btn-save').addEventListener('click', saveCurrent);
+
+// ---------- 存档时间轴：拖动查看历史帧 / 变动世界线（v2.3.0） ----------
+function timelineRange() {
+  if (!timelineData || !timelineData.ok) return null;
+  const cs = Array.isArray(timelineData.checkpoints) ? timelineData.checkpoints : [];
+  const min = Number.isFinite(timelineData.min) ? timelineData.min : (cs.length ? cs[0] : 0);
+  const max = Number.isFinite(timelineData.max) ? timelineData.max : (cs.length ? cs[cs.length - 1] : 0);
+  if (max < min) return null;
+  return { min, max, count: cs.length };
+}
+function setTimelineBusy(b) {
+  timelineBusy = b;
+  for (const id of ['tl-range', 'tl-frame', 'btn-tl-view', 'btn-tl-branch']) {
+    const n = el(id);
+    if (n) n.disabled = b;
+  }
+}
+function closeTimelinePanel() {
+  timelineOpen = false;
+  timelineDragging = false;
+  document.body.classList.remove('timeline-open');
+  setCls('timeline-panel', 'show', false);
+  if ((eventsOpen || fineOpen) && typeof layoutEnvPanels === 'function') layoutEnvPanels();
+}
+async function fetchTimelineData() {
+  try {
+    const res = await fetch('/timeline', { cache: 'no-store' });
+    if (!res.ok) return null;
+    const d = await res.json();
+    if (d && d.ok) timelineData = d;
+    return d;
+  } catch (e) { return null; }
+}
+function renderTimelinePanel() {
+  if (!timelineData || !timelineData.ok) return;
+  const r = timelineRange();
+  const range = el('tl-range'), num = el('tl-frame');
+  if (!r) {
+    if (range) range.disabled = true;
+    if (num) num.disabled = true;
+    setTxt('tl-current', '当前帧 ' + frame);
+    setTxt('tl-hint', '这个存档没有可用的历史检查点。');
+    return;
+  }
+  if (range) {
+    range.min = String(r.min);
+    range.max = String(r.max);
+    range.disabled = timelineBusy || r.min >= r.max;
+  }
+  if (num) {
+    num.min = String(r.min);
+    num.max = String(r.max);
+    num.disabled = timelineBusy || r.min >= r.max;
+  }
+  if (!timelineDragging && !timelineBusy) {
+    const cur = Math.max(r.min, Math.min(r.max, frame));
+    if (range) range.value = String(cur);
+    if (num) num.value = String(cur);
+  }
+  setTxt('tl-source', '来源：' + (timelineData.source || '当前世界'));
+  setTxt('tl-current', timelineBusy ? '定位中…' : ('当前帧 ' + frame));
+  setTxt('tl-hint', r.min >= r.max
+    ? '这个存档只有 1 个检查点；继续运行并保存后会积累更多可查看帧。'
+    : ('共 ' + r.count + ' 个检查点（每 200 帧一个）。可查看 ' + r.min + '–' + r.max +
+       ' 帧：拖动滑杆松开或输入帧号后点「查看」。定位后按「变动世界线」可从这里开新局。'));
+}
+async function openTimelinePanel() {
+  if (uiState !== 'paused') {
+    showEnvToast('时间轴只会在暂停/读档后打开；请先暂停', false);
+    return;
+  }
+  closeEnvPanels();
+  const d = await fetchTimelineData();
+  if (!d || !d.ok) {
+    showEnvToast('时间轴不可用：' + ((d && d.err) || '没有读档或后端未就绪'), false);
+    return;
+  }
+  timelineOpen = true;
+  document.body.classList.add('timeline-open');
+  setCls('timeline-panel', 'show', true);
+  renderTimelinePanel();
+  layoutEnvPanels();
+}
+async function seekTimeline(target, announce) {
+  if (timelineBusy) return false;
+  const r = timelineRange();
+  if (!r) return false;
+  target = Math.max(r.min, Math.min(r.max, Math.round(Number(target) || 0)));
+  setTimelineBusy(true);
+  setTxt('tl-current', '定位中…');
+  let json = null;
+  try {
+    const res = await fetch('/seek', {
+      method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: 'frame=' + target,
+    });
+    json = await res.json();
+  } catch (e) { json = null; }
+  setTimelineBusy(false);
+  if (!json || !json.ok) {
+    showEnvToast('定位失败：' + ((json && json.err) || '网络错误'), false);
+    if (timelineOpen) renderTimelinePanel();
+    return false;
+  }
+  buf.fill(0);                  // 时间轴回跳后旧轨迹没有意义
+  frame = json.frame;
+  await pollState();
+  await fetchTimelineData();
+  if (timelineOpen) renderTimelinePanel();
+  if (announce) showEnvToast('已定位到帧 ' + json.frame, true);
+  return true;
+}
+el('btn-timeline').addEventListener('click', openTimelinePanel);
+el('btn-timeline-close').addEventListener('click', closeTimelinePanel);
+el('tl-range').addEventListener('input', () => {
+  timelineDragging = true;
+  const v = el('tl-range').value;
+  el('tl-frame').value = v;
+  setTxt('tl-current', '目标帧 ' + v);
+});
+el('tl-range').addEventListener('change', () => {
+  timelineDragging = false;
+  seekTimeline(el('tl-range').value, true);
+});
+el('tl-frame').addEventListener('change', () => seekTimeline(el('tl-frame').value, true));
+el('btn-tl-view').addEventListener('click', () => seekTimeline(el('tl-frame').value, true));
+
+function enterBranchMode(target) {
+  branchMode = true;
+  branchFrame = target;
+  el('branch-frame').textContent = String(target);
+  el('branch-banner').classList.add('show');
+  closeTimelinePanel();
+}
+function cancelBranchMode() {
+  branchMode = false;
+  el('branch-banner').classList.remove('show');
+}
+el('btn-tl-branch').addEventListener('click', async () => {
+  if (timelineBusy) return;
+  const r = timelineRange();
+  if (!r) return;
+  let target = Math.round(Number(el('tl-frame').value));
+  if (!Number.isFinite(target)) target = frame;
+  target = Math.max(r.min, Math.min(r.max, target));
+  if (target !== frame) {
+    const ok = await seekTimeline(target, false);
+    if (!ok) return;
+  }
+  enterBranchMode(frame);
+  switchTab('params');
+  schemaData = null;                  // 强制按“当前世界配置”重载参数页
+  await loadSchema();
+  showEnvToast('已进入世界线分支：调整参数后点「开始新世界线」', true);
+});
+el('btn-branch-cancel').addEventListener('click', () => {
+  cancelBranchMode();
+  switchTab('run');
+});
+el('btn-branch-start').addEventListener('click', async () => {
+  if (!branchMode) return;
+  if (!schemaData) await loadSchema();
+  const frames = Math.max(1, Math.round(Number(el('branch-frames').value) || 100000));
+  const body = collectParams() + 'frames=' + frames + '\n';
+  if (!body) { showEnvToast('参数尚未加载完成', false); return; }
+  el('btn-branch-start').disabled = true;
+  let json = null;
+  try {
+    const res = await fetch('/branch', {
+      method: 'POST', headers: { 'Content-Type': 'text/plain' }, body,
+    });
+    json = await res.json();
+  } catch (e) { json = null; }
+  el('btn-branch-start').disabled = false;
+  if (!json || !json.ok) {
+    showEnvToast('分支失败：' + ((json && json.err) || '网络错误'), false);
+    return;
+  }
+  cancelBranchMode();
+  timelineData = null;
+  switchTab('run');
+  buf.fill(0);
+  showEnvToast('世界线已从帧 ' + json.frame + ' 重新开始', true);
+  setTimeout(pollStatus, 100);
+});
+
 
 function mkBtn(text) {
   const b = document.createElement('button');
@@ -2062,8 +2412,10 @@ async function loadSaves() {
     bLoad.disabled = uiState !== 'menu';
     bLoad.title = bLoad.disabled ? '返回菜单后可载入' : '';
     bLoad.onclick = async () => {
+      autoTimeline = true;                  // 读档完成后暂停 → 自动打开时间轴
       await postBody('/load', 'name=' + s.name);
       switchTab('run');
+      setTimeout(() => { autoTimeline = false; }, 12000);   // 读档失败时不至于一直挂着
     };
     const bDel = mkBtn('删除');
     bDel.onclick = async () => {

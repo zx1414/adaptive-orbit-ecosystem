@@ -67,7 +67,7 @@ cyano_ball_spawn_cost = 8.0              # 产出一个自由小球的能量成�
 cyano_ball_spawn_probability = 0.002     # 每节点每帧产球概率
 cyano_reproduction_cost = 20.0           # 繁殖一个新节点的能量成本
 cyano_reproduction_probability = 0.001   # 每节点每帧繁殖概率
-cyano_reproduction_offset = 25.0         # 子节点散布距离上限
+cyano_reproduction_offset = 125.0        # 子节点散布距离上限（v2.3.0：至少为旧值 25 的 5 倍，避免子代贴脸）
 cyano_min_node_separation = 15.0         # 节点最小间距；小于该距离繁殖被取消（防重叠）
 
 # ---- 核捕食蓝细菌 ----

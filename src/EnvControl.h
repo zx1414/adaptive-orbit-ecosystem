@@ -28,6 +28,8 @@ struct EnvFineKnob {
     const char* key = "";
     const char* label = "";
     const char* unit = "";
+    const char* desc = "";    // 一句话说明（前端直接显示，不写长文）
+    bool advanced = false;    // true = 展开后显示的高级参数
 };
 
 struct EnvAxisDef {

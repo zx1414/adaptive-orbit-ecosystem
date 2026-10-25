@@ -25,7 +25,7 @@
 #include "mods_registry.h"
 
 namespace {
-constexpr const char* kVersion = "2.2.1";  // 发布版本（--version 查看）；2.2.1 = 图例动态化 + 小球形状分型 + 手动事件无冷却
+constexpr const char* kVersion = "2.3.0";  // 发布版本（--version 查看）；2.3.0 = 时间轴/世界线分支 + 竖排状态栏 + 即时细调
 
 struct Args {
     double width = 2000.0;
