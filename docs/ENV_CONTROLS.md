@@ -1,4 +1,4 @@
-# 实时环境调控（v2.3.0）
+# 实时环境调控（v2.3.1）
 
 玩家扮演“环境意志”：不直接操控核，而是通过光照、食物、压力、生产者四条轴塑造选择压力，让不同策略在演化中此消彼长。
 
@@ -21,10 +21,10 @@
 
 - 光照：`sun_base_level`、`sun_day_amplitude`；高级：`sun_day_period_frames`、`sun_vertical_gradient`、`sun_noise_amplitude`
 - 食物：`ball_spawn_probability`、`base_ball_energy`；高级：`ball_vel_range`
-- 压力：`basal_cost`、`speed_cost_k`；高级：`speed_cost_exponent`、`reproduction_cost_ratio`
+- 压力：`basal_cost`、`speed_cost_k`；高级：`speed_cost_exponent`、`reproduction_cost_ratio`、`mutation_coefficient`（变异系数：子代变异幅度倍数，默认 1）
 - 生产者：`cyano_photosynthesis_rate`、`cyano_metabolism_rate`；高级：`cyano_reproduction_probability`、`cyano_reproduction_offset`（默认 125）、`cyano_ball_spawn_probability`、`cyano_transfer_rate`、`cyano_predation_radius`、`cyano_min_node_separation`
 
-**调节后立即应用**：松开滑杆或离开数字框即自动提交（也可点「立即应用本轴」按钮）。一次提交（一次 `POST /env`）中所有 `fine.*` **合计只扣 3 影响力**（无论几个键）；影响力不足 3 时整批拒绝；无变化不扣费。白名单外的配置键（如 `width/height/seed`）返回“该参数不支持实时细调”。
+**调节后立即应用**：松开滑杆或离开数字框即自动提交（也可点「立即应用本轴」按钮）。一次提交（一次 `POST /env`）中所有 `fine.*` **合计只扣 3 影响力**（无论几个键）；影响力不足 3 时整批拒绝；无变化不扣费。白名单外的配置键（如 `width/height/seed`）返回“该参数不支持实时细调”。默认核觅食半径 `forage_radius = 800`（参数页可调）。
 
 ## 3. 影响力
 

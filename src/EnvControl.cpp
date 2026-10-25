@@ -99,7 +99,8 @@ std::vector<EnvAxisDef> buildAxes() {
         a.fine = {makeKnob("basal_cost", "基础代谢", "", "每帧固定能量消耗"),
                   makeKnob("speed_cost_k", "速度代价", "", "跑得快的额外消耗"),
                   makeKnob("speed_cost_exponent", "速度代价指数", "", "越大高速惩罚越狠", true),
-                  makeKnob("reproduction_cost_ratio", "繁殖成本", "", "父核繁殖时扣除比例", true)};
+                  makeKnob("reproduction_cost_ratio", "繁殖成本", "", "父核繁殖时扣除比例", true),
+                  makeKnob("mutation_coefficient", "变异系数", "", "子代变异幅度倍数（进化速度）", true)};
         v.push_back(std::move(a));
     }
 

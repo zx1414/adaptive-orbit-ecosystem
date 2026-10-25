@@ -687,8 +687,8 @@ void World::reproduce() {
 
         Nucleus child = n;
         child.age = 0;  // 新生核从 0 岁开始（保护期）
-        child.params.mutate(rng_, n.params.mutationRate, config_.ranges,
-                            config_.initialCyanoNodes > 0);
+        child.params.mutate(rng_, n.params.mutationRate * config_.mutationCoefficient,
+                            config_.ranges, config_.initialCyanoNodes > 0);
         child.pos.x += randRange(rng_, -config_.reproductionOffset, config_.reproductionOffset);
         child.pos.y += randRange(rng_, -config_.reproductionOffset, config_.reproductionOffset);
         child.pos.x = std::clamp(child.pos.x, 0.0, config_.width);

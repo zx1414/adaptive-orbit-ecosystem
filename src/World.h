@@ -110,7 +110,7 @@ struct WorldConfig {
     double combatRate = 0.05;       // 争斗能量转移速率
     double influenceMargin = 20.0;  // 核力场查询半径的额外余量
     double forageK = 1.0;           // 核朝小球觅食的加速度系数
-    double forageRadius = 300.0;    // 核觅食的小球查询半径
+    double forageRadius = 800.0;    // 核觅食的小球查询半径
     double wanderK = 2.0;           // 核随机游走（探索）加速度系数
     double wanderTurnRate = 0.1;     // 随机游走方向每帧最大转向角（弧度），小=路径直，大=原地抖
     double basalCost = 0.01;       // 基础代谢：每帧固定能量流逝（v=0 也不为 0）
@@ -120,6 +120,7 @@ struct WorldConfig {
     double childEnergyRatio = 0.5;  // 子核初始能量 = ratio * energyThreshold
     double nucleusInitEnergyRatio = 0.7; // 初始随机核能量 = ratio * energyThreshold
     double reproductionOffset = 20.0;    // 繁殖时子核位置随机偏移（±该值）
+    double mutationCoefficient = 1.0;    // 全局变异系数：子代扰动幅度 = 个体 mutationRate × 该值
     double nucleusMinSeparation = 40.0;  // 核最小间距：小于该距离施强斥力且跳过攻击
     double nucleusRepelK = 4.0;          // 核贴脸斥力刚度（线性弹簧：F = k × 重叠量）
     int newbornGraceFrames = 30;         // 新核保护期帧数（期内不攻击、不被攻击）

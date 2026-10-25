@@ -25,7 +25,7 @@
 #include "mods_registry.h"
 
 namespace {
-constexpr const char* kVersion = "2.3.0";  // 发布版本（--version 查看）；2.3.0 = 时间轴/世界线分支 + 竖排状态栏 + 即时细调
+constexpr const char* kVersion = "2.3.1";  // 发布版本（--version 查看）；2.3.1 = 可调变异系数 + 默认觅食半径 800 + 当前默认参数打包
 
 struct Args {
     double width = 2000.0;

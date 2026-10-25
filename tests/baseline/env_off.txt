@@ -14,3 +14,5 @@ lock_console = off
 pause_on_exit = off
 cyano_nodes = 0
 max_nuclei = 0
+forage_radius = 300.0
+mutation_coefficient = 1.0
