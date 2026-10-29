@@ -10,7 +10,20 @@
 const HEADER = 80, BALL_REC = 6, NUCL_REC = 32;
 const CYANO_NODE_REC = 24, CYANO_LINK_REC = 8;
 const SNAP_VERSION = 2;   // 只接受 v2 快照
-const FADE = 14;          // 每渲染帧 alpha 衰减量（255 → ~18 帧 ≈ 0.3s 拖尾）
+// C3：拖尾三档（高/低/关）—— FADE 改为可变量；「关」= 每帧整幅清零，
+// 暂停读图时不被残影干扰。选择记忆到 localStorage（与 envPrefs 同约定：失败静默）。
+const TRAIL_LEVELS = [{ name: '高', fade: 14 }, { name: '低', fade: 45 }, { name: '关', fade: 0 }];
+let FADE = 8;             // 每渲染帧 alpha 衰减量（由 TRAIL_LEVELS 驱动；默认「高」）
+let trailLevel = 0;
+try {
+  const saved = parseInt(localStorage.getItem('trailLevel'), 10);
+  if (saved >= 0 && saved < TRAIL_LEVELS.length) trailLevel = saved;
+} catch (e) { /* localStorage 不可用（隐私模式）：保持默认档 */ }
+function applyTrail() {
+  FADE = TRAIL_LEVELS[trailLevel].fade;
+  const b = el('btn-trail');
+  if (b) b.textContent = '拖尾:' + TRAIL_LEVELS[trailLevel].name;
+}
 const FREE_RGB = [158, 158, 158];
 // 三类有主球：色相仍来自所属核（谱系），用「明度 + 形状」双重区分。
 // 旧版只有 0.32/0.58/0.86 明度差；3~5px 小方块在深色背景上仍难分辨，
@@ -251,7 +264,7 @@ function refreshLegend() {
     `<div class="lrow">${colonySw}蓝细菌节点 <span class="lnote">${cy.flat ? '单色' : '按菌落分色'}</span></div>` +
     `<div class="lrow"><span class="lline" style="background:${cyanoLinkCss}"></span>菌丝连线</div>` +
     `<div class="lrow full lhint">环境：底部快调条 4 轴 ± · 事件卡 / 细调抽屉（细调可展开高级参数，调完自动应用；事件无冷却）</div>` +
-    `<div class="lrow full lhint">滚轮缩放（以指针为锚）· 拖拽平移 · 悬停查看核参数 · 双击画布重置视图</div>` +
+    `<div class="lrow full lhint">滚轮缩放（以指针为锚）· 拖拽平移 · 悬停查看核/球信息 · 双击画布重置视图</div>` +
     `<div class="lrow full lhint">快捷键：<span class="kbd">空格</span> 暂停/继续 · ` +
     `<span class="kbd">N</span> 单步 · <span class="kbd">S</span> 保存 · <span class="kbd">H</span> 折叠状态栏</div>` +
     `<div class="lrow full lhint">快捷键：<span class="kbd">R</span> 重置视图 · ` +
@@ -301,6 +314,10 @@ const simDebug = {
 };
 try { window.__simDebug = simDebug; } catch (e) { /* 非浏览器环境（Node 打桩）忽略 */ }
 
+// 球型普查（HUD「球型」组的自由/有主拆分）：stampBalls 每帧在剔除前搭车统计，
+// 不额外遍历。free/owned 按类型（0护盾 1资源 2侦察）分桶。
+const ballCensus = { free: [0, 0, 0], owned: [0, 0, 0] };
+
 // ---------- HTTP 小工具 ----------
 async function postBody(path, body) {
   try {
@@ -315,6 +332,55 @@ async function postCmd(cmd) {
       body: JSON.stringify({ cmd }),
     });
   } catch (e) { /* ignore */ }
+}
+
+// ---------- 通用模态（E1）：替代原生 prompt/alert/confirm ----------
+// 原生弹窗会冻结渲染循环、且白底样式与暗色 UI 割裂；统一走 #ask-modal。
+// 用法：await askModal({ title, body?, input?: {value}, okText?, danger? })
+//   无 input → resolve(true/false)（confirm 语义）；有 input → resolve(字符串/null)（prompt 语义）。
+function askModal(opts) {
+  return new Promise((resolve) => {
+    const m = el('ask-modal');
+    const box = m.querySelector('.ask-box');
+    const title = m.querySelector('.ask-title');
+    const body = m.querySelector('.ask-body');
+    const inp = el('ask-input');
+    const ok = el('ask-ok');
+    const cancel = el('ask-cancel');
+    title.textContent = opts.title || '';
+    body.textContent = opts.body || '';
+    body.style.display = opts.body ? '' : 'none';
+    inp.style.display = opts.input ? '' : 'none';
+    if (opts.input) inp.value = opts.input.value || '';
+    ok.textContent = opts.okText || '确定';
+    ok.classList.toggle('danger', !!opts.danger);
+    m.classList.add('show');
+    box.style.transform = 'scale(.96)';
+    requestAnimationFrame(() => { box.style.transition = 'transform .12s'; box.style.transform = 'scale(1)'; });
+    const done = (val) => {
+      m.classList.remove('show');
+      box.style.transition = '';
+      ok.removeEventListener('click', onOk);
+      cancel.removeEventListener('click', onCancel);
+      inp.removeEventListener('keydown', onInputKey);
+      document.removeEventListener('keydown', onModalKey, true);
+      resolve(val);
+    };
+    const onOk = () => done(opts.input ? inp.value.trim() : true);
+    const onCancel = () => done(opts.input ? null : false);
+    const onInputKey = (ev) => {
+      if (ev.key === 'Enter') { ev.preventDefault(); onOk(); }
+    };
+    // 捕获阶段拦截：模态打开时 Esc 归模态管，不触发全局快捷键（含两段式返回菜单）
+    const onModalKey = (ev) => {
+      if (ev.key === 'Escape') { ev.stopPropagation(); ev.preventDefault(); onCancel(); }
+    };
+    ok.addEventListener('click', onOk);
+    cancel.addEventListener('click', onCancel);
+    inp.addEventListener('keydown', onInputKey);
+    document.addEventListener('keydown', onModalKey, true);
+    if (opts.input) { inp.focus(); inp.select(); } else { ok.focus(); }
+  });
 }
 
 // ---------- 标签页 ----------
@@ -349,19 +415,22 @@ function setUiState(s) {
   else if (s === 'running') badge.textContent = '运行中';
   else if (s === 'paused') badge.textContent = '已暂停';
   else if (s === 'finished') badge.textContent = '已结束';
-  // 控制按钮可用性
+  // 控制按钮可用性（A1：随状态互斥 —— 按钮本身要能读出当前是跑还是停）
   const running = s === 'running' || s === 'paused';
   const simActive = running || s === 'finished';
   el('btn-start').disabled = simActive;
   el('btn-save-start').disabled = simActive;
-  el('btn-pause').disabled = !running;
-  el('btn-resume').disabled = !running;
-  el('btn-step').disabled = !running;
-  el('btn-stop').disabled = !running;
+  el('btn-pause').disabled = s !== 'running';    // 只有运行中可暂停
+  el('btn-resume').disabled = s !== 'paused';    // 只有暂停中可继续
+  el('btn-step').disabled = s !== 'paused';      // 单步只对暂停态有意义
+  el('btn-stop').disabled = !(s === 'running' || s === 'paused');
+  disarmStop();   // A3：状态切换（含开局/结束/回菜单）时解除停止武装，避免残留红态
   el('btn-save').disabled = !simActive;
   el('btn-timeline').disabled = s !== 'paused';
   el('speed').disabled = !running;
   el('overlay').classList.toggle('show', s === 'finished');
+  // A5：结束 overlay 的「相同参数再来一局」只在有可重放参数时出现
+  el('btn-replay').style.display = (s === 'finished' && lastRunBody) ? '' : 'none';
   // 暂停角标：只在画布上叠一个很淡的状态提示，不挡内容（CSS pointer-events:none）
   el('paused-badge').classList.toggle('show', s === 'paused');
   // 空状态只在「未运行」时出现：启动后淡出；结束态用 overlay，两者不同时显示
@@ -373,6 +442,7 @@ function setUiState(s) {
   if (prev !== 'running' && prev !== 'paused' && running) {
     buf.fill(0);           // 新一次运行：清空轨迹
     viewDirty = true;
+    resetCyanoSummary();   // B5：新一局的「未出现/已灭绝」口径重新计
   }
   if (prev === 'finished' && s === 'menu') {
     buf.fill(0);
@@ -382,12 +452,14 @@ function setUiState(s) {
     if (s === 'menu' || s === 'finished') {
       closeEnvPanels();   // 菜单/结束态不允许余留面板
       closeTimelinePanel();
+      disarmStop();       // A3：离开运行态时解除停止武装（文案/样式还原）
     }
     if (s === 'menu') {
       envData = null;                        // 新一局从干净状态开始
       timelineData = null;
       autoTimeline = false;
       cancelBranchMode();
+      resetCyanoSummary();                   // B5：菜单态重新计「未出现」
     }
     renderEnvUi();     // 先按新状态重置可用性/提示（菜单态不显示上一局的影响力残余）
     fetchEnv();        // 再拉一次 /env（菜单态后端用 pendingCfg_ 构造只读预览）
@@ -509,11 +581,68 @@ async function pollState() {
       reason = new TextDecoder('utf-8').decode(reasonBytes.subarray(0, reasonLen));
       setUiState('finished');
     }
+    sampleTrend();
     if (timelineOpen && !timelineBusy && !timelineDragging) {
       setTxt('tl-current', '当前帧 ' + frame);
       renderTimelinePanel();
     }
   } catch (e) { /* 轮询间隙服务器忙：忽略 */ }
+}
+
+// ---------- 趋势 sparkline（HUD「趋势」面板）----------
+// pollState 每 50ms 一次（20Hz），每 4 次采样一次 → 5Hz；环形窗口 300 点 ≈ 60 秒。
+// 双序列双比例：核（蓝）数量级远小于球（灰），各按窗口内最大值归一，否则核线会被压平。
+const SPARK_MAX = 300;
+// 两条序列的颜色（index.html「趋势」图例色点与此同源，改色需两处同步）
+const SPARK_NUC_CSS = 'rgba(90, 160, 255, 0.95)';
+const SPARK_BALL_CSS = 'rgba(138, 146, 156, 0.7)';
+const spark = { nuc: [], ball: [] };
+let sparkTick = 0, lastTrendFrame = -1;
+function sampleTrend() {
+  if (!sim) return;
+  if ((++sparkTick & 3) !== 0) return;
+  // 开新局（帧号回跳）→ 旧趋势作废，重新积累
+  if (frame < lastTrendFrame) { spark.nuc.length = 0; spark.ball.length = 0; }
+  lastTrendFrame = frame;
+  spark.nuc.push(sim.nucleusCount);
+  spark.ball.push(sim.ballCount);
+  if (spark.nuc.length > SPARK_MAX) { spark.nuc.shift(); spark.ball.shift(); }
+  spark.dirty = true;
+}
+function drawSparkline() {
+  const c = el('sparkline');
+  if (!c) return;
+  const g = c.getContext('2d');
+  const w = c.width, h = c.height;
+  g.clearRect(0, 0, w, h);
+  const n = spark.nuc.length;
+  if (n < 2) return;
+  // B1：右锚定 —— 新数据永远贴右缘、历史向左生长；窗口未填满时不再整条挤在最左侧
+  const stepX = w / (SPARK_MAX - 1);
+  const drawSeries = (data, color, minMax) => {
+    let max = minMax;
+    for (let i = 0; i < n; i++) if (data[i] > max) max = data[i];
+    g.beginPath();
+    for (let i = 0; i < n; i++) {
+      const x = w - (n - 1 - i) * stepX;
+      const y = h - 2 - (data[i] / max) * (h - 8);
+      if (i === 0) g.moveTo(x, y); else g.lineTo(x, y);
+    }
+    g.strokeStyle = color;
+    g.lineWidth = 1.2;
+    g.stroke();
+    return max;
+  };
+  drawSeries(spark.ball, SPARK_BALL_CSS, 10);
+  drawSeries(spark.nuc, SPARK_NUC_CSS, 5);
+  // B1：右上角当前值读数 —— 两种系列色分别标注核/球，不用悬停就能回答「现在多少」
+  g.font = '10px Consolas, monospace';
+  g.textAlign = 'right';
+  g.textBaseline = 'top';
+  g.fillStyle = SPARK_NUC_CSS;
+  g.fillText('核 ' + spark.nuc[n - 1], w - 2, 2);
+  g.fillStyle = SPARK_BALL_CSS;
+  g.fillText('球 ' + spark.ball[n - 1], w - 2, 13);
 }
 
 function fitView() {
@@ -618,6 +747,8 @@ function stampBalls() {
   const typeMode = palette && palette.mode === 'type_color';
   simDebug.counts.balls = n;
   let drawn = 0;
+  ballCensus.free[0] = ballCensus.free[1] = ballCensus.free[2] = 0;
+  ballCensus.owned[0] = ballCensus.owned[1] = ballCensus.owned[2] = 0;
   for (let i = 0; i < n; i++) {
     const off = sim.ballOff + i * BALL_REC;
     const wx = dv.getUint16(off, true) * sxToW;
@@ -625,10 +756,13 @@ function stampBalls() {
     const meta = dv.getUint16(off + 4, true);
     const px = ((wx - ox) * scale) | 0;
     const py = ((wy - oy) * scale) | 0;
-    if (px < -2 || px >= W + 2 || py < -2 || py >= H + 2) continue;
-    drawn++;
+    // 球型普查：在剔除之前计数（统计口径 = 全部球，而非视口内球）。
+    // meta 布局（与 WebRenderer.cpp 逐字节一致）：bit0..1 = 类型，bit2..15 = 归属核下标+1（0 = 自由球）。
     const type = meta & 3;
     const ownerBits = meta >> 2;
+    if (ownerBits === 0) ballCensus.free[type]++; else ballCensus.owned[type]++;
+    if (px < -2 || px >= W + 2 || py < -2 || py >= H + 2) continue;
+    drawn++;
     let col;
     if (typeMode) {
       col = typeModeColors[type];
@@ -806,6 +940,92 @@ function drawCyano() {
 }
 
 let fpsFrames = 0, fpsT0 = performance.now(), fps = -1;   // fps < 0 = 尚未测出（HUD 显示 --）
+
+// ---------- C1：世界参考系（边界 + nice step 网格 + 界外罩） ----------
+// putImageData 每帧整幅覆盖画布，参考系画在它之后既不会被覆盖、也不会像拖尾一样累积糊屏。
+function niceStep(raw) {
+  if (!(raw > 0) || !Number.isFinite(raw)) return 1;
+  const p = Math.pow(10, Math.floor(Math.log10(raw)));
+  const m = raw / p;
+  return (m >= 5 ? 5 : m >= 2 ? 2 : 1) * p;
+}
+function drawWorldFrame() {
+  if (!Number.isFinite(worldW) || !Number.isFinite(worldH) ||
+      !Number.isFinite(scale) || scale <= 0 || !(worldW > 0) || !(worldH > 0)) return;
+  const t0 = performance.now();
+  const bx = (0 - ox) * scale, by = (0 - oy) * scale;   // 世界原点 → 屏幕坐标
+  const bw = worldW * scale, bh = worldH * scale;
+  const x0 = Math.max(0, bx), x1 = Math.min(W, bx + bw);
+  const y0 = Math.max(0, by), y1 = Math.min(H, by + bh);
+  // 界外罩：世界矩形之外的四条带（左/右全高，上/下夹在世界横向范围内，避免角上叠两层变深）
+  ctx.fillStyle = 'rgba(0,0,0,0.5)';
+  if (x0 > 0) ctx.fillRect(0, 0, x0, H);
+  if (x1 < W) ctx.fillRect(x1, 0, W - x1, H);
+  if (y0 > 0 && x1 > x0) ctx.fillRect(x0, 0, x1 - x0, y0);
+  if (y1 < H && x1 > x0) ctx.fillRect(x0, y1, x1 - x0, H - y1);
+  if (x1 > x0 && y1 > y0) {
+    // 网格：世界坐标对齐的 1/2/5×10^k 步长，屏幕间距钉在 ~100px（60~140 区间内），
+    // 不随缩放密度爆炸；所有线并入单条 path 一次 stroke。
+    const step = niceStep(100 / scale);
+    const gx0 = Math.max(0, ox), gx1 = Math.min(worldW, ox + W / scale);
+    const gy0 = Math.max(0, oy), gy1 = Math.min(worldH, oy + H / scale);
+    ctx.beginPath();
+    for (let wx = Math.ceil(gx0 / step) * step; wx <= gx1 + 1e-6; wx += step) {
+      const sx = (wx - ox) * scale;
+      ctx.moveTo(sx, y0);
+      ctx.lineTo(sx, y1);
+    }
+    for (let wy = Math.ceil(gy0 / step) * step; wy <= gy1 + 1e-6; wy += step) {
+      const sy = (wy - oy) * scale;
+      ctx.moveTo(x0, sy);
+      ctx.lineTo(x1, sy);
+    }
+    ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    // 世界边界（任何缩放级别都可见）
+    ctx.strokeStyle = 'rgba(88,166,255,0.30)';
+    ctx.strokeRect(bx, by, bw, bh);
+  }
+  // 性能红线自检探针（C1：整个函数 ≤0.5ms@1000px 宽），控制台读 window.__worldFrameMs
+  try { window.__worldFrameMs = performance.now() - t0; } catch (e) { /* ignore */ }
+}
+
+// ---------- B4：球型占比条（颜色与图例 legendTypeCss 同源，type_color 材质自动跟随） ----------
+function setTypeBar(id, cnt, total, t, hue) {
+  const seg = el(id);
+  if (!seg) return;
+  seg.style.width = (total > 0 ? Math.max(0, Math.min(100, cnt / total * 100)) : 0) + '%';
+  seg.style.background = legendTypeCss(t, hue);
+}
+
+// ---------- B5：蓝细菌摘要（节点连续为 0 超 5 秒 → 收起四行、只留一行去向说明） ----------
+let cyanoZeroSince = -1;   // 本次「节点=0」的起始时间戳；-1 = 当前节点>0
+let cyanoEverSeen = false; // 本局是否出现过节点（区分「未出现」与「已灭绝」）
+function resetCyanoSummary() {
+  cyanoZeroSince = -1;
+  cyanoEverSeen = false;
+  const g = el('cyano-group');
+  if (g) g.classList.remove('summary');
+}
+function updateCyanoPanel(now) {
+  const g = el('cyano-group');
+  if (!g) return;
+  const has = !!(sim && sim.cyanoNodeCount > 0);
+  if (has) {
+    cyanoZeroSince = -1;
+    cyanoEverSeen = true;
+    g.classList.remove('summary');
+    return;
+  }
+  if (cyanoZeroSince < 0) cyanoZeroSince = now;
+  if (now - cyanoZeroSince < 5000) return;   // 5 秒内的短暂归零不打扰
+  if (!g.classList.contains('summary')) g.classList.add('summary');
+  const chk = el('q-cyano');
+  const why = (chk && !chk.checked) ? '未启用' : (cyanoEverSeen ? '已灭绝' : '未出现');
+  setTxt('cyano-summary', '蓝细菌 · ' + why + '（阳光 ' + (sim ? sim.sunLevel.toFixed(2) : '0.00') + '）');
+}
+
 function renderLoop(now) {
   if (fpsFrames >= 30) {
     const dt = now - fpsT0;
@@ -819,7 +1039,7 @@ function renderLoop(now) {
   // 每 16 帧刷新一次；refreshLegend 内部用签名去重，只在真的变化时重建 DOM。
   if ((fpsFrames & 15) === 0) refreshLegend();
   if (sim && (uiState === 'running' || uiState === 'paused' || uiState === 'finished')) {
-    fadeTrail();
+    if (FADE > 0) fadeTrail(); else buf.fill(0);   // C3：拖尾「关」直接清空，跳过整幅衰减循环
     simDebug.counts.balls = sim.ballCount;
     simDebug.counts.nuclei = sim.nucleusCount;
     simDebug.counts.cyanoNodes = sim.cyanoNodeCount;
@@ -832,6 +1052,7 @@ function renderLoop(now) {
     ctx.putImageData(trail, 0, 0);
     drawCyano();
     drawNuclei();
+    drawBallHighlights();
   } else {
     simDebug.counts.balls = simDebug.counts.nuclei = 0;
     simDebug.counts.cyanoNodes = simDebug.counts.cyanoLinks = 0;
@@ -851,22 +1072,35 @@ function renderLoop(now) {
   simDebug.thinning = LINK_THINNING_FLAG;
   LINK_THINNING_FLAG = false;
   updateDebugHud();
+  if (spark.dirty) { drawSparkline(); spark.dirty = false; }
   el('st-frame').textContent = frame;
   el('st-nuclei').textContent = sim ? sim.nucleusCount : 0;
   el('st-balls').textContent = sim ? sim.ballCount : 0;
   el('st-shield').textContent = sim ? sim.typeCount[0] : 0;
   el('st-worker').textContent = sim ? sim.typeCount[1] : 0;
   el('st-scout').textContent = sim ? sim.typeCount[2] : 0;
+  // 球型普查的「自由/有主」拆分（stampBalls 每帧搭车统计；菜单态显示空）。
+  el('st-shield-split').textContent = sim ? `自 ${ballCensus.free[0]} · 属 ${ballCensus.owned[0]}` : '';
+  el('st-worker-split').textContent = sim ? `自 ${ballCensus.free[1]} · 属 ${ballCensus.owned[1]}` : '';
+  el('st-scout-split').textContent = sim ? `自 ${ballCensus.free[2]} · 属 ${ballCensus.owned[2]}` : '';
   el('st-fps').textContent = fps < 0 ? '--' : (fps | 0);   // 未知显示 --，不伪装成 0（D2）
   if (sim && sim.nucleusCount > 0) {
     const dv = sim.dv;
-    let sum = 0;
+    let sum = 0, mx = -Infinity, mn = Infinity;
     for (let i = 0; i < sim.nucleusCount; i++) {
-      sum += dv.getFloat32(sim.nuclOff + i * NUCL_REC + 8, true);
+      const e = dv.getFloat32(sim.nuclOff + i * NUCL_REC + 8, true);
+      sum += e;
+      if (e > mx) mx = e;
+      if (e < mn) mn = e;
     }
     el('st-energy').textContent = (sum / sim.nucleusCount).toFixed(1);
+    // B3：最高/最低核能量 —— 一眼看出贫富差距（共生/溢出类 mod 的直观观测点）
+    el('st-energy-max').textContent = mx.toFixed(1);
+    el('st-energy-min').textContent = mn.toFixed(1);
   } else {
     el('st-energy').textContent = '0';
+    el('st-energy-max').textContent = '0';
+    el('st-energy-min').textContent = '0';
   }
   // 蓝细菌四项：关闭态也必须显示 0 / 0 / 0 / 0.00，不得省略
   el('st-cyano').textContent = sim ? sim.cyanoNodeCount : 0;
@@ -874,6 +1108,16 @@ function renderLoop(now) {
   el('st-cyanoenergy').textContent = sim ? sim.cyanoAvgEnergy.toFixed(1) : '0';
   el('st-sun').textContent = sim ? sim.sunLevel.toFixed(2) : '0.00';
   el('st-cyano').title = simDebug.thinning ? '连线已抽稀（每 4 条画 1 条）' : '';
+  // B4：三型占比条（宽度 = 该类型 ÷ 全场球数；颜色与图例同源）
+  {
+    const hue0 = legendHue();
+    const total = sim ? sim.ballCount : 0;
+    setTypeBar('st-bar-shield', sim ? sim.typeCount[0] : 0, total, 0, hue0);
+    setTypeBar('st-bar-worker', sim ? sim.typeCount[1] : 0, total, 1, hue0);
+    setTypeBar('st-bar-scout', sim ? sim.typeCount[2] : 0, total, 2, hue0);
+  }
+  // B5：蓝细菌「未出现/已灭绝」摘要（内部自带 5 秒防抖，节点>0 时零开销直通）
+  updateCyanoPanel(now || Date.now());
   requestAnimationFrame(renderLoop);
 }
 
@@ -893,6 +1137,9 @@ function updateDebugHud() {
   if (total > 0 && drew === 0) {
     warn.textContent = '⚠ 实体数 ' + total + ' > 0 但绘制数为 0：检查可见性（视口/调色板/渲染路径）';
     warn.classList.add('show');
+    // B2：警告装在默认收起的 details 里等于没报 —— 命中警告时自动展开一次
+    const dbg = el('hud-debug');
+    if (dbg && !dbg.open) dbg.open = true;
   } else {
     warn.textContent = '';
     warn.classList.remove('show');
@@ -901,6 +1148,14 @@ function updateDebugHud() {
 
 // ---------- 视图交互 ----------
 el('btn-reset-view').addEventListener('click', resetView);
+// C3：拖尾档位循环按钮（高→低→关），选择持久化；切「关」立即清一次残影
+applyTrail();
+el('btn-trail').addEventListener('click', () => {
+  trailLevel = (trailLevel + 1) % TRAIL_LEVELS.length;
+  try { localStorage.setItem('trailLevel', String(trailLevel)); } catch (e) { /* ignore */ }
+  applyTrail();
+  if (FADE === 0) buf.fill(0);
+});
 el('btn-zoom-out').addEventListener('click', () => zoomBy(1 / ZOOM_STEP));
 el('btn-zoom-in').addEventListener('click', () => zoomBy(ZOOM_STEP));
 canvas.addEventListener('dblclick', resetView);   // 双击画布 = 重置视图（快捷操作，图例里有提示）
@@ -936,12 +1191,56 @@ window.addEventListener('mouseup', () => {
   dragging = false;
   canvas.classList.remove('dragging');
 });
+// ---------- 悬停高亮：核 ↔ 所属球群的可视关联 ----------
+// showTooltip 写入 hoverNucleus（快照核记录下标，-1 = 无）；drawBallHighlights
+// 每帧据此给「悬停核」画虚线选中环，并给它的每颗所属球描一圈同色相细环——
+// 谱系色让「这群球是谁的」一眼可辨，O(B) 仅悬停时发生。
+let hoverNucleus = -1;
+function drawBallHighlights() {
+  if (hoverNucleus < 0 || !sim || hoverNucleus >= sim.nucleusCount) return;
+  const dv = sim.dv;
+  const nOff = sim.nuclOff + hoverNucleus * NUCL_REC;
+  const nx = (dv.getFloat32(nOff, true) - ox) * scale;
+  const ny = (dv.getFloat32(nOff + 4, true) - oy) * scale;
+  const hue = dv.getFloat32(nOff + NUCL_HUE_OFF, true);
+  const css = rgbCss(hslToRgb(hue, 0.85, 0.68));
+  // 选中环：半径与 drawNuclei 的能量环同式（能量越满环越大），虚线以示是交互态
+  const energy = dv.getFloat32(nOff + 8, true);
+  const threshold = dv.getFloat32(nOff + 20, true);
+  const frac = Math.min(1, Math.max(0.15, threshold > 0 ? energy / threshold : 0.15));
+  const r = (3 + 5 * frac) * nucleusSize;
+  ctx.setLineDash([4, 3]);
+  ctx.beginPath();
+  ctx.arc(nx, ny, r + 5, 0, Math.PI * 2);
+  ctx.strokeStyle = css;
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+  ctx.setLineDash([]);
+  // 所属球群描边：环心 = 球左上角 + 半边长（与 stampBalls 的像素块锚点一致）
+  const sxToW = worldW / 65535, syToW = worldH / 65535;
+  for (let i = 0; i < sim.ballCount; i++) {
+    const off = sim.ballOff + i * BALL_REC;
+    const meta = dv.getUint16(off + 4, true);
+    if ((meta >> 2) - 1 !== hoverNucleus) continue;
+    const t = meta & 3;
+    const size = (t < typeSize.length ? typeSize[t] : 2) * 0.9 + 1.5;
+    const bx = (dv.getUint16(off, true) * sxToW - ox) * scale + size / 2 - 0.5;
+    const by = (dv.getUint16(off + 2, true) * syToW - oy) * scale + size / 2 - 0.5;
+    if (bx < -8 || bx >= W + 8 || by < -8 || by >= H + 8) continue;
+    ctx.beginPath();
+    ctx.arc(bx, by, size, 0, Math.PI * 2);
+    ctx.strokeStyle = css;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }
+}
 function showTooltip(e) {
   if (!sim) return;
   const rect = canvas.getBoundingClientRect();
   const mx = (e.clientX - rect.left) * (W / rect.width);
   const my = (e.clientY - rect.top) * (H / rect.height);
   const dv = sim.dv;
+  // 优先核（目标大、信息多）：命中半径 12px。没命中再扫球（球小，半径 7px）。
   let best = -1, bestD = 144;
   for (let i = 0; i < sim.nucleusCount; i++) {
     const off = sim.nuclOff + i * NUCL_REC;
@@ -950,18 +1249,82 @@ function showTooltip(e) {
     const d = (sx - mx) * (sx - mx) + (sy - my) * (sy - my);
     if (d < bestD) { bestD = d; best = i; }
   }
+  let html = '';
+  if (best >= 0) {
+    const off = sim.nuclOff + best * NUCL_REC;
+    // 拥有球数摘要（O(B)，仅悬停时算）：把「牧群规模」直接给到指尖
+    const byType = [0, 0, 0];
+    for (let i = 0; i < sim.ballCount; i++) {
+      const m = dv.getUint16(sim.ballOff + i * BALL_REC + 4, true);
+      if ((m >> 2) - 1 === best) byType[m & 3]++;
+    }
+    const owned = byType[0] + byType[1] + byType[2];
+    // C2：色相数值旁带真实色样，数字不再是抽象概念
+    const hue = dv.getFloat32(off + NUCL_HUE_OFF, true);
+    const hueDot = `<i style="display:inline-block;width:9px;height:9px;border-radius:50%;` +
+      `background:${rgbCss(hslToRgb(hue, 0.85, 0.55))};margin-right:3px;vertical-align:-1px"></i>`;
+    html =
+      `核 #${dv.getInt32(off + NUCL_ID_OFF, true)}<br>` +
+      `能量 ${dv.getFloat32(off + 8, true).toFixed(1)} / 阈值 ${dv.getFloat32(off + 20, true).toFixed(1)}<br>` +
+      `攻击强度 ${dv.getFloat32(off + 12, true).toFixed(1)} · 最大速度 ${dv.getFloat32(off + 16, true).toFixed(1)}<br>` +
+      `拥有球 ${owned}（盾${byType[0]} 资${byType[1]} 侦${byType[2]}）<br>` +
+      // 核记录 32B 里没有捕食偏好 / 加速度比字段（契约 §2），这里只显示快照里真实存在的 hue
+      `色相 ${hueDot}${hue.toFixed(0)}°`;
+  } else {
+    // 球悬停：类型 + 归属。球坐标是 U16 量化的世界坐标（与 stampBalls 同一换算）。
+    const sxToW = worldW / 65535, syToW = worldH / 65535;
+    let bBest = -1, bBestD = 49;
+    for (let i = 0; i < sim.ballCount; i++) {
+      const off = sim.ballOff + i * BALL_REC;
+      const sx = (dv.getUint16(off, true) * sxToW - ox) * scale;
+      const sy = (dv.getUint16(off + 2, true) * syToW - oy) * scale;
+      const d = (sx - mx) * (sx - mx) + (sy - my) * (sy - my);
+      if (d < bBestD) { bBestD = d; bBest = i; }
+    }
+    if (bBest >= 0) {
+      const off = sim.ballOff + bBest * BALL_REC;
+      const meta = dv.getUint16(off + 4, true);
+      const type = meta & 3;
+      const ownerBits = meta >> 2;   // 0 = 自由球；否则 = 归属核在快照核记录中的下标 + 1
+      let who;
+      if (ownerBits === 0) {
+        who = '自由球';
+      } else if (ownerBits - 1 < sim.nucleusCount) {
+        // 快照核记录按 nuclei 数组顺序输出（死亡核已在 step 末移除），
+        // 因此 ownerId == 核记录下标，可直接反查 id 与能量。
+        const nOff = sim.nuclOff + (ownerBits - 1) * NUCL_REC;
+        who = `所属核 #${dv.getInt32(nOff + NUCL_ID_OFF, true)}（能量 ${dv.getFloat32(nOff + 8, true).toFixed(1)}）`;
+      } else {
+        who = '有主球（归属核不在本帧快照中）';
+      }
+      // C2：类型符号着色 —— 有主球用所属核的谱系色，自由球用图例的中性色，
+      // 与图例/画布的形状-颜色体系对齐（不再是灰白裸符号）
+      let symCss;
+      if (palette && palette.mode === 'type_color' && typeModeColors[type]) {
+        symCss = wordCss(typeModeColors[type]);
+      } else {
+        const h = ownerBits > 0 && ownerBits - 1 < sim.nucleusCount
+          ? dv.getFloat32(sim.nuclOff + (ownerBits - 1) * NUCL_REC + NUCL_HUE_OFF, true)
+          : legendHue();
+        symCss = rgbCss(hslToRgb(h, 0.78, TYPE_LIGHT[type]));
+      }
+      html = `<i style="color:${symCss};font-style:normal">${TYPE_MARKS[type]}</i> ${TYPE_NAMES[type]}球<br>${who}`;
+    }
+  }
   const tooltip = el('tooltip');
-  if (best < 0) { tooltip.style.display = 'none'; return; }
-  const off = sim.nuclOff + best * NUCL_REC;
-  tooltip.innerHTML =
-    `核 #${dv.getInt32(off + NUCL_ID_OFF, true)}<br>` +
-    `能量 ${dv.getFloat32(off + 8, true).toFixed(1)} / 阈值 ${dv.getFloat32(off + 20, true).toFixed(1)}<br>` +
-    `攻击强度 ${dv.getFloat32(off + 12, true).toFixed(1)} · 最大速度 ${dv.getFloat32(off + 16, true).toFixed(1)}<br>` +
-    // 核记录 32B 里没有捕食偏好 / 加速度比字段（契约 §2），这里只显示快照里真实存在的 hue
-    `色相 ${dv.getFloat32(off + NUCL_HUE_OFF, true).toFixed(0)}°`;
+  hoverNucleus = html && best >= 0 ? best : -1;   // 高亮跟随 tooltip 的核命中状态
+  // C2：命中实体时光标切十字（区分「可悬停查看」与「可拖拽平移」）；拖拽中不抢
+  canvas.style.cursor = (!dragging && html) ? 'crosshair' : '';
+  if (!html) { tooltip.style.display = 'none'; return; }
+  tooltip.innerHTML = html;
   tooltip.style.display = 'block';
-  tooltip.style.left = (e.clientX - rect.left + 14) + 'px';
-  tooltip.style.top = (e.clientY - rect.top + 14) + 'px';
+  // C2：贴边翻转 —— 靠近右缘/底缘时向左/上弹出，不再被 stage overflow 裁掉
+  let lx = e.clientX - rect.left + 14;
+  let ty = e.clientY - rect.top + 14;
+  if (lx + tooltip.offsetWidth > rect.width - 6) lx = e.clientX - rect.left - tooltip.offsetWidth - 14;
+  if (ty + tooltip.offsetHeight > rect.height - 6) ty = e.clientY - rect.top - tooltip.offsetHeight - 14;
+  tooltip.style.left = Math.max(4, lx) + 'px';
+  tooltip.style.top = Math.max(4, ty) + 'px';
 }
 
 // ---------- 键盘快捷键 ----------
@@ -1009,7 +1372,17 @@ function onGlobalKey(e) {
       if (eventsOpen || fineOpen) { closeEnvPanels(); break; }
       if (timelineOpen) { closeTimelinePanel(); break; }
       if (branchMode) { cancelBranchMode(); break; }
-      if (uiState !== 'menu') postCmd('menu');
+      // A3：两段式返回菜单 —— 第一次提示，2.5 秒内再按才真正丢弃世界
+      if (uiState !== 'menu') {
+        const now = Date.now();
+        if (escArmedAt && now - escArmedAt < 2500) {
+          escArmedAt = 0;
+          postCmd('menu');
+        } else {
+          escArmedAt = now;
+          showEnvToast('再按一次 Esc 返回菜单（当前世界将被丢弃）', false);
+        }
+      }
       break;
     case 'h': case 'H':
       toggleHud();
@@ -1189,7 +1562,30 @@ el('btn-start').addEventListener('click', async () => {
 el('btn-pause').addEventListener('click', () => postCmd('pause'));
 el('btn-resume').addEventListener('click', () => postCmd('resume'));
 el('btn-step').addEventListener('click', () => postCmd('step'));
-el('btn-stop').addEventListener('click', () => postCmd('stop'));
+// A3：两段式停止 —— 单击不再直接毁世界。首次点击进入武装态（变红 + 文案
+// 变「确认停止？」），3 秒内再点才执行；超时/状态切换自动解除武装。
+let stopArmedAt = 0, stopArmTimer = 0;
+let escArmedAt = 0;   // Esc 两段式的武装时间戳（见 onGlobalKey 的 Escape 分支）
+function disarmStop() {
+  stopArmedAt = 0;
+  clearTimeout(stopArmTimer);
+  const b = el('btn-stop');
+  b.textContent = '停止';
+  b.classList.remove('danger-armed');
+}
+el('btn-stop').addEventListener('click', () => {
+  const b = el('btn-stop');
+  if (stopArmedAt && Date.now() - stopArmedAt < 3000) {
+    disarmStop();
+    postCmd('stop');
+    return;
+  }
+  stopArmedAt = Date.now();
+  b.textContent = '确认停止？';
+  b.classList.add('danger-armed');
+  clearTimeout(stopArmTimer);
+  stopArmTimer = setTimeout(disarmStop, 3000);
+});
 el('btn-menu').addEventListener('click', () => postCmd('menu'));
 el('btn-reload').addEventListener('click', () => location.reload());
 el('speed').addEventListener('change', (e) => postCmd('maxfps:' + e.target.value));
@@ -1229,8 +1625,11 @@ async function requestExit() {
   await postCmd('exit');
 }
 el('btn-exit').addEventListener('click', requestExit);
-el('btn-quit').addEventListener('click', () => {
-  if (confirm('确定退出程序？未保存的模拟状态将丢失。')) requestExit();
+el('btn-quit').addEventListener('click', async () => {
+  // E1：原生 confirm → danger 模态
+  if (await askModal({ title: '退出程序', body: '未保存的模拟状态将丢失。', okText: '退出', danger: true })) {
+    requestExit();
+  }
 });
 
 // ---------- 参数页 ----------
@@ -1244,12 +1643,19 @@ const GROUP_HINTS = {
 
 async function loadSchema() {
   const token = ++schemaReq;
+  // E2：加载态占位（弱网/冷启动时参数页不再是空白）
+  el('params-groups').innerHTML = '<div class="hint" style="padding:14px 16px">参数表加载中…</div>';
   try {
     const res = await fetch('/schema', { cache: 'no-store' });
     const data = await res.json();
     if (token !== schemaReq) return;   // 已有更新的请求：丢弃旧响应
     schemaData = data;
-  } catch (e) { return; }
+  } catch (e) {
+    if (token === schemaReq) {
+      el('params-groups').innerHTML = '<div class="hint" style="padding:14px 16px">参数表加载失败（后端未就绪？切页可重试）。</div>';
+    }
+    return;
+  }
   const groups = el('params-groups');
   groups.innerHTML = '';
   const byGroup = new Map();
@@ -1263,11 +1669,26 @@ async function loadSchema() {
     const head = document.createElement('div');
     head.className = 'phead';
     head.textContent = group;
+    // E2：组头可键盘达 —— 之前是纯装饰 div（cursor:pointer 却没有任何行为），
+    // 现在补真实的折叠切换 + tabindex/role/aria-expanded + Enter/空格触发
+    head.tabIndex = 0;
+    head.setAttribute('role', 'button');
+    head.setAttribute('aria-expanded', 'true');
+    head.title = '点击折叠/展开该参数组（Enter / 空格 亦可）';
     const hint = document.createElement('div');
     hint.className = 'grouphint';
     hint.textContent = GROUP_HINTS[group] || '';
     const body = document.createElement('div');
     body.className = 'pbody';
+    const setGroupOpen = (open) => {
+      body.style.display = open ? '' : 'none';
+      hint.style.display = open ? '' : 'none';
+      head.setAttribute('aria-expanded', open ? 'true' : 'false');
+    };
+    head.addEventListener('click', () => setGroupOpen(body.style.display === 'none'));
+    head.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); head.click(); }
+    });
     for (const d of items) {
       const item = document.createElement('div');
       item.className = 'pitem';
@@ -1376,15 +1797,21 @@ el('btn-save-start').addEventListener('click', async () => {
   if (!body) { showEnvToast('参数尚未加载完成，请稍后重试', false); return; }
   el('btn-save-start').disabled = true;
   try {
-    await postBody('/save-config', body);
+    // postBody 会吞掉网络错误，这里必须自己 fetch 才能区分成败（A2：失败要有反馈）
+    const res = await fetch('/save-config', {
+      method: 'POST', headers: { 'Content-Type': 'text/plain' }, body,
+    });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
     await postBody('/run', body);
     closeTimelinePanel();
     timelineData = null;
     cancelBranchMode();
     switchTab('run');
     showEnvToast('参数已保存，并按当前参数开始模拟', true);
+  } catch (e) {
+    showEnvToast('保存并开始失败：网络错误或后端无响应', false);
   } finally {
-    el('btn-save-start').disabled = true;
+    el('btn-save-start').disabled = false;   // A2 修复：恢复可点（旧代码在这里再次禁用 → 失败即死锁）
   }
 });
 el('btn-restore-defaults').addEventListener('click', () => {
@@ -2155,7 +2582,13 @@ syncSpeedFromConfig();  // 帧率下拉框对齐 env_config.txt 的 max_fps
 // ---------- 存档页 ----------
 // 保存当前世界为存档：按钮与快捷键 S 共用同一个实现，避免两处逻辑漂移。
 async function saveCurrent() {
-  const name = prompt('存档名称：', '存档-帧' + frame);
+  // E1：原生 prompt → 应用内模态；成功/失败反馈统一走 env-toast（不再用 alert 冻结渲染）
+  const name = await askModal({
+    title: '保存存档',
+    body: '为这一帧的世界快照命名：',
+    input: { value: '存档-帧' + frame },
+    okText: '保存',
+  });
   if (!name) return;
   let json = { ok: false, err: '网络错误' };
   try {
@@ -2164,7 +2597,7 @@ async function saveCurrent() {
     });
     json = await res.json();
   } catch (e) { /* keep */ }
-  if (!json.ok) { alert('保存失败：' + (json.err || '未知错误')); return; }
+  if (!json.ok) { showEnvToast('保存失败：' + (json.err || '未知错误'), false); return; }
   // 缩略图：截当前画面回传
   try {
     const dataUrl = canvas.toDataURL('image/png');
@@ -2172,7 +2605,7 @@ async function saveCurrent() {
     await postBody('/save-thumb', 'name=' + name + '\n' + b64);
   } catch (e) { /* 缩略图失败不阻塞 */ }
   if (timelineOpen) { await fetchTimelineData(); renderTimelinePanel(); }
-  alert('已保存存档「' + name + '」，可在「存档」页查看');
+  showEnvToast('已保存存档「' + name + '」，可在「存档」页查看', true);
 }
 el('btn-save').addEventListener('click', saveCurrent);
 
@@ -2369,10 +2802,16 @@ function mkBtn(text) {
 
 async function loadSaves() {
   let saves = [];
+  const list0 = el('saves-list');
+  // E2：加载态占位 + 失败提示（此前失败时静默 return，页面停留空白）
+  list0.innerHTML = '<div class="hint" style="padding:14px">存档列表加载中…</div>';
   try {
     const res = await fetch('/saves', { cache: 'no-store' });
     saves = await res.json();
-  } catch (e) { return; }
+  } catch (e) {
+    list0.innerHTML = '<div class="hint" style="padding:14px">存档列表加载失败（后端未就绪？）</div>';
+    return;
+  }
   const list = el('saves-list');
   list.innerHTML = '';
   if (!saves.length) {
@@ -2419,14 +2858,16 @@ async function loadSaves() {
     };
     const bDel = mkBtn('删除');
     bDel.onclick = async () => {
-      if (confirm('删除存档「' + s.name + '」？此操作不可恢复。')) {
+      // E1：原生 confirm → danger 模态
+      if (await askModal({ title: '删除存档', body: `删除存档「${s.name}」？此操作不可恢复。`, okText: '删除', danger: true })) {
         await postBody('/delete-save', 'name=' + s.name);
         loadSaves();
       }
     };
     const bRen = mkBtn('重命名');
     bRen.onclick = async () => {
-      const nn = prompt('新名称：', s.name);
+      // E1：原生 prompt → 应用内模态
+      const nn = await askModal({ title: '重命名存档', input: { value: s.name }, okText: '重命名' });
       if (nn && nn !== s.name) {
         await postBody('/rename-save', 'old=' + s.name + '\nnew=' + nn);
         loadSaves();

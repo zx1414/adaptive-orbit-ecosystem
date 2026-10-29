@@ -24,3 +24,6 @@ docs/_recon/
 tests/artifacts/
 tests/baseline/run_*/
 cyano_*.csv
+
+# ball_roles 交付期临时构建/实验目录（build.bat 与验证产物，不入库）
+build_test/

@@ -13,6 +13,9 @@ void registerSeasonCycle(ModAPI&);
 void registerEnergySpill(ModAPI&);
 void registerClimateEvent(ModAPI&);
 void registerCyanobacteria(ModAPI&);
+void registerBallRoles(ModAPI&);
+void registerAging(ModAPI&);
+void registerLuckyLottery(ModAPI&);
 
 namespace {
 std::string trim(const std::string& s) {
@@ -87,6 +90,32 @@ const std::vector<ModInfo>& allMods() {
          "概率产球与繁殖形成聚落扩张；核捕食节点获得 节点能量×转化率，"
          "转化率随最大速度/加速度下降（机动性与消化效率的取舍）。",
          "CYANO_GAIN", "", "config:cyano_nodes>0", registerCyanobacteria},
+
+        // ---- 小球角色分工（计划1 经济层）----
+        {"ball_roles", "小球角色分工",
+         "资源球为主人持续产出能量（半饱和曲线：收益递减、单核上界 0.04/帧），"
+         "护盾球按持有量抵挡本帧失球罚金的 60%（台账法精确校准，杜绝吸收假阳性）——"
+         "让「养球」与「吃球」成为两种真实策略。"
+         "【注意】与失球宽限都返还 BALL_LOSS 罚金，叠加可突破净销毁上限，勿同时启用",
+         "BALL_ROLES_WORKER,BALL_ROLES_SHIELD", "ball_loss_relief", "conflict:relief",
+         registerBallRoles},
+
+        // ---- 趣味 mod ----
+        {"aging", "衰老",
+         "每个存活核每帧流失 kAgingBase(0.00001)×min(核龄, kAgingCapAge(3000)) 能量："
+         "线性衰老、3000 帧封顶（避免老核被无限盘剥），核龄直接读 Nucleus::age，"
+         "无随机、零跨帧状态。把「寿命」变成被选择的性状，加速高龄核淘汰与策略轮换。"
+         "【注意】单向能量汇（AGING 只有 out），非零和注入；"
+         "【验收观测点】--energy-summary 中 AGING out>0 且随帧数增长，存活核数低于基线属预期",
+         "AGING", "", "", registerAging},
+        {"lucky_lottery", "幸运抽奖",
+         "每 kLotteryPeriod(300) 帧开一期彩票：所有存活核各买 kTicket(2.0) 注金，"
+         "全部注金一次性发给 api.rng 均匀抽中的一个幸运核——严格零和，"
+         "奖金 = Σ注金 = 存活核数×2.0，一分不留；存活核 <2 时本期跳过。"
+         "为生态注入期望为零、方差巨大的随机漂变，打破富者恒富。"
+         "【验收观测点】--energy-summary 中 LUCKY_LOTTERY 的 in 与 out 相等（|in-out|<0.01）且均>0；"
+         "5000 帧共开奖 16 期",
+         "LUCKY_LOTTERY", "", "alive>=2", registerLuckyLottery},
     };
     return mods;
 }

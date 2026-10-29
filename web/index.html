@@ -178,6 +178,26 @@
                       white-space: nowrap; overflow: hidden; }
   #hud b { color: var(--text2); font-weight: 600; font-variant-numeric: tabular-nums;
            letter-spacing: .2px; }
+  /* 球型组的「自由/有主」拆分：右对齐小字，弱化层级不抢总数的视觉焦点 */
+  #hud .hsplit { margin-left: auto; color: var(--muted); font-size: 10px;
+                 font-variant-numeric: tabular-nums; opacity: .85; }
+  #hud .hlabel .hsplit { margin-left: auto; letter-spacing: 0; }
+  /* B4：球型占比条 —— 三行各一条 4px 细条，宽度=该类型占全场球数百分比 */
+  #hud .typebar { height: 4px; border-radius: 2px; background: rgba(255, 255, 255, .06);
+                  overflow: hidden; margin: 2px 0 4px; }
+  #hud .typebar i { display: block; height: 100%; width: 0; border-radius: 2px;
+                    transition: width .25s, background .2s; }
+  /* B5：蓝细菌摘要行 —— 默认隐藏，summary 态隐藏四行明细、显示一行去向说明 */
+  #hud #cyano-summary { display: none; font-size: 12px; color: var(--muted); line-height: 1.55; }
+  #hud .hgroup.summary .hitems { display: none; }
+  #hud .hgroup.summary #cyano-summary { display: block; }
+  /* B1：趋势图例色点（与 drawSparkline 的 strokeStyle 同源） */
+  #hud .spark-legend i { display: inline-block; width: 8px; height: 3px; border-radius: 1px;
+                         margin: 0 3px 0 7px; vertical-align: 2px; }
+  #hud .spark-legend i:first-child { margin-left: 0; }
+  /* 趋势 sparkline：与 hgroup 内宽同宽，暗底弱纹理 */
+  #hud #sparkline { width: 100%; height: 54px; display: block; border-radius: 6px;
+                    background: rgba(255, 255, 255, 0.035); }
   /* 折叠后的贴边竖条：不占画面宽度，点击展开 */
   #hud-tab { position: absolute; right: 0; top: 92px; z-index: 6; display: none;
              padding: 10px 5px; border-radius: 9px 0 0 9px; border-right: 0;
@@ -243,7 +263,28 @@
   #tooltip { position: absolute; display: none; font-size: 12px; line-height: 1.65; z-index: 7;
              background: rgba(20, 26, 34, .96); border: 1px solid var(--line2);
              border-radius: 8px; padding: 8px 12px; pointer-events: none; white-space: nowrap;
+             font-variant-numeric: tabular-nums;
              box-shadow: var(--shadow); }
+  /* 停止/Esc 两段式武装态（A3）：红色高亮提示「再点一次才生效」 */
+  #controlbar button.danger-armed, .hud-head button.danger-armed {
+    background: rgba(248, 81, 73, .16); border-color: rgba(248, 81, 73, .65); color: #ff7b72; }
+  /* 通用模态（E1）：替代原生 prompt/alert/confirm，复用面板视觉令牌 */
+  #ask-modal { position: absolute; inset: 0; display: none; align-items: center;
+               justify-content: center; z-index: 30; background: rgba(4, 6, 10, .55);
+               backdrop-filter: blur(2px); }
+  #ask-modal.show { display: flex; }
+  #ask-modal .ask-box { width: 340px; max-width: calc(100% - 48px); background: var(--panel);
+                        border: 1px solid var(--line2); border-radius: 12px;
+                        box-shadow: 0 12px 40px rgba(0, 0, 0, .5); padding: 16px 18px; }
+  #ask-modal .ask-title { font-size: 14px; font-weight: 600; color: var(--text); margin-bottom: 6px; }
+  #ask-modal .ask-body { font-size: 12px; color: var(--muted); line-height: 1.6; margin-bottom: 12px; }
+  #ask-modal .ask-input { width: 100%; box-sizing: border-box; margin-bottom: 12px;
+                          background: #0d1117; border: 1px solid var(--line2); border-radius: 7px;
+                          color: var(--text); font-size: 13px; padding: 7px 10px; }
+  #ask-modal .ask-btns { display: flex; justify-content: flex-end; gap: 8px; }
+  #ask-modal .ask-btns button { min-width: 72px; }
+  #ask-modal button.danger { background: rgba(248, 81, 73, .14); border-color: rgba(248, 81, 73, .55);
+                             color: #ff7b72; }
   #overlay { position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
              background: rgba(5, 7, 11, .74); z-index: 10; backdrop-filter: blur(2px); }
   #overlay.show { display: flex; }
@@ -590,8 +631,9 @@
         <div class="sidehint">
           快捷键：<span class="kbd">空格</span> 暂停/继续 ·
           <span class="kbd">N</span> 单步 · <span class="kbd">S</span> 保存 ·
+          <span class="kbd">H</span> 折叠状态栏 ·
           <span class="kbd">R</span> 重置视图 · <span class="kbd">1-4</span> 切页 ·
-          <span class="kbd">+/-</span> 缩放 · <span class="kbd">Esc</span> 返回菜单
+          <span class="kbd">+/-</span> 缩放 · <span class="kbd">Esc</span> 返回菜单（两段式确认）
         </div>
       </div>
       <div id="stage">
@@ -628,6 +670,7 @@
             <span id="st-zoom" title="当前缩放（100% = 适应视图）">100%</span>
             <button id="btn-zoom-in" class="icon" title="放大（+）">+</button>
             <button id="btn-reset-view" title="重置视图（R / 双击画布）">重置视图</button>
+            <button id="btn-trail" title="切换拖尾强度：高 / 低 / 关（暂停读图建议关）">拖尾:高</button>
             <button id="btn-sidebar" title="折叠侧栏（画布变宽）">侧栏</button>
           </div>
         </div>
@@ -649,26 +692,36 @@
           <div class="hgroup">
             <div class="hlabel">球型</div>
             <div class="hitems">
-              <span>护盾 <b id="st-shield">0</b></span>
-              <span>资源 <b id="st-worker">0</b></span>
-              <span>侦察 <b id="st-scout">0</b></span>
+              <span>护盾 <b id="st-shield">0</b><span class="hsplit" id="st-shield-split" title="自由球 / 有主球"></span></span>
+              <div class="typebar"><i id="st-bar-shield"></i></div>
+              <span>资源 <b id="st-worker">0</b><span class="hsplit" id="st-worker-split" title="自由球 / 有主球"></span></span>
+              <div class="typebar"><i id="st-bar-worker"></i></div>
+              <span>侦察 <b id="st-scout">0</b><span class="hsplit" id="st-scout-split" title="自由球 / 有主球"></span></span>
+              <div class="typebar"><i id="st-bar-scout"></i></div>
             </div>
           </div>
           <div class="hgroup">
             <div class="hlabel">能量</div>
             <div class="hitems">
               <span>平均能量 <b id="st-energy">0</b></span>
-              <span>FPS <b id="st-fps">--</b></span>
+              <span>最高 / 最低 <b id="st-energy-max">0</b> / <b id="st-energy-min">0</b></span>
             </div>
           </div>
-          <div class="hgroup">
+          <div class="hgroup" id="cyano-group">
             <div class="hlabel">蓝细菌</div>
+            <div class="cyano-summary" id="cyano-summary"></div>
             <div class="hitems">
               <span>节点 <b id="st-cyano">0</b></span>
               <span>连接 <b id="st-cyanolinks">0</b></span>
               <span>节点能量 <b id="st-cyanoenergy">0</b></span>
               <span>阳光 <b id="st-sun">0.00</b></span>
             </div>
+          </div>
+          <div class="hgroup">
+            <div class="hgroup">
+            <div class="hlabel">趋势 <span class="hsplit spark-legend"><i style="background:rgba(90,160,255,.95)"></i>核<i style="background:rgba(138,146,156,.7)"></i>球</span></div>
+            <canvas id="sparkline" width="212" height="54"
+                    title="存活核（蓝）与全场球数（灰）· 最近 60 秒，每 0.2 秒采样一次"></canvas>
           </div>
           <!-- 渲染自检：默认收起；实体数>0 但绘制数为 0 时显示黄色警告（可见性回归的现场证据） -->
           <details id="hud-debug" class="hgroup hdebug">
@@ -679,6 +732,7 @@
               <span>绘制 球/核/节点/连线 <b id="dbg-drawn">0/0/0/0</b></span>
               <span>剔除 <b id="dbg-culled">0</b></span>
               <span>抽稀 <b id="dbg-thinning">否</b></span>
+              <span>FPS <b id="st-fps">--</b></span>
             </div>
             <div id="dbg-warn"></div>
           </details>
@@ -751,6 +805,17 @@
         </details>
         <div id="paused-badge">已暂停 · 按空格继续</div>
         <div id="tooltip"></div>
+        <div id="ask-modal" role="dialog" aria-modal="true">
+          <div class="ask-box">
+            <div class="ask-title"></div>
+            <div class="ask-body"></div>
+            <input id="ask-input" class="ask-input" autocomplete="off" spellcheck="false" />
+            <div class="ask-btns">
+              <button id="ask-cancel">取消</button>
+              <button id="ask-ok" class="primary">确定</button>
+            </div>
+          </div>
+        </div>
         <div id="overlay">
           <div class="card">
             <h2 id="overlay-title">模拟已结束</h2>

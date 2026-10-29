@@ -26,7 +26,8 @@ void EnergySystem::printSummary(std::ostream& os) const {
         "ABSORB", "COMBAT", "METABOLISM", "REPRODUCTION",
         "AGING", "CROWDING", "PLAGUE", "BALL_LOSS",
         "TERRITORY", "SUBSIDY", "GUILD", "SYMBIOSIS", "SEASON", "SPILL", "BOOM",
-        "CYANO_GAIN"};
+        "CYANO_GAIN",
+        "BALL_ROLES_WORKER", "BALL_ROLES_SHIELD", "LUCKY_LOTTERY"};
     static_assert(sizeof(names) / sizeof(names[0]) == kEnergyReasonCount,
                   "printSummary names[] must match EnergyReason count");
     os << "能量收支摘要（累计）：\n";

@@ -50,6 +50,9 @@ add_executable(simulator
   mods/energy_spill.cpp
   mods/climate_event.cpp
   mods/cyano_producer.cpp
+  mods/ball_roles.cpp
+  mods/aging.cpp
+  mods/lucky_lottery.cpp
   src/Vec2.h
   src/BallType.h
   src/Ball.h

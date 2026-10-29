@@ -27,11 +27,16 @@ enum class EnergyReason {
     SPILL,         // 能量溢出再分配
     BOOM,          // 周期环境事件（丰收/寒冬等）
     CYANO_GAIN,    // 捕食蓝细菌节点（生产者能量进入核）
+
+    // ---- 「小球角色分工」mod（mods/ball_roles.cpp）----
+    BALL_ROLES_WORKER,  // 资源球持续产出：归属资源球为持有核产出能量（非零和注入）
+    BALL_ROLES_SHIELD,  // 护盾失球抵挡：按护盾球数返还本帧失球罚金的一部分
+    LUCKY_LOTTERY,      // 幸运抽奖：周期性零和彩票（mods/lucky_lottery.cpp）
 };
 
 // 枚举项总数。必须与 EnergyReason 的项数、以及 EnergySystem.cpp 里
 // printSummary() 的 names[] 长度三者严格一致，否则统计数组越界。
-constexpr size_t kEnergyReasonCount = 16;
+constexpr size_t kEnergyReasonCount = 19;
 
 // 核能量收支的唯一通道：所有能量变化必须经 apply()。
 // 按原因累计统计（delta>0 记 in，delta<0 记 out），并统一死亡判定。
