@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EcoScope · EcoCore v3 可视化</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='13' fill='none' stroke='%2348dc80' stroke-width='2.5'/%3E%3Ccircle cx='22' cy='11' r='4' fill='%23ffa656'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="assets/styles.css">
+<script src="js/demo-data.js"></script>
+<script src="js/trace-parser.js"></script>
+<script src="js/daylight.js"></script>
+<script src="js/state.js"></script>
+<script src="js/charts.js"></script>
+<script src="js/renderer.js"></script>
+</head>
+<body>
+<div class="aurora" aria-hidden="true"><i></i><i></i><i></i></div>
+
+<header class="topbar">
+  <div class="brand">
+    <svg class="logo" viewBox="0 0 32 32" aria-hidden="true">
+      <defs><linearGradient id="lg" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0" stop-color="#48dc80"/><stop offset="1" stop-color="#ffa656"/>
+      </linearGradient></defs>
+      <circle cx="16" cy="16" r="12.5" fill="none" stroke="url(#lg)" stroke-width="2"/>
+      <circle cx="21.5" cy="10.5" r="3.6" fill="#ffa656"/>
+      <circle cx="11" cy="20" r="2.4" fill="#48dc80"/>
+    </svg>
+    <h1>EcoScope</h1>
+    <span class="badge">EcoCore v3</span>
+    <span class="badge ghost" id="trace-name">未加载</span>
+  </div>
+  <div class="actions">
+    <button class="btn" id="btn-open" type="button">打开轨迹…</button>
+    <button class="btn primary" id="btn-demo" type="button">内置示例</button>
+    <input type="file" id="file-input" accept=".html,.json" hidden>
+  </div>
+</header>
+
+<main class="app">
+  <section class="stage glass" id="stage">
+    <canvas id="world"></canvas>
+    <div class="stage-hud">
+      <span class="chip" id="hud-tick">tick —</span>
+      <span class="chip" id="hud-frame">frame —</span>
+      <span class="chip" id="hud-fps">fps —</span>
+      <span class="chip" id="hud-day">day —</span>
+    </div>
+    <div class="empty-state" id="empty-state">
+      <div class="empty-mark">EcoScope</div>
+      <p>把模拟器输出的 trace <b>.html</b> / <b>.json</b> 拖进窗口，<br>或点击右上角「内置示例」观看真实模拟回放。</p>
+      <p class="hint">绿点 = 生产者 · 橙点 = Agent · 亮度 = 能量占比 · 背景随昼夜周期变化</p>
+    </div>
+    <div class="dropzone" id="dropzone">松开以载入轨迹</div>
+  </section>
+
+  <aside class="panel" id="panel">
+    <section class="card glass">
+      <h2>回放</h2>
+      <div class="transport">
+        <button class="btn icon" id="btn-step-back" title="上一帧 (←)">⏮</button>
+        <button class="btn primary icon big" id="btn-play" title="播放/暂停 (空格)">▶</button>
+        <button class="btn icon" id="btn-step-fwd" title="下一帧 (→)">⏭</button>
+        <select id="speed" class="select" title="播放速度">
+          <option value="0.5">0.5×</option>
+          <option value="1" selected>1×</option>
+          <option value="2">2×</option>
+          <option value="4">4×</option>
+          <option value="8">8×</option>
+        </select>
+        <label class="toggle"><input type="checkbox" id="opt-loop" checked><span>循环</span></label>
+      </div>
+      <input type="range" id="timeline" class="timeline" min="0" max="0" value="0" step="1">
+      <div class="time-row"><span id="time-now">—</span><span id="time-total">—</span></div>
+    </section>
+
+    <section class="card glass">
+      <h2>实时指标</h2>
+      <div class="stats">
+        <div class="stat"><b data-stat="producers">—</b><span>生产者</span></div>
+        <div class="stat"><b data-stat="agents">—</b><span>Agent</span></div>
+        <div class="stat"><b data-stat="energy">—</b><span>总能量</span></div>
+        <div class="stat"><b data-stat="daylight">—</b><span>日照强度</span></div>
+      </div>
+    </section>
+
+    <section class="card glass">
+      <h2>种群</h2>
+      <canvas id="chart-pop" height="120"></canvas>
+    </section>
+    <section class="card glass">
+      <h2>总能量</h2>
+      <canvas id="chart-energy" height="120"></canvas>
+    </section>
+
+    <section class="card glass">
+      <h2>渲染</h2>
+      <div class="opt-row"><label>辉光</label><input type="range" id="opt-bloom" min="0" max="1" step="0.05" value="0.7"><b id="val-bloom">0.70</b></div>
+      <div class="opt-row"><label>拖尾</label><input type="range" id="opt-trails" min="0" max="10" step="1" value="5"><b id="val-trails">5</b></div>
+      <div class="opt-row"><label>体型</label><input type="range" id="opt-scale" min="0.5" max="2" step="0.1" value="1"><b id="val-scale">1.0</b></div>
+      <div class="opt-row"><label>昼夜背景</label><input type="checkbox" id="opt-daynight" checked><b></b></div>
+      <div class="opt-row">
+        <button class="btn small" id="btn-reset-view" type="button">重置视角 (R)</button>
+        <button class="btn small" id="btn-cinema" type="button">影院模式 (F)</button>
+      </div>
+    </section>
+  </aside>
+</main>
+
+<footer class="foot">
+  <span>空格 播放/暂停 · ←/→ 单帧 · Home/End 首尾 · 滚轮缩放 · 拖拽平移 · F 影院模式</span>
+  <span class="dim">frontend/ 独立展示层 · 只读 trace 契约 · 零依赖</span>
+</footer>
+
+<div class="toast" id="toast" role="status"></div>
+<script src="js/main.js"></script>
+</body>
+</html>

@@ -17,3 +17,6 @@ out/
 Thumbs.db
 legacy/
 tests/artifacts/
+
+# frontend local artifacts (traces, screenshots, edge profile)
+frontend/build/
