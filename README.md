@@ -84,6 +84,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/check.ps1
 - tests/unit：零第三方断言框架与测试
 - tools：构建与总检查脚本
 - docs/ARCH.md、docs/ROADMAP.md、docs/BALANCE.md：架构、里程碑与平衡实验
+- docs/HANDOFF.md：跨会话交接、当前状态与 M2.5 目标
 
 ## 后续
 
