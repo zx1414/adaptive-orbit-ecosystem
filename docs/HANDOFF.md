@@ -179,7 +179,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/acceptance.ps1
 ```text
 继续 EcoCore v3，工作目录：D:\ScuStu\Q\自适应环绕核生态模拟与生存游戏。
 
-你是总指挥：负责拆任务、审查关键代码、控制提交节奏；子代理 token 充足但链路不稳、智商有限，
+你是总指挥：负责拆任务、审查关键代码、控制提交节奏；子代理 token 充足但链路不稳、能力有限，
 任务要小、文件范围明确，失败就重试，关键实现由你审查，不要把所有代码都自己写。
 
 ## 0. 先读，不要改代码
@@ -227,7 +227,7 @@ M1/M2/M2.5 已完成：零产能环境、唯一生产者注入、EnergyLedger �
 4. 存档格式必须带 magic/version/长度或校验和；损坏/版本不匹配要返回明确错误，不崩溃。
 5. CLI 增加 --save <path> 与 --load <path>（或等价快照命令），不能破坏现有参数与退出码。
 6. 单元测试：roundtrip、10k 存档 + 10k 续跑 == 20k 直跑（stateHash/总能量/审计/种群/账本一致）、
-   损坏文件拒绝、旧版本拒绝。
+   损坏文件拒绝、旧版本拒绝；先补齐 stateHash 覆盖 policy spec id、cap、age，否则续跑比较不完整。
 7. 文档更新 ARCH/ROADMAP/README；M3 完成后再提交。
 
 验收命令示例：同 seed 直跑 20k 与 10k 存档后读档再跑 10k，最终 stateHash、总能量、
