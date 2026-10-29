@@ -1,15 +1,17 @@
 #include "agents/Behavior.h"
 #include "core/Math.h"
-#include "world/World.h"
+#include "world/Forage.h"
+#include "world/WorldQuery.h"
 #include <algorithm>
 #include <cmath>
 
 namespace agentsim {
 void Behavior::execute(Agent& agent, const decision::Action& intent,
-                       world::World& world, world::EnergyLedger& ledger) {
+                       const world::WorldQuery& query, world::Forage& forage,
+                       world::EnergyLedger& ledger) {
     if (!agent.alive()) return;
-    const core::SimConfig& config = world.config();
-    const core::Bounds bounds = world.bounds();
+    const core::SimConfig& config = query.config();
+    const core::Bounds bounds = query.bounds();
     const double maxSpeed = std::max(0.0, config.agent.maxSpeed);
     decision::Action action = intent;
     if (!std::isfinite(action.dirX) || !std::isfinite(action.dirY)) {
@@ -19,20 +21,32 @@ void Behavior::execute(Agent& agent, const decision::Action& intent,
     if (!std::isfinite(action.magnitude)) action.magnitude = 0.0f;
     action.magnitude = std::clamp(action.magnitude, 0.0f, 1.0f);
     if (action.kind == decision::Action::Kind::Harvest) {
-        producers::Producer* target = world.nearestProducer(agent.pos_, config.agent.radius);
-        if (target && target->alive()) {
-            const core::Vec2 delta = target->pos - agent.pos_;
+        std::vector<world::ProducerSample> producers;
+        query.queryProducers(agent.pos_, config.agent.radius, producers);
+        const world::ProducerSample* target = nullptr;
+        double bestDistanceSq = 0.0;
+        for (const auto& sample : producers) {
+            if (sample.id == core::kInvalidEntityId || sample.energy <= 0.0) continue;
+            const double distanceSq = (sample.position - agent.pos_).lengthSq();
+            if (target == nullptr || distanceSq < bestDistanceSq ||
+                (distanceSq == bestDistanceSq && sample.id < target->id)) {
+                target = &sample;
+                bestDistanceSq = distanceSq;
+            }
+        }
+        if (target != nullptr) {
+            const core::Vec2 delta = target->position - agent.pos_;
             const core::Vec2 direction = core::Math::unit(delta);
             agent.vel_ = core::Math::limit(agent.vel_ * 0.5 + direction * (maxSpeed * 0.15), maxSpeed);
             const double reserve = std::max(0.0, config.agent.harvestReserve);
-            const double available = std::max(0.0, target->energy.energy - reserve);
-            const double requested = std::min(std::max(0.0, config.agent.harvest), available);
-            if (requested > 0.0) {
-                ledger.transfer(target->energy, agent.energy_, requested, world::EnergyReason::AgentHarvest);
-                if (target->energy.energy <= 1e-12) {
-                    ledger.kill(target->energy, target->id, world::EnergyReason::ProducerDeath);
-                }
+            const double food = std::max(0.0, target->energy - reserve);
+            double requested = std::min(std::max(0.0, config.agent.harvest), food);
+            const double halfSaturation = std::max(0.0, config.agent.harvestHalfSaturation);
+            if (halfSaturation > 0.0) {
+                requested = std::min(requested, std::max(0.0, config.agent.harvest) *
+                                                    food / (food + halfSaturation));
             }
+            if (requested > 0.0) forage.harvest(target->id, requested, reserve, agent.energy_);
         }
     } else if (action.kind == decision::Action::Kind::Move) {
         const core::Vec2 direction = core::Math::unit({action.dirX, action.dirY});

@@ -19,7 +19,7 @@ add_library(eco_core STATIC
   src/world/Energy.cpp
   src/world/Environment.cpp
   src/world/SpatialIndex.cpp
-  src/world/World.cpp
+  src/sim/Simulation.cpp
   src/producers/Producer.cpp
   src/producers/ProducerSystem.cpp
   src/agents/Agent.cpp
@@ -48,6 +48,7 @@ add_executable(unit_tests
   tests/unit/test_energy.cpp
   tests/unit/test_policy.cpp
   tests/unit/test_world.cpp
+  tests/unit/test_m25.cpp
 )
 target_include_directories(unit_tests PRIVATE tests/unit)
 target_link_libraries(unit_tests PRIVATE eco_core)

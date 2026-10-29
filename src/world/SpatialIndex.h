@@ -13,6 +13,9 @@ public:
     void clear();
     void insert(core::EntityId id, core::Vec2 position);
     void query(core::Vec2 center, double radius, std::vector<core::EntityId>& out) const;
+    // Same candidate set as query(), but without sorting/deduplicating. Callers
+    // that only count or select by distance use this to avoid O(k log k).
+    void queryUnsorted(core::Vec2 center, double radius, std::vector<core::EntityId>& out) const;
     std::size_t size() const { return entries_.size(); }
 private:
     struct CellEntry { core::EntityId id; core::Vec2 position; };

@@ -58,18 +58,55 @@ build\simulator.exe --no-render --ticks 50000 --seed 42 --audit `
 结果：两个 seed 的 20k tick 与 seed 42 的 50k tick 都保持 300 生产者 / 200 Agent，审计通过，
 Agent 有持续的出生与到龄死亡。该配置仍由上限制约，但不再发生“采空—崩溃”。
 
-## 结论
+## M2.5 资源竞争标定
 
-1. **默认基线**能量守恒、确定性和长期存活都成立，但种群由上限制约。
-2. **仅靠遮荫/寿命调参无法避免崩溃**：Agent 会把生产者采到 0，缺少猎物 refuge。
-3. **猎物保留量是当前最有效的稳定器**：reserve=10 时 50k tick 不灭绝，且保留年龄结构周转。
-4. 遮荫、寿命、保留量默认关闭/为 0，避免改变 M1 基线；推荐配置通过命令行显式开启。
-5. 低于上限的真正共存仍未实现：生产者光照对密度不敏感，种群最终由 `ProducerConfig::max` / `AgentConfig::max` 决定。
+M2.5 在 M2 基础上加入四项机制（默认 0 = 关闭，保证 M1/M2 基线不变）：
 
-## 下一步（M2.5）
+- 生产者局部光竞争：`shading = 1 / (1 + crowding * localDensity + competition * localBiomass / cap)`。
+- 生产者密度依赖繁殖：阈值为 `repro * (1 + densityRepro * localDensity)`。
+- Agent 饱和收获：`harvest * food / (food + halfSaturation)`，`food = target.energy - reserve`。
+- Agent 密度依赖繁殖：阈值为 `repro * (1 + densityRepro * localAgentDensity)`，配合 `lifespan` 周转。
 
-- 引入真正的资源竞争：局部光竞争、密度依赖繁殖抑制，或可耗尽的光资源。
-- 让 Agent 的收获具有饱和功能反应，并让繁殖阈值随能量状态变化。
-- 用 `--stats` 的种群/基因序列做多 seed 参数搜索，而不是只看最终 tick。
+### 推荐配置
+
+```powershell
+build\simulator.exe --no-render --ticks 20000 --seed 42 --audit `
+  --producer-max 1000 --agent-max 1000 `
+  --producer-competition 0.2 --producer-radius 400 --producer-density-repro 0.02 `
+  --agent-move-k 0.00002 --agent-harvest 0.5 --agent-reserve 10 `
+  --agent-half-saturation 20 --agent-density-repro 0.01 --agent-density-radius 200 `
+  --agent-lifespan 3000
+```
+
+上限 1000/1000 只是数值安全阀；平衡点由局部竞争、密度阈值和饱和收获决定。
+
+### 验收结果（tools/acceptance.ps1，14 项全部 PASS）
+
+| seed | tick | producers | agents | total_energy | audit |
+| --- | --- | --- | --- | --- | --- |
+| 42 | 20000 | 202 | 43 | 22027.60411 | ok |
+| 7 | 20000 | 214 | 111 | 27331.11735 | ok |
+| 123 | 20000 | 255 | 71 | 28980.44196 | ok |
+| 42 | 50000 | 202 | 65 | 23826.62187 | ok |
+
+- 5k tick 预热后，三个 seed 的 producers 与 agents **100% 采样点**都低于 800（0.8 × 1000 上限）。
+- 每 tick 审计通过；进程退出码 0。
+- 同 seed 双跑状态哈希一致；seed 7 额外重复 3 次均为 `2faf3ce0d75683b9`。
+- 默认基线不变：20k 仍是 300/200、总能量 49690.20045；5k 状态哈希 `ae357d4f52c5f4fa` 不变。
+
+### 与 M2 的差异
+
+- M2 推荐配置在 300/200 上限处触顶；M2.5 推荐配置的生产者稳定在 202–255，Agent 稳定在 43–111，
+  不再由 max 决定。
+- Agent 平衡数量对 seed 与局部聚集敏感，但 20k/50k 均未灭绝；提高下限需要进一步调整
+  Agent 觅食效率或繁殖阈值，而非放宽 max。
+- 默认 20k tick 耗时从约 102 秒降到约 16 秒（SpatialIndex 接入所有查询）。
+
+## 下一步
+
+- 用更长 tick 与更多 seed 检查 Agent 低密度平衡的稳健性。
+- 若要提高 Agent 数量，优先调 `--agent-harvest / --agent-half-saturation / --agent-density-repro`，
+  不要放宽 max。
+- M3 存档与快照仍需保存 sim 组合根、实体 id、策略基因组与 PCG32 状态。
 
 CSV 列包含种群、能量、出生/死亡、基因均值和审计标志，可直接用于后续拟合与可视化。

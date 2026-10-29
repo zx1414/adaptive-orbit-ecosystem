@@ -2,6 +2,7 @@
 #include "core/Math.h"
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <limits>
 #include <vector>
 
@@ -34,19 +35,23 @@ decision::Observation buildObservation(const Agent& agent, const world::WorldQue
     const double phase = static_cast<double>(query.tick()) / period * 6.28318530717958647692;
     observation[DaySin] = finiteClamp(static_cast<float>(std::sin(phase)), -1.0f, 1.0f);
 
-    std::vector<world::ProducerSample> producers;
+    static thread_local std::vector<world::ProducerSample> producers;
     query.queryProducers(position, senseRadius, producers);
-    std::vector<ScoredProducer> scoredProducers;
+    static thread_local std::vector<ScoredProducer> scoredProducers;
+    scoredProducers.clear();
     scoredProducers.reserve(producers.size());
     for (const auto& sample : producers) {
         if (sample.id == core::kInvalidEntityId || sample.energy <= 0.0) continue;
         scoredProducers.push_back({sample, (sample.position - position).lengthSq()});
     }
-    std::sort(scoredProducers.begin(), scoredProducers.end(), [](const auto& a, const auto& b) {
+    // Only the two nearest slots are part of Observation v1; avoid sorting the
+    // whole neighbourhood every tick.
+    const std::size_t producerSlots = std::min<std::size_t>(2, scoredProducers.size());
+    std::partial_sort(scoredProducers.begin(), scoredProducers.begin() + static_cast<std::ptrdiff_t>(producerSlots),
+                      scoredProducers.end(), [](const auto& a, const auto& b) {
         if (a.distanceSq != b.distanceSq) return a.distanceSq < b.distanceSq;
         return a.sample.id < b.sample.id;
     });
-    const std::size_t producerSlots = std::min<std::size_t>(2, scoredProducers.size());
     for (std::size_t i = 0; i < 2; ++i) {
         const int base = Producer0 + static_cast<int>(i) * SlotStride;
         observation[base + 2] = -1.0f; // empty slot
@@ -61,19 +66,21 @@ decision::Observation buildObservation(const Agent& agent, const world::WorldQue
         observation[base + 3] = finiteClamp(static_cast<float>(item.sample.energy / cap), 0.0f, 1.0f);
     }
 
-    std::vector<world::AgentSample> agents;
+    static thread_local std::vector<world::AgentSample> agents;
     query.queryAgents(position, senseRadius, agents);
-    std::vector<ScoredAgent> scoredAgents;
+    static thread_local std::vector<ScoredAgent> scoredAgents;
+    scoredAgents.clear();
     scoredAgents.reserve(agents.size());
     for (const auto& sample : agents) {
         if (sample.id == agent.id() || sample.energy <= 0.0) continue;
         scoredAgents.push_back({sample, (sample.position - position).lengthSq()});
     }
-    std::sort(scoredAgents.begin(), scoredAgents.end(), [](const auto& a, const auto& b) {
+    const std::size_t agentSlots = std::min<std::size_t>(2, scoredAgents.size());
+    std::partial_sort(scoredAgents.begin(), scoredAgents.begin() + static_cast<std::ptrdiff_t>(agentSlots),
+                      scoredAgents.end(), [](const auto& a, const auto& b) {
         if (a.distanceSq != b.distanceSq) return a.distanceSq < b.distanceSq;
         return a.sample.id < b.sample.id;
     });
-    const std::size_t agentSlots = std::min<std::size_t>(2, scoredAgents.size());
     for (std::size_t i = 0; i < 2; ++i) {
         const int base = Agent0 + static_cast<int>(i) * SlotStride;
         observation[base + 2] = -1.0f; // empty slot

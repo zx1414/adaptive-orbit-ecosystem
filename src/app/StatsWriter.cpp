@@ -4,7 +4,7 @@
 #include <vector>
 
 namespace app {
-StatsWriter::StatsWriter(const std::string& path, const world::World& world) {
+StatsWriter::StatsWriter(const std::string& path, const sim::Simulation& world) {
     out_.open(path);
     if (!out_) return;
     const auto policy = decision::PolicyRegistry::create(world.config().policy.rule);
@@ -16,7 +16,7 @@ StatsWriter::StatsWriter(const std::string& path, const world::World& world) {
     out_ << ",audit_ok\n";
     ok_ = static_cast<bool>(out_);
 }
-void StatsWriter::write(const world::World& world) {
+void StatsWriter::write(const sim::Simulation& world) {
     if (!ok_) return;
     const auto& stats = world.view().stats;
     out_ << std::setprecision(10) << stats.tick << ',' << stats.producers << ',' << stats.agents

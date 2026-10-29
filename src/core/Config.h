@@ -39,6 +39,8 @@ struct ProducerConfig {
     // 0 keeps the unconstrained M1 behavior.
     double crowding = 0.0;
     double interactionRadius = 80.0;
+    double competition = 0.0;      // local light competition coefficient; 0 disables
+    double densityRepro = 0.0;     // extra reproduction threshold per local producer neighbour
 };
 
 struct AgentConfig {
@@ -50,6 +52,9 @@ struct AgentConfig {
     double moveK = 0.0002;
     double harvest = 0.5;
     double harvestReserve = 0.0; // prey energy left untouched by a harvest
+    double harvestHalfSaturation = 0.0; // 0 keeps linear harvest
+    double densityRepro = 0.0;          // extra reproduction threshold per local agent neighbour
+    double densityRadius = 200.0;       // radius used for local agent density
     double radius = 30.0;
     double repro = 80.0;
     double cost = 10.0;

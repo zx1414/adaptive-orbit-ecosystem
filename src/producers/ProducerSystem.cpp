@@ -5,7 +5,7 @@
 
 namespace producers {
 ProducerSystem::ProducerSystem(core::Bounds bounds, core::ProducerConfig config)
-    : bounds_(bounds), config_(config), index_(bounds) {}
+    : bounds_(bounds), config_(config), index_(bounds, 200.0) {}
 
 void ProducerSystem::initialize(core::Random& random, world::EnergyLedger& ledger, world::Environment& environment) {
     producers_.clear();
@@ -28,9 +28,9 @@ void ProducerSystem::initialize(core::Random& random, world::EnergyLedger& ledge
 
 void ProducerSystem::tick(core::Random& random, world::EnergyLedger& ledger, world::Environment& environment, core::Tick tick) {
     std::vector<std::unique_ptr<Producer>> newborns;
-    std::vector<core::EntityId> neighbors;
     const std::size_t initial = producers_.size();
-    const bool useShading = config_.crowding > 0.0 && config_.interactionRadius > 0.0;
+    const bool useNeighborhood = config_.interactionRadius > 0.0 &&
+        (config_.crowding > 0.0 || config_.competition > 0.0 || config_.densityRepro > 0.0);
     for (std::size_t i = 0; i < initial; ++i) {
         if (!producers_[i] || !producers_[i]->alive()) continue;
         ProducerContext context;
@@ -41,9 +41,11 @@ void ProducerSystem::tick(core::Random& random, world::EnergyLedger& ledger, wor
         context.population = initial;
         context.maxPopulation = core::Math::toSizeClamped(config_.max);
         context.newborns = &newborns;
-        if (useShading) {
-            index_.query(producers_[i]->pos, config_.interactionRadius, neighbors);
-            context.localDensity = neighbors.empty() ? 0 : neighbors.size() - 1;
+        if (useNeighborhood) {
+            const Neighborhood local = neighborhood(producers_[i]->pos, config_.interactionRadius,
+                                                    producers_[i]->id);
+            context.localDensity = local.count;
+            context.localBiomass = local.biomass;
         }
         producers_[i]->tick(context);
     }
@@ -70,8 +72,45 @@ std::size_t ProducerSystem::aliveCount() const {
 }
 void ProducerSystem::rebuildIndex() {
     index_.clear();
+    byId_.assign(static_cast<std::size_t>(nextId_), nullptr);
     for (const auto& producer : producers_) {
-        if (producer && producer->alive()) index_.insert(producer->id, producer->pos);
+        if (producer && producer->alive()) {
+            index_.insert(producer->id, producer->pos);
+            if (producer->id < byId_.size()) byId_[producer->id] = producer.get();
+        }
     }
+}
+Producer* ProducerSystem::find(core::EntityId id) {
+    return id < byId_.size() ? byId_[static_cast<std::size_t>(id)] : nullptr;
+}
+const Producer* ProducerSystem::find(core::EntityId id) const {
+    return id < byId_.size() ? byId_[static_cast<std::size_t>(id)] : nullptr;
+}
+void ProducerSystem::querySamples(core::Vec2 center, double radius,
+                                  std::vector<world::ProducerSample>& out) const {
+    out.clear();
+    if (!core::Math::isFinite(center) || !std::isfinite(radius) || radius <= 0.0) return;
+    static thread_local std::vector<core::EntityId> ids;
+    index_.queryUnsorted(center, radius, ids);
+    out.reserve(ids.size());
+    for (const core::EntityId id : ids) {
+        const Producer* producer = find(id);
+        if (!producer || !producer->alive()) continue;
+        out.push_back({producer->id, producer->pos, producer->energy.energy, producer->energy.cap});
+    }
+}
+ProducerSystem::Neighborhood ProducerSystem::neighborhood(core::Vec2 center, double radius,
+                                                          core::EntityId exclude) const {
+    Neighborhood result;
+    static thread_local std::vector<core::EntityId> ids;
+    index_.query(center, radius, ids);
+    for (const core::EntityId id : ids) {
+        if (id == exclude) continue;
+        const Producer* producer = find(id);
+        if (!producer || !producer->alive()) continue;
+        ++result.count;
+        result.biomass += producer->energy.energy;
+    }
+    return result;
 }
 } // namespace producers

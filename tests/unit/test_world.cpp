@@ -1,6 +1,6 @@
 #include "TestHarness.h"
 #include "agents/Sensors.h"
-#include "world/World.h"
+#include "sim/Simulation.h"
 #include <cmath>
 
 using namespace world;
@@ -12,7 +12,7 @@ TEST("world starts with producers as the only initial biomass") {
     config.producer.photo = 0.0;
     config.producer.maint = 0.0;
     config.agent.metab = 0.0;
-    World world(config);
+    sim::Simulation world(config);
     CHECK(world.view().stats.producers == 4);
     CHECK(world.view().stats.agents == 2);
     CHECK_NEAR(world.energyStats().injectedPrimary(), 0.0, 0.0);
@@ -30,7 +30,7 @@ TEST("zero producers means no photosynthesis and eventual starvation") {
     config.agent.metab = 0.05;
     config.agent.repro = 1000.0;
     config.light.base = 2.0;
-    World world(config);
+    sim::Simulation world(config);
     for (int i = 0; i < 2000 && !world.finished(); ++i) {
         world.step();
         CHECK(world.auditOk());
@@ -47,7 +47,7 @@ TEST("world exposes genome and population statistics") {
     config.agent.initial = 2;
     config.producer.photo = 0.0;
     config.agent.metab = 0.0;
-    World world(config);
+    sim::Simulation world(config);
     CHECK(world.meanGenome().size() == 6);
     CHECK(world.meanProducerEnergy() > 0.0);
     CHECK(world.meanAgentEnergy() > 0.0);
@@ -55,7 +55,7 @@ TEST("world exposes genome and population statistics") {
     CHECK(world.agentSystem().deaths() == 0);
 
     config.agent.lifespan = 1;
-    World dying(config);
+    sim::Simulation dying(config);
     dying.step();
     CHECK(dying.agentSystem().deaths() == 2);
     CHECK(dying.view().stats.agents == 0);
@@ -67,8 +67,8 @@ TEST("world is deterministic and observations are finite") {
     config.producer.initial = 6;
     config.agent.initial = 3;
     config.world.maxTicks = 300;
-    World a(config);
-    World b(config);
+    sim::Simulation a(config);
+    sim::Simulation b(config);
     for (int i = 0; i < 300; ++i) { a.step(); b.step(); }
     CHECK(a.stateHash() == b.stateHash());
     CHECK(a.auditOk());

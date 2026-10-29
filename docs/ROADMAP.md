@@ -18,11 +18,18 @@
 
 平衡结论：默认基线在 20k tick 内稳定存活但触及种群上限；遮荫+寿命在无猎物保留量时 13k–20k tick 内崩溃；reserve=10 的推荐配置在 50k tick 内稳定。详见 docs/BALANCE.md。
 
-## M2.5：资源竞争
+## M2.5：资源竞争（已完成）
 
-引入真正限制生产者的机制（局部光竞争、密度依赖繁殖抑制或可耗尽光资源），并为 Agent 增加饱和型收获/能量阈值，目标是得到低于上限的稳定共存；把 World 组合根抽到独立 sim 层，并把空间索引接入查询路径。
+已完成：
 
-验收：20k tick 多 seed 不灭绝、不触顶或仅短时触顶，能量审计通过。
+- 生产者局部光竞争：局部生物量除以容量后进入 `1 / (1 + crowding * density + competition * biomass)`。
+- 生产者与 Agent 的密度依赖繁殖阈值；高密度先抑制出生，不再依赖 max 截断。
+- Agent 饱和收获（halfSaturation）并保留 `harvestReserve`。
+- 组合根抽到 `sim::Simulation`，删除 `world::World`；agents 只依赖 WorldQuery/Forage。
+- SpatialIndex 接入感知、收获、邻居与密度查询；20k 默认耗时约 16 秒。
+
+验收：seed 42/7/123 各 20k 不灭绝，审计逐 tick 通过，5k 预热后两个种群 100% 采样点低于 0.8×1000；
+同 seed 双跑哈希一致；seed 42 50k 耐久通过。结果见 docs/BALANCE.md。
 
 ## M3：持久化
 

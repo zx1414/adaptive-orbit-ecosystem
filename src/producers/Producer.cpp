@@ -22,7 +22,11 @@ void PhotoProducer::tick(ProducerContext& context) {
     const double light = context.environment->lightAt(pos, context.tick);
     const double capacity = std::max(1e-9, energy.cap);
     const double fraction = std::clamp(energy.energy / capacity, 0.0, 1.0);
-    const double shading = 1.0 / (1.0 + std::max(0.0, config_.crowding) * static_cast<double>(context.localDensity));
+    const double density = static_cast<double>(context.localDensity);
+    const double biomass = std::max(0.0, context.localBiomass) / capacity;
+    const double pressure = 1.0 + std::max(0.0, config_.crowding) * density +
+                            std::max(0.0, config_.competition) * biomass;
+    const double shading = std::isfinite(pressure) && pressure > 0.0 ? 1.0 / pressure : 0.0;
     const double gain = std::max(0.0, config_.photo * light * (1.0 - fraction) * shading);
     if (gain > 0.0) context.ledger->injectPrimary(energy, id, gain);
     context.ledger->dissipate(energy, id, std::max(0.0, config_.maint), world::EnergyReason::ProducerMaintenance);
@@ -31,7 +35,9 @@ void PhotoProducer::tick(ProducerContext& context) {
         return;
     }
     const std::size_t total = context.population + (context.newborns ? context.newborns->size() : 0);
-    if (energy.energy >= config_.repro && total < context.maxPopulation && context.newborns) {
+    const double reproThreshold = config_.repro * (1.0 + std::max(0.0, config_.densityRepro) * density);
+    if (std::isfinite(reproThreshold) && energy.energy >= reproThreshold &&
+        total < context.maxPopulation && context.newborns) {
         auto child = clone();
         child->id = core::kInvalidEntityId;
         child->energy = {0.0, energy.cap, true};

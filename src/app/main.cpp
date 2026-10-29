@@ -1,7 +1,7 @@
 #include "app/Cli.h"
 #include "app/ConsoleRenderer.h"
 #include "app/StatsWriter.h"
-#include "world/World.h"
+#include "sim/Simulation.h"
 #include <chrono>
 #include <fstream>
 #include <iomanip>
@@ -22,7 +22,7 @@ int main(int argc, char** argv) {
     if (options.help) { std::cout << app::usage(); return 0; }
     if (options.version) { std::cout << "EcoCore M2\n"; return 0; }
     try {
-        world::World world(options.config);
+        sim::Simulation world(options.config);
         app::ConsoleRenderer renderer;
         std::unique_ptr<app::StatsWriter> statsWriter;
         if (!options.statsPath.empty()) {

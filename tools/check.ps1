@@ -19,6 +19,16 @@ Get-ChildItem -LiteralPath (Join-Path $root 'src') -Include '*.h','*.cpp' -Recur
   $path = $_.FullName; $n = 0
   Get-Content -LiteralPath $path | ForEach-Object { ++$n; if ($_ -match '^\s*#\s*include\s*[<"]\s*\.\.[\\/]') { $violations += "${path}:${n}: relative parent include is forbidden" } }
 }
+foreach ($layer in @('world', 'agents', 'producers')) {
+  Get-ChildItem -LiteralPath (Join-Path $root ('src/' + $layer)) -Include '*.h','*.cpp' -Recurse -File | ForEach-Object {
+    $path = $_.FullName; $n = 0
+    Get-Content -LiteralPath $path | ForEach-Object { ++$n; if ($_ -match '^\s*#\s*include\s*[<"]sim/') { $violations += "${path}:${n}: lower layer must not depend on sim" } }
+  }
+}
+Get-ChildItem -LiteralPath (Join-Path $root 'src/sim') -Include '*.h','*.cpp' -Recurse -File | ForEach-Object {
+  $path = $_.FullName; $n = 0
+  Get-Content -LiteralPath $path | ForEach-Object { ++$n; if ($_ -match '^\s*#\s*include\s*[<"]app/') { $violations += "${path}:${n}: sim must not depend on app" } }
+}
 if ($violations.Count -gt 0) { $violations | ForEach-Object { Write-Host $_ }; throw 'Architecture dependency check failed.' }
 & (Join-Path $root 'build/unit_tests.exe')
 if ($LASTEXITCODE -ne 0) { throw 'Unit tests failed.' }

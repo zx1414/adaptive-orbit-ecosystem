@@ -1,11 +1,12 @@
-#include "world/World.h"
+#include "sim/Simulation.h"
 #include "core/Math.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <limits>
 
-namespace world {
+namespace sim {
 namespace {
 core::SimConfig normalizedConfig(core::SimConfig config) {
     if (!std::isfinite(config.world.width) || !(config.world.width > 0.0)) config.world.width = 2000.0;
@@ -25,8 +26,9 @@ std::uint64_t hashDouble(std::uint64_t hash, double value) {
     std::memcpy(&bits, &value, sizeof(bits));
     return hashBytes(hash, &bits, sizeof(bits));
 }
-}
-World::World(const core::SimConfig& config)
+} // namespace
+
+Simulation::Simulation(const core::SimConfig& config)
     : config_(normalizedConfig(config)),
       environment_(config_.world.bounds(), config_.light),
       random_(config_.world.seed),
@@ -34,7 +36,8 @@ World::World(const core::SimConfig& config)
       agents_(config_.world.bounds(), config_.agent, config_.policy) {
     initialize();
 }
-void World::initialize() {
+
+void Simulation::initialize() {
     ledger_.reset();
     producers_.initialize(random_, ledger_, environment_);
     agents_.initialize(random_, ledger_);
@@ -45,10 +48,11 @@ void World::initialize() {
     auditOk_ = true;
     updateView();
 }
-void World::step() {
+
+void Simulation::step() {
     if (finished_) return;
     producers_.tick(random_, ledger_, environment_, tick_);
-    agents_.tick(*this, random_, ledger_);
+    agents_.tick(*this, *this, random_, ledger_);
     producers_.removeDead();
     agents_.removeDead();
     producers_.rebuildIndex();
@@ -68,42 +72,42 @@ void World::step() {
     }
     updateView();
 }
-double World::lightAt(core::Vec2 position) const { return environment_.lightAt(position, tick_); }
-void World::queryProducers(core::Vec2 center, double radius, std::vector<ProducerSample>& out) const {
-    out.clear();
-    if (!std::isfinite(radius) || radius <= 0.0) return;
-    const double radiusSq = radius * radius;
-    for (const auto& producer : producers_.all()) {
-        if (!producer || !producer->alive()) continue;
-        if ((producer->pos - center).lengthSq() <= radiusSq) {
-            out.push_back({producer->id, producer->pos, producer->energy.energy, producer->energy.cap});
-        }
-    }
-    std::sort(out.begin(), out.end(), [](const auto& a, const auto& b) { return a.id < b.id; });
+
+double Simulation::lightAt(core::Vec2 position) const { return environment_.lightAt(position, tick_); }
+
+void Simulation::queryProducers(core::Vec2 center, double radius,
+                                std::vector<world::ProducerSample>& out) const {
+    producers_.querySamples(center, radius, out);
 }
-void World::queryAgents(core::Vec2 center, double radius, std::vector<AgentSample>& out) const {
+
+void Simulation::queryAgents(core::Vec2 center, double radius,
+                             std::vector<world::AgentSample>& out) const {
     agents_.querySamples(center, radius, out);
 }
-producers::Producer* World::nearestProducer(core::Vec2 position, double radius) {
-    producers::Producer* nearest = nullptr;
-    double best = radius * radius;
-    for (auto& producer : producers_.all()) {
-        if (!producer || !producer->alive()) continue;
-        const double distanceSq = (producer->pos - position).lengthSq();
-        if (distanceSq <= best) {
-            best = distanceSq;
-            nearest = producer.get();
-        }
+
+double Simulation::harvest(core::EntityId producerId, double amount, double reserve,
+                           core::EnergyState& to) {
+    producers::Producer* producer = producers_.find(producerId);
+    if (!producer || !producer->alive()) return 0.0;
+    const double available = std::max(0.0, producer->energy.energy - std::max(0.0, reserve));
+    const double requested = std::min(std::max(0.0, amount), available);
+    if (requested <= 0.0) return 0.0;
+    const double moved = ledger_.transfer(producer->energy, to, requested,
+                                          world::EnergyReason::AgentHarvest);
+    if (producer->energy.energy <= 1e-12) {
+        ledger_.kill(producer->energy, producer->id, world::EnergyReason::ProducerDeath);
     }
-    return nearest;
+    return moved;
 }
-double World::totalEnergy() const {
+
+double Simulation::totalEnergy() const {
     double total = 0.0;
     for (const auto& producer : producers_.all()) if (producer && producer->alive()) total += producer->energy.energy;
     for (const auto& agent : agents_.agents()) if (agent.alive()) total += agent.energy().energy;
     return total;
 }
-double World::meanProducerEnergy() const {
+
+double Simulation::meanProducerEnergy() const {
     double total = 0.0;
     std::size_t count = 0;
     for (const auto& producer : producers_.all()) {
@@ -113,7 +117,8 @@ double World::meanProducerEnergy() const {
     }
     return count > 0 ? total / static_cast<double>(count) : 0.0;
 }
-double World::meanAgentEnergy() const {
+
+double Simulation::meanAgentEnergy() const {
     double total = 0.0;
     std::size_t count = 0;
     for (const auto& agent : agents_.agents()) {
@@ -123,7 +128,8 @@ double World::meanAgentEnergy() const {
     }
     return count > 0 ? total / static_cast<double>(count) : 0.0;
 }
-std::vector<double> World::meanGenome() const {
+
+std::vector<double> Simulation::meanGenome() const {
     std::vector<double> sums;
     std::vector<std::size_t> counts;
     for (const auto& agent : agents_.agents()) {
@@ -144,7 +150,8 @@ std::vector<double> World::meanGenome() const {
     }
     return sums;
 }
-std::uint64_t World::stateHash() const {
+
+std::uint64_t Simulation::stateHash() const {
     std::uint64_t hash = 1469598103934665603ULL;
     hash = hashBytes(hash, &tick_, sizeof(tick_));
     const core::RandomState rng = random_.state();
@@ -176,7 +183,8 @@ std::uint64_t World::stateHash() const {
     hash = hashDouble(hash, totalEnergy());
     return hash;
 }
-void World::updateView() {
+
+void Simulation::updateView() {
     view_.bounds = environment_.bounds();
     view_.producers.clear();
     view_.agents.clear();
@@ -202,4 +210,4 @@ void World::updateView() {
     view_.stats.finished = finished_;
     view_.stats.finishReason = finishReason_;
 }
-} // namespace world
+} // namespace sim

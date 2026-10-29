@@ -52,9 +52,16 @@ CliOptions parseCli(int argc, char** argv) {
         else if (arg == "--producer-max") options.config.producer.max = parseNonNegative(i, argc, argv, "--producer-max");
         else if (arg == "--producer-crowding") options.config.producer.crowding = parseNonNegative(i, argc, argv, "--producer-crowding");
         else if (arg == "--producer-radius") options.config.producer.interactionRadius = parseNonNegative(i, argc, argv, "--producer-radius");
+        else if (arg == "--producer-competition") options.config.producer.competition = parseNonNegative(i, argc, argv, "--producer-competition");
+        else if (arg == "--producer-density-repro") options.config.producer.densityRepro = parseNonNegative(i, argc, argv, "--producer-density-repro");
         else if (arg == "--agent-metab") options.config.agent.metab = parseNonNegative(i, argc, argv, "--agent-metab");
+        else if (arg == "--agent-max-speed") options.config.agent.maxSpeed = parseNonNegative(i, argc, argv, "--agent-max-speed");
+        else if (arg == "--agent-move-k") options.config.agent.moveK = parseNonNegative(i, argc, argv, "--agent-move-k");
         else if (arg == "--agent-harvest") options.config.agent.harvest = parseNonNegative(i, argc, argv, "--agent-harvest");
         else if (arg == "--agent-reserve") options.config.agent.harvestReserve = parseNonNegative(i, argc, argv, "--agent-reserve");
+        else if (arg == "--agent-half-saturation") options.config.agent.harvestHalfSaturation = parseNonNegative(i, argc, argv, "--agent-half-saturation");
+        else if (arg == "--agent-density-repro") options.config.agent.densityRepro = parseNonNegative(i, argc, argv, "--agent-density-repro");
+        else if (arg == "--agent-density-radius") options.config.agent.densityRadius = parseNonNegative(i, argc, argv, "--agent-density-radius");
         else if (arg == "--agent-repro") options.config.agent.repro = parseNonNegative(i, argc, argv, "--agent-repro");
         else if (arg == "--agent-max") options.config.agent.max = parseNonNegative(i, argc, argv, "--agent-max");
         else if (arg == "--agent-lifespan") options.config.agent.lifespan = static_cast<core::Tick>(parseNonNegativeSize(i, argc, argv, "--agent-lifespan"));
@@ -87,8 +94,9 @@ std::string usage() {
            "  --producers <n> --agents <n> --policy rule|stub\n"
            "  --render | --no-render --render-interval <n>\n"
            "  --photo --producer-maint --producer-repro --producer-max\n"
-           "  --producer-crowding --producer-radius\n"
-           "  --agent-metab --agent-harvest --agent-reserve --agent-repro --agent-max --agent-lifespan\n"
+           "  --producer-crowding --producer-radius --producer-competition --producer-density-repro\n"
+           "  --agent-metab --agent-max-speed --agent-move-k --agent-harvest --agent-reserve --agent-half-saturation\n"
+           "  --agent-repro --agent-max --agent-lifespan --agent-density-repro --agent-density-radius\n"
            "  --sense-radius --mutation\n"
            "  --energy-summary --stats <path> --stats-interval <n>\n"
            "  --state-hash <path> --bench --audit --help --version\n";

@@ -37,7 +37,7 @@ void SpatialIndex::insert(core::EntityId id, core::Vec2 position) {
     const int y = cellY(position.y);
     cells_[static_cast<std::size_t>(y * columns_ + x)].push_back({id, position});
 }
-void SpatialIndex::query(core::Vec2 center, double radius, std::vector<core::EntityId>& out) const {
+void SpatialIndex::queryUnsorted(core::Vec2 center, double radius, std::vector<core::EntityId>& out) const {
     out.clear();
     if (!core::Math::isFinite(center) || !std::isfinite(radius) || radius < 0.0) return;
     const int x0 = cellX(center.x - radius);
@@ -53,6 +53,9 @@ void SpatialIndex::query(core::Vec2 center, double radius, std::vector<core::Ent
             }
         }
     }
+}
+void SpatialIndex::query(core::Vec2 center, double radius, std::vector<core::EntityId>& out) const {
+    queryUnsorted(center, radius, out);
     std::sort(out.begin(), out.end());
     out.erase(std::unique(out.begin(), out.end()), out.end());
 }

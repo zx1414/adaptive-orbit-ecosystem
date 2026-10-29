@@ -3,6 +3,7 @@
 #include "core/Random.h"
 #include "producers/Producer.h"
 #include "world/SpatialIndex.h"
+#include "world/WorldQuery.h"
 #include <memory>
 #include <vector>
 
@@ -21,12 +22,22 @@ public:
     std::vector<std::unique_ptr<Producer>>& all() { return producers_; }
     void rebuildIndex();
     const world::SpatialIndex& index() const { return index_; }
+    Producer* find(core::EntityId id);
+    const Producer* find(core::EntityId id) const;
+    void querySamples(core::Vec2 center, double radius,
+                      std::vector<world::ProducerSample>& out) const;
+    struct Neighborhood {
+        std::size_t count = 0;
+        double biomass = 0.0;
+    };
+    Neighborhood neighborhood(core::Vec2 center, double radius, core::EntityId exclude) const;
     core::EntityId allocateId() { return nextId_++; }
 private:
     core::Bounds bounds_;
     core::ProducerConfig config_;
     std::vector<std::unique_ptr<Producer>> producers_;
     world::SpatialIndex index_;
+    std::vector<Producer*> byId_;
     core::EntityId nextId_ = 1;
     std::size_t births_ = 0;
     std::size_t deaths_ = 0;

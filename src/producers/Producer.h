@@ -20,6 +20,7 @@ struct ProducerContext {
     std::size_t population = 0;
     std::size_t maxPopulation = 0;
     std::size_t localDensity = 0;
+    double localBiomass = 0.0;
     std::vector<std::unique_ptr<Producer>>* newborns = nullptr;
 };
 

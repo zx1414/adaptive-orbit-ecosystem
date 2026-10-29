@@ -3,16 +3,17 @@
 #include "agents/Sensors.h"
 #include "core/Math.h"
 #include "decision/PolicyRegistry.h"
-#include "world/World.h"
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
 
 namespace agentsim {
 AgentSystem::AgentSystem(core::Bounds bounds, core::AgentConfig config, core::PolicyConfig policyConfig)
-    : bounds_(bounds), config_(config), policyConfig_(std::move(policyConfig)), index_(bounds) {}
+    : bounds_(bounds), config_(config), policyConfig_(std::move(policyConfig)), index_(bounds, 200.0) {}
 void AgentSystem::initialize(core::Random& random, world::EnergyLedger& ledger) {
     agents_.clear();
+    const std::size_t capacity = core::Math::toSizeClamped(config_.max);
+    agents_.reserve(std::min<std::size_t>(capacity, 100000));
     nextId_ = 1;
     births_ = 0;
     deaths_ = 0;
@@ -28,14 +29,15 @@ void AgentSystem::initialize(core::Random& random, world::EnergyLedger& ledger) 
     }
     rebuildIndex();
 }
-void AgentSystem::tick(world::World& world, core::Random& random, world::EnergyLedger& ledger) {
+void AgentSystem::tick(world::WorldQuery& query, world::Forage& forage, core::Random& random,
+                       world::EnergyLedger& ledger) {
     const std::size_t initial = agents_.size();
     for (std::size_t i = 0; i < initial; ++i) {
         Agent& agent = agents_[i];
         if (!agent.alive()) continue;
-        const decision::Observation observation = buildObservation(agent, world);
+        const decision::Observation observation = buildObservation(agent, query);
         const decision::Action action = agent.policy_->decide(observation);
-        Behavior::execute(agent, action, world, ledger);
+        Behavior::execute(agent, action, query, forage, ledger);
         ++agent.age_;
         if (config_.lifespan > 0 && agent.alive() && agent.age_ >= config_.lifespan) {
             ledger.kill(agent.energy_, agent.id_, world::EnergyReason::AgentDeath);
@@ -44,7 +46,13 @@ void AgentSystem::tick(world::World& world, core::Random& random, world::EnergyL
     const std::size_t populationLimit = core::Math::toSizeClamped(config_.max);
     for (std::size_t i = 0; i < initial; ++i) {
         Agent& parent = agents_[i];
-        if (!parent.alive() || parent.energy_.energy < config_.repro) continue;
+        if (!parent.alive()) continue;
+        const double localAgents = config_.densityRepro > 0.0 && config_.densityRadius > 0.0
+            ? static_cast<double>(localDensity(parent.pos_, config_.densityRadius, parent.id()))
+            : 0.0;
+        const double reproThreshold = config_.repro *
+            (1.0 + std::max(0.0, config_.densityRepro) * localAgents);
+        if (!std::isfinite(reproThreshold) || parent.energy_.energy < reproThreshold) continue;
         if (agents_.size() >= populationLimit) break;
         core::EnergyState childEnergy{0.0, std::max(1e-9, static_cast<double>(config_.cap)), true};
         core::Vec2 childPosition = parent.pos_ + core::Vec2(
@@ -77,16 +85,43 @@ std::size_t AgentSystem::aliveCount() const {
 }
 void AgentSystem::rebuildIndex() {
     index_.clear();
-    for (const Agent& agent : agents_) if (agent.alive()) index_.insert(agent.id(), agent.pos());
+    byId_.assign(static_cast<std::size_t>(nextId_), nullptr);
+    for (Agent& agent : agents_) {
+        if (!agent.alive()) continue;
+        index_.insert(agent.id(), agent.pos());
+        if (agent.id() < byId_.size()) byId_[static_cast<std::size_t>(agent.id())] = &agent;
+    }
+}
+Agent* AgentSystem::find(core::EntityId id) {
+    return id < byId_.size() ? byId_[static_cast<std::size_t>(id)] : nullptr;
+}
+const Agent* AgentSystem::find(core::EntityId id) const {
+    return id < byId_.size() ? byId_[static_cast<std::size_t>(id)] : nullptr;
+}
+std::size_t AgentSystem::localDensity(core::Vec2 center, double radius, core::EntityId exclude) const {
+    static thread_local std::vector<core::EntityId> ids;
+    index_.queryUnsorted(center, radius, ids);
+    // Count index entries only. The index is the candidate set captured at the
+    // start of the tick; avoiding byId_ dereferences keeps this safe while the
+    // reproduction loop appends children (which may reallocate agents_).
+    std::size_t count = ids.size();
+    if (exclude != core::kInvalidEntityId) {
+        for (const core::EntityId id : ids) {
+            if (id == exclude) { --count; break; }
+        }
+    }
+    return count;
 }
 void AgentSystem::querySamples(core::Vec2 center, double radius, std::vector<world::AgentSample>& out) const {
     out.clear();
-    for (const Agent& agent : agents_) {
-        if (!agent.alive()) continue;
-        if ((agent.pos() - center).lengthSq() <= radius * radius) {
-            out.push_back({agent.id(), agent.pos(), agent.energy().energy, agent.energy().cap});
-        }
+    if (!core::Math::isFinite(center) || !std::isfinite(radius) || radius <= 0.0) return;
+    static thread_local std::vector<core::EntityId> ids;
+    index_.queryUnsorted(center, radius, ids);
+    out.reserve(ids.size());
+    for (const core::EntityId id : ids) {
+        const Agent* agent = find(id);
+        if (!agent || !agent->alive()) continue;
+        out.push_back({agent->id(), agent->pos(), agent->energy().energy, agent->energy().cap});
     }
-    std::sort(out.begin(), out.end(), [](const auto& a, const auto& b) { return a.id < b.id; });
 }
 } // namespace agentsim
