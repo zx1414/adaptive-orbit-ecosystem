@@ -2,6 +2,8 @@
 
 这是一个从零建立的 C++17 单线程生态模拟核心，不包含旧版 Ball、Nucleus、World、存档、Mod 或二进制快照接口。
 
+旧版 v2.3.1 的架构与计划文档保留在 [docs/archive/](archive/README.md)，完整源码在 Git 标签 `legacy-v2.3.1`；v3 构建不引用它们。
+
 ## 模块
 
 - **core**：值类型、向量与边界数学、PCG32 随机、时间、配置、事件。
