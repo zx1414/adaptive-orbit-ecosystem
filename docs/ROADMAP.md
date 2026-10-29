@@ -55,9 +55,15 @@ CLI `--save` / `--load`；损坏、截断、版本不匹配返回退出码 5，l
 验收：seed 42/7 的 20k 直跑与 10k 存档 + 10k 续跑 stateHash、总能量、种群、注入/耗散、audit 全部一致；
 `tools/m3_acceptance.ps1` 全 PASS；单元测试 30 个。
 
-## M4：可视化
+## M4：可视化（最小版本已完成）
 
-基于 WorldView 的新展示层或 Web UI。不复用旧 v2 快照协议。
+app::HtmlTraceWriter 只读 WorldView，按 `--html-interval` 采样，生成单文件 HTML：
+内嵌 JSON、Canvas 回放、播放/暂停/滑块、tick/种群/总能量；无外部 URL/脚本，离线可打开。
+CLI `--html` / `--html-interval`，兼容 `--load`/`--save`；写失败退出码 4。
+
+验收：`tools/m4_acceptance.ps1` 全 PASS（帧数/tick 递增/JSON/无外部 URL/错误码）。
+
+后续可扩展：真实浏览器 UI、服务器推送、多轨迹对比；仍不得复用 v2 快照协议。
 
 ## M5：神经网络
 

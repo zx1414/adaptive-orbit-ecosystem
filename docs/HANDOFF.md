@@ -1,7 +1,7 @@
-# EcoCore v3 交接文档（M3 完成）
+# EcoCore v3 交接文档（M4 完成）
 
 > 新会话先读本文件，再读 `README.md`、`docs/ARCH.md`、`docs/BALANCE.md`、`docs/ROADMAP.md`、
-> `docs/M2.5-DESIGN.md`、`docs/M3-PLAN.md`、`docs/REVIEW_PROTOCOL.md`。
+> `docs/M2.5-DESIGN.md`、`docs/M3-PLAN.md`、`docs/M4-PLAN.md`、`docs/REVIEW_PROTOCOL.md`。
 
 ## 1. 项目意图
 
@@ -33,8 +33,8 @@
 - 工作目录：`D:\ScuStu\Q\自适应环绕核生态模拟与生存游戏`
 - 分支：`main`。
 - 已有提交：`cbe93a1`（M1）、`66b5c49`（M2）、`201a18b`（M2.5 交接）、`9690e5f`（M2.5）、
-  `ebd4d92`（v2.3.1 归档）、`36102ba`（四层拆分）、`1e582da`（对抗审查协议）、`515848f`（M3 快照）。
-- 工作树：干净；M3 构建/单测/验收通过。
+  `ebd4d92`（v2.3.1 归档）、`36102ba`（四层拆分）、`1e582da`（对抗审查协议）、`515848f`（M3 快照）、M4 提交见 git log。
+- 工作树：M4 完成后提交；构建/单测/验收通过。
 - 构建产物：`build/simulator.exe`、`build/unit_tests.exe`；CMake 目录 `build-cmake/`。
 
 ## 3. 架构与不变量
@@ -66,6 +66,13 @@ perception/behavior 不 include sim/app；decision 不依赖 world。
 
 - 生产者局部光竞争、密度依赖繁殖；Agent 饱和收获 + reserve + 密度依赖繁殖；max 仅安全阀。
 - 所有系数默认 0，默认 20k 保持 300/200、总能量 49690.20045。
+
+### M4 最小可视化
+
+- app::HtmlTraceWriter 只读 WorldView，按 `--html-interval` 采样（上限 2000 帧），生成单文件 HTML：
+  内嵌 `const TRACE = {...}`、Canvas 回放、播放/暂停/滑块、tick/种群/总能量。
+- 生产者绿、Agent 橙，亮度随 energy/cap；无外部 URL/脚本/字体，离线可打开。
+- CLI `--html` / `--html-interval`（>0，默认 100），兼容 `--load`/`--save`；写失败退出码 4，参数错误 2。
 
 ### M3 快照
 
@@ -101,6 +108,7 @@ perception/behavior 不 include sim/app；decision 不依赖 world。
 
 - 10k 存档 + 10k 续跑与 20k 直跑的 stateHash、总能量、种群、injected/dissipated/transferred、audit 全部一致。
 - `tools/m3_acceptance.ps1` 全部 PASS；损坏/空文件/版本篡改退出码 5；load+seed 覆盖退出码 2。
+- `tools/m4_acceptance.ps1` 14 项 PASS；HTML 帧/tick 递增/JSON/无外部 URL/错误码。
 - `tools/acceptance.ps1` 14 项 PASS（M2.5 回归）。
 
 ## 6. 性能
@@ -117,6 +125,7 @@ build\unit_tests.exe
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/check.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/acceptance.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/m3_acceptance.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/m4_acceptance.ps1
 ```
 
 - 单测：30 passed（空间索引/竞争/密度/饱和收获/快照格式/存读续跑/损坏拒绝）。
@@ -131,7 +140,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/m3_acceptance.ps1
   仍建议下一轮恢复链路后重跑独立红队。
 - Agent 平衡数量随 seed 波动（M2.5）；优先调 harvest/halfSaturation/densityRepro。
 - 快照 policy state 已预留，但当前 RulePolicy/StubPolicy 为空；NNetPolicy 需要覆盖序列化。
-- 下一步 M4：基于 WorldView 的新可视化/Web UI（不复用 v2 协议）；或 M5 NNetPolicy。
+- M4 最小可视化已完成；后续可扩展真实浏览器 UI/服务器推送，但不得复用 v2 协议。
+- 下一步 M5：NNetPolicy（MLP 前向、权重文件维度/版本校验、genome/state 序列化），保持四层契约。
 - 四层架构红线与 REVIEW_PROTOCOL 继续有效。
 
 ## 9. 子代理与 ZCode
@@ -150,6 +160,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/m3_acceptance.ps1
 - 生产者：[src/producers/Producer.cpp](src/producers/Producer.cpp)、[src/producers/ProducerSystem.cpp](src/producers/ProducerSystem.cpp)
 - Agent：[src/agents/AgentSystem.cpp](src/agents/AgentSystem.cpp)
 - 探测/行为：[src/perception/Sensors.cpp](src/perception/Sensors.cpp)、[src/behavior/Behavior.cpp](src/behavior/Behavior.cpp)
+- 可视化：[src/app/HtmlTraceWriter.cpp](src/app/HtmlTraceWriter.cpp)、[tools/m4_acceptance.ps1](tools/m4_acceptance.ps1)
 - 配置/CLI：[src/core/Config.h](src/core/Config.h)、[src/app/Cli.cpp](src/app/Cli.cpp)
 - 验收：[tools/acceptance.ps1](tools/acceptance.ps1)、[tools/m3_acceptance.ps1](tools/m3_acceptance.ps1)
 - 设计/协议：[docs/M3-PLAN.md](docs/M3-PLAN.md)、[docs/REVIEW_PROTOCOL.md](docs/REVIEW_PROTOCOL.md)
@@ -160,6 +171,6 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/m3_acceptance.ps1
 继续 EcoCore v3，工作目录：D:\ScuStu\Q\自适应环绕核生态模拟与生存游戏。
 先读 docs/HANDOFF.md、docs/ARCH.md、docs/ROADMAP.md、docs/M3-PLAN.md、docs/REVIEW_PROTOCOL.md。
 M3 存档/快照已完成：29 个单测、tools/check.ps1、tools/acceptance.ps1、tools/m3_acceptance.ps1 通过。
-下一步 M4 可视化（WorldView 新展示层/Web UI）或 M5 NNetPolicy。
+M4 最小可视化已完成（--html 单文件 Canvas 轨迹）。下一步 M5 NNetPolicy。
 子代理优先 zcode-start-plan-acct-1e99ffd8-.../GLM-5.3-Flash；任务拆小，实现与红队隔离。
 ```

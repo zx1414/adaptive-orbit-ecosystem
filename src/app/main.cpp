@@ -1,5 +1,6 @@
 #include "app/Cli.h"
 #include "app/ConsoleRenderer.h"
+#include "app/HtmlTraceWriter.h"
 #include "app/StatsWriter.h"
 #include "sim/Simulation.h"
 #include "sim/SnapshotStore.h"
@@ -21,7 +22,7 @@ int main(int argc, char** argv) {
         return 2;
     }
     if (options.help) { std::cout << app::usage(); return 0; }
-    if (options.version) { std::cout << "EcoCore M3\n"; return 0; }
+    if (options.version) { std::cout << "EcoCore M4\n"; return 0; }
     try {
         std::unique_ptr<sim::Simulation> worldPtr;
         if (!options.loadPath.empty()) {
@@ -38,6 +39,10 @@ int main(int argc, char** argv) {
         sim::Simulation& world = *worldPtr;
         app::ConsoleRenderer renderer;
         std::unique_ptr<app::StatsWriter> statsWriter;
+        std::unique_ptr<app::HtmlTraceWriter> htmlWriter;
+        if (!options.htmlPath.empty()) {
+            htmlWriter = std::make_unique<app::HtmlTraceWriter>(options.htmlPath);
+        }
         if (!options.statsPath.empty()) {
             statsWriter = std::make_unique<app::StatsWriter>(options.statsPath, world);
             if (!statsWriter->ok()) {
@@ -47,11 +52,17 @@ int main(int argc, char** argv) {
         }
         const auto start = Clock::now();
         core::Tick lastStatsTick = std::numeric_limits<core::Tick>::max();
+        core::Tick lastHtmlTick = std::numeric_limits<core::Tick>::max();
         while (!world.finished()) {
             if (statsWriter && world.tick() % static_cast<core::Tick>(options.statsInterval) == 0 &&
                 world.tick() != lastStatsTick) {
                 statsWriter->write(world);
                 lastStatsTick = world.tick();
+            }
+            if (htmlWriter && world.tick() % static_cast<core::Tick>(options.htmlInterval) == 0 &&
+                world.tick() != lastHtmlTick) {
+                htmlWriter->capture(world.view());
+                lastHtmlTick = world.tick();
             }
             if (options.render && options.renderInterval > 0 &&
                 world.tick() % static_cast<core::Tick>(options.renderInterval) == 0) {
@@ -60,12 +71,17 @@ int main(int argc, char** argv) {
             world.step();
         }
         if (statsWriter && world.tick() != lastStatsTick) statsWriter->write(world);
+        if (htmlWriter && world.tick() != lastHtmlTick) htmlWriter->capture(world.view());
         if (!options.savePath.empty()) {
             std::string snapshotError;
             if (!sim::SnapshotStore::save(world, options.savePath, snapshotError)) {
                 std::cerr << "cannot save snapshot: " << snapshotError << '\n';
                 return 4;
             }
+        }
+        if (htmlWriter && !htmlWriter->write()) {
+            std::cerr << "cannot write html trace: " << htmlWriter->error() << '\n';
+            return 4;
         }
         const auto end = Clock::now();
         const auto& stats = world.view().stats;

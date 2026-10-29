@@ -40,6 +40,7 @@ endif()
 add_executable(simulator
   src/app/Cli.cpp
   src/app/ConsoleRenderer.cpp
+  src/app/HtmlTraceWriter.cpp
   src/app/StatsWriter.cpp
   src/app/main.cpp
 )
