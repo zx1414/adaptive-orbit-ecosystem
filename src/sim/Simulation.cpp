@@ -26,16 +26,23 @@ std::uint64_t hashDouble(std::uint64_t hash, double value) {
     std::memcpy(&bits, &value, sizeof(bits));
     return hashBytes(hash, &bits, sizeof(bits));
 }
+std::uint64_t hashString(std::uint64_t hash, const std::string& value) {
+    const std::uint64_t size = static_cast<std::uint64_t>(value.size());
+    hash = hashBytes(hash, &size, sizeof(size));
+    return hashBytes(hash, value.data(), value.size());
+}
 } // namespace
 
-Simulation::Simulation(const core::SimConfig& config)
+Simulation::Simulation(const core::SimConfig& config) : Simulation(LoadTag{}, config) {
+    initialize();
+}
+
+Simulation::Simulation(LoadTag, const core::SimConfig& config)
     : config_(normalizedConfig(config)),
       environment_(config_.world.bounds(), config_.light),
       random_(config_.world.seed),
       producers_(config_.world.bounds(), config_.producer),
-      agents_(config_.world.bounds(), config_.agent, config_.policy) {
-    initialize();
-}
+      agents_(config_.world.bounds(), config_.agent, config_.policy) {}
 
 void Simulation::initialize() {
     ledger_.reset();
@@ -159,12 +166,16 @@ std::uint64_t Simulation::stateHash() const {
     hash = hashBytes(hash, &rng.increment, sizeof(rng.increment));
     hash = hashDouble(hash, rng.cachedNormal);
     hash = hashBytes(hash, &rng.hasCachedNormal, sizeof(rng.hasCachedNormal));
+    hash = hashString(hash, config_.policy.rule);
     for (const auto& producer : producers_.all()) {
         if (!producer || !producer->alive()) continue;
         hash = hashBytes(hash, &producer->id, sizeof(producer->id));
+        const std::uint8_t kind = static_cast<std::uint8_t>(producer->kind());
+        hash = hashBytes(hash, &kind, sizeof(kind));
         hash = hashDouble(hash, producer->pos.x);
         hash = hashDouble(hash, producer->pos.y);
         hash = hashDouble(hash, producer->energy.energy);
+        hash = hashDouble(hash, producer->energy.cap);
     }
     for (const auto& agent : agents_.agents()) {
         if (!agent.alive()) continue;
@@ -175,11 +186,38 @@ std::uint64_t Simulation::stateHash() const {
         hash = hashDouble(hash, agent.velocity().x);
         hash = hashDouble(hash, agent.velocity().y);
         hash = hashDouble(hash, agent.energy().energy);
+        hash = hashDouble(hash, agent.energy().cap);
+        const core::Tick age = agent.age();
+        hash = hashBytes(hash, &age, sizeof(age));
+        const decision::PolicySpec spec = agent.policy().spec();
+        hash = hashString(hash, spec.id);
+        hash = hashBytes(hash, &spec.observationVersion, sizeof(spec.observationVersion));
+        hash = hashBytes(hash, &spec.actionVersion, sizeof(spec.actionVersion));
+        hash = hashBytes(hash, &spec.observationDim, sizeof(spec.observationDim));
+        hash = hashBytes(hash, &spec.genomeDim, sizeof(spec.genomeDim));
         const auto genome = agent.policy().genome();
         for (float value : genome) { const double d = value; hash = hashDouble(hash, d); }
     }
+    const std::size_t producerBirths = producers_.births();
+    const std::size_t producerDeaths = producers_.deaths();
+    const std::size_t agentBirths = agents_.births();
+    const std::size_t agentDeaths = agents_.deaths();
+    hash = hashBytes(hash, &producerBirths, sizeof(producerBirths));
+    hash = hashBytes(hash, &producerDeaths, sizeof(producerDeaths));
+    hash = hashBytes(hash, &agentBirths, sizeof(agentBirths));
+    hash = hashBytes(hash, &agentDeaths, sizeof(agentDeaths));
+    const core::EntityId producerNext = producers_.nextId();
+    const core::EntityId agentNext = agents_.nextId();
+    hash = hashBytes(hash, &producerNext, sizeof(producerNext));
+    hash = hashBytes(hash, &agentNext, sizeof(agentNext));
     hash = hashDouble(hash, ledger_.stats().injected);
     hash = hashDouble(hash, ledger_.stats().dissipated);
+    hash = hashDouble(hash, ledger_.stats().transferred);
+    for (std::size_t i = 0; i < world::kEnergyReasonCount; ++i) {
+        const auto& totals = ledger_.stats().reasons[i];
+        hash = hashDouble(hash, totals.in);
+        hash = hashDouble(hash, totals.out);
+    }
     hash = hashDouble(hash, totalEnergy());
     return hash;
 }

@@ -14,6 +14,8 @@
 #include <vector>
 
 namespace sim {
+class SnapshotStore;
+
 // Composition root. Owns every mutable subsystem and exposes only the
 // read-only WorldQuery contract plus the Forage mutation used by Behavior.
 class Simulation final : public world::WorldQuery, public world::Forage {
@@ -47,6 +49,9 @@ public:
     const world::EnergyLedger& ledger() const { return ledger_; }
 
 private:
+    friend class SnapshotStore;
+    struct LoadTag {};
+    Simulation(LoadTag, const core::SimConfig& config);
     void initialize();
     void updateView();
 

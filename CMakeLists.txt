@@ -20,6 +20,8 @@ add_library(eco_core STATIC
   src/world/Environment.cpp
   src/world/SpatialIndex.cpp
   src/sim/Simulation.cpp
+  src/sim/Snapshot.cpp
+  src/sim/SnapshotStore.cpp
   src/producers/Producer.cpp
   src/producers/ProducerSystem.cpp
   src/agents/Agent.cpp
@@ -49,6 +51,8 @@ add_executable(unit_tests
   tests/unit/test_policy.cpp
   tests/unit/test_world.cpp
   tests/unit/test_m25.cpp
+  tests/unit/test_snapshot_format.cpp
+  tests/unit/test_snapshot_store.cpp
 )
 target_include_directories(unit_tests PRIVATE tests/unit)
 target_link_libraries(unit_tests PRIVATE eco_core)

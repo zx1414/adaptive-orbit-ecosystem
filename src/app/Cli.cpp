@@ -39,7 +39,10 @@ CliOptions parseCli(int argc, char** argv) {
         else if (arg == "--width") options.config.world.width = std::stod(nextValue(i, argc, argv, "--width"));
         else if (arg == "--height") options.config.world.height = std::stod(nextValue(i, argc, argv, "--height"));
         else if (arg == "--seed") options.config.world.seed = static_cast<std::uint64_t>(parseNonNegativeSize(i, argc, argv, "--seed"));
-        else if (arg == "--ticks") options.config.world.maxTicks = static_cast<core::Tick>(parseNonNegativeSize(i, argc, argv, "--ticks"));
+        else if (arg == "--ticks") {
+            options.config.world.maxTicks = static_cast<core::Tick>(parseNonNegativeSize(i, argc, argv, "--ticks"));
+            options.ticksProvided = true;
+        }
         else if (arg == "--producers") options.config.producer.initial = parseNonNegativeSize(i, argc, argv, "--producers");
         else if (arg == "--agents") options.config.agent.initial = parseNonNegativeSize(i, argc, argv, "--agents");
         else if (arg == "--policy") options.config.policy.rule = nextValue(i, argc, argv, "--policy");
@@ -70,10 +73,32 @@ CliOptions parseCli(int argc, char** argv) {
         else if (arg == "--energy-summary") options.energySummary = true;
         else if (arg == "--audit") { /* auditing is mandatory */ }
         else if (arg == "--bench") options.bench = true;
+        else if (arg == "--save") options.savePath = nextValue(i, argc, argv, "--save");
+        else if (arg == "--load") options.loadPath = nextValue(i, argc, argv, "--load");
         else if (arg == "--state-hash") options.stateHashPath = nextValue(i, argc, argv, "--state-hash");
         else if (arg == "--stats") options.statsPath = nextValue(i, argc, argv, "--stats");
         else if (arg == "--stats-interval") options.statsInterval = std::stoi(nextValue(i, argc, argv, "--stats-interval"));
         else throw std::runtime_error("unknown argument: " + arg);
+    }
+    if (!options.loadPath.empty()) {
+        static const char* const configFlags[] = {
+            "--width", "--height", "--seed", "--producers", "--agents", "--policy",
+            "--photo", "--producer-maint", "--producer-repro", "--producer-max",
+            "--producer-crowding", "--producer-radius", "--producer-competition",
+            "--producer-density-repro", "--agent-metab", "--agent-max-speed",
+            "--agent-move-k", "--agent-harvest", "--agent-reserve",
+            "--agent-half-saturation", "--agent-repro", "--agent-max",
+            "--agent-density-repro", "--agent-density-radius", "--agent-lifespan",
+            "--sense-radius", "--mutation"
+        };
+        for (int i = 1; i < argc; ++i) {
+            const std::string arg = argv[i];
+            for (const char* flag : configFlags) {
+                if (arg == flag) {
+                    throw std::runtime_error("--load cannot be combined with simulation config overrides: " + arg);
+                }
+            }
+        }
     }
     if (!std::isfinite(options.config.world.width) || options.config.world.width <= 0.0 ||
         !std::isfinite(options.config.world.height) || options.config.world.height <= 0.0) {
@@ -99,6 +124,7 @@ std::string usage() {
            "  --agent-repro --agent-max --agent-lifespan --agent-density-repro --agent-density-radius\n"
            "  --sense-radius --mutation\n"
            "  --energy-summary --stats <path> --stats-interval <n>\n"
+           "  --save <path> --load <path>\n"
            "  --state-hash <path> --bench --audit --help --version\n";
 }
 } // namespace app

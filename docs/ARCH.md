@@ -125,7 +125,33 @@ Sensors 和 IPolicy::decide 均不使用 RNG。所有随机来自世界持有的
 
 空槽距离使用 -1 哨兵，因此“距离为 0 的有效目标”不会被误判为空。新增字段必须提升版本号并同步更新所有策略。
 
-## 当前 M2.5 范围
+## 存档 / 快照（M3）
+
+快照格式为版本化二进制，固定 32 字节头：`magic "ECOCORE3"`、格式版本、头长度、payload 长度、
+FNV-1a 校验和；payload 使用手写 little-endian 读写，不依赖主机字节序或第三方库。
+
+保存内容：
+
+- SimConfig 全字段（world/light/producer/agent/policy）。
+- tick、生产者/Agent 的 nextId、births、deaths。
+- PCG32 的 state/increment/cachedNormal/hasCachedNormal。
+- EnergyLedger 的 injected/dissipated/transferred、10 类 reason 的 in/out、sealed 标志。
+- 生产者：id、kind、位置、energy、cap。
+- Agent：id、位置、速度、energy、cap、age、策略 spec.id/版本/维度、genome、预留 policy state。
+
+读档路径：
+
+1. 校验头、版本、长度、校验和；任何损坏立即返回错误（CLI 退出码 5）。
+2. 解析并做语义校验：有限值、cap>0、energy∈[0,cap]、id 唯一、nextId 大于已有 id、
+   策略 id 可创建且 spec/genome 匹配、账本已封存。
+3. 构造未初始化的 Simulation，直接替换实体、账本、RNG、tick；
+   **不调用 initialize/injectInitial**。
+4. 重建空间索引与 WorldView，立即执行能量审计；审计失败拒绝加载。
+
+`Simulation::stateHash` 已覆盖 policy spec.id/版本/维度、energy cap、age、nextId、births/deaths、
+账本 transferred 与全部 reason 统计，作为续跑一致性的比较依据。
+
+## 当前 M3 范围
 
 - sim::Simulation 组合根；world/agents/producers 只保留接口与系统，不存在编译期环。
 - 生产者局部光竞争：`shading = 1 / (1 + crowding * localDensity + competition * localBiomass / cap)`。
@@ -133,6 +159,8 @@ Sensors 和 IPolicy::decide 均不使用 RNG。所有随机来自世界持有的
 - Agent 饱和收获：`harvest * food / (food + halfSaturation)`，并保留 `harvestReserve`。
 - 所有感知/收获/邻居查询接入 SpatialIndex；Sensors 只取最近两个槽位，复用 scratch 缓冲。
 - 默认 max 仍为 300/200；标定配置用 1000 作为安全阀，平衡点由资源与密度决定。
-- 单元测试 19 个，集成冒烟与 tools/acceptance.ps1；平衡结果见 BALANCE.md，设计见 M2.5-DESIGN.md。
+- M3 快照：--save/--load、完整状态恢复、损坏/版本拒绝；10k 存档 + 10k 续跑 == 20k 直跑。
+- 单元测试 30 个，集成冒烟、tools/acceptance.ps1、tools/m3_acceptance.ps1；
+  平衡结果见 BALANCE.md，M3 设计见 M3-PLAN.md。
 
 后续里程碑见 ROADMAP.md。

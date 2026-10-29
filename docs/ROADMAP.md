@@ -43,9 +43,17 @@
 验收：seed 42/7/123 各 20k 不灭绝，审计逐 tick 通过，5k 预热后两个种群 100% 采样点低于 0.8×1000；
 同 seed 双跑哈希一致；seed 42 50k 耐久通过。结果见 docs/BALANCE.md。
 
-## M3：持久化
+## M3：持久化（已完成）
 
-新版本存档与快照；保存实体 ID、策略类型、基因组、策略内部状态和 PCG32 状态；验证读档续跑与不中断运行一致。
+版本化二进制快照（magic/version/长度/FNV-1a 校验和）：保存 SimConfig、tick、PCG32 全状态、
+EnergyLedger 全部统计与 sealed、Producer/Agent 的 id/位置/速度/能量/cap/age、nextId、births/deaths、
+策略 spec.id/genome 与预留 policy state。读档不重新注入初始能量，恢复后立即审计。
+
+CLI `--save` / `--load`；损坏、截断、版本不匹配返回退出码 5，load + 配置覆盖返回 2。
+`stateHash` 扩展覆盖 policy spec id/版本/维度、cap、age、nextId、births/deaths 与完整账本统计。
+
+验收：seed 42/7 的 20k 直跑与 10k 存档 + 10k 续跑 stateHash、总能量、种群、注入/耗散、audit 全部一致；
+`tools/m3_acceptance.ps1` 全 PASS；单元测试 30 个。
 
 ## M4：可视化
 

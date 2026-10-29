@@ -27,5 +27,12 @@ public:
     virtual void mutate(core::Random& random, float rate) = 0;
     virtual std::vector<float> genome() const = 0;
     virtual void setGenome(const float* data, std::size_t size) = 0;
+    // Optional opaque state for policies with recurrent/normalization state.
+    // The default accepts only an empty blob; NNetPolicy can override.
+    virtual void serializeState(std::vector<unsigned char>& out) const { out.clear(); }
+    virtual bool deserializeState(const unsigned char* data, std::size_t size) {
+        (void)data;
+        return size == 0;
+    }
 };
 } // namespace decision

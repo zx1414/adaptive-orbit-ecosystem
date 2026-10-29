@@ -13,6 +13,9 @@ struct CliOptions {
     bool version = false;
     std::string stateHashPath;
     std::string statsPath;
+    std::string savePath;
+    std::string loadPath;
+    bool ticksProvided = false;
     int statsInterval = 100;
 };
 CliOptions parseCli(int argc, char** argv);

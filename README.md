@@ -58,6 +58,10 @@ build\simulator.exe --no-render --ticks 20000 --seed 42 --audit `
   --agent-move-k 0.00002 --agent-harvest 0.5 --agent-reserve 10 `
   --agent-half-saturation 20 --agent-density-repro 0.01 --agent-density-radius 200 `
   --agent-lifespan 3000
+
+# M3 快照：10k tick 存档，读档继续跑到 20k
+build\simulator.exe --no-render --ticks 10000 --seed 42 --audit --save build\m3\mid.snap
+build\simulator.exe --no-render --load build\m3\mid.snap --ticks 20000 --audit
 ~~~
 
 参数：--width --height --seed --ticks --producers --agents --policy --render/--no-render
@@ -77,13 +81,13 @@ build\simulator.exe --no-render --ticks 20000 --seed 42 --audit `
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/check.ps1
 ~~~
 
-包含：MSVC /W4 /WX 构建、决策层依赖守卫、单元测试、双跑确定性、零生产者灭绝、stub 策略冒烟。
+包含：MSVC /W4 /WX 构建、依赖守卫、单元测试、双跑确定性、零生产者灭绝、stub 策略冒烟。
 
-当前 19 个单元测试覆盖能量守恒/截断/死亡、初始化封存、亚 epsilon 耗散记账、环境光照有限性、
+当前 30 个单元测试覆盖能量守恒/截断/死亡、初始化封存、亚 epsilon 耗散记账、环境光照有限性、
 生产者光合是唯一初级注入、空间索引查询、局部光竞争、密度依赖繁殖、饱和收获、
 M2.5 配置双跑确定性、策略确定性、观测版本校验、观测有限性、种群/基因统计、寿命死亡、
 世界双跑哈希一致、零生产者最终灭绝。集成冒烟额外覆盖统计 CSV、状态哈希和退出码契约；
-`tools/acceptance.ps1` 覆盖 3 seed 20k、双跑哈希与 50k 耐久。
+`tools/acceptance.ps1` 覆盖 3 seed 20k、双跑哈希与 50k 耐久；`tools/m3_acceptance.ps1` 覆盖 20k 直跑 vs 10k 存档 + 10k 续跑、损坏/版本拒绝和退出码。
 
 ## 目录
 
@@ -99,12 +103,12 @@ M2.5 配置双跑确定性、策略确定性、观测版本校验、观测有限
 - tests/unit：零第三方断言框架与测试
 - tools：构建与总检查脚本
 - docs/ARCH.md、docs/ROADMAP.md、docs/BALANCE.md：架构、里程碑与平衡实验
-- docs/HANDOFF.md：跨会话交接、当前状态与 M3 目标
+- docs/HANDOFF.md：跨会话交接、当前状态与后续目标
 - docs/REVIEW_PROTOCOL.md：生成者 / 红队 / 验证者分离的对抗式审查协议
 - docs/archive/：v2.3.1 旧架构与计划归档（只读，不参与构建）
 
 ## 后续
 
-M2.5 已完成：资源竞争、密度依赖繁殖、饱和收获和空间索引接入，使种群在 1000 安全阀下稳定共存，
-默认 20k 耗时从约 102 秒降到约 16 秒。M3 存档与快照、M4 新可视化、M5 NNetPolicy、
-M6 新扩展接口。详见 docs/ROADMAP.md 与 docs/BALANCE.md。
+M2.5 已完成；M3 存档/快照已完成：完整 Simulation 状态可保存/恢复，10k 存档 + 10k 续跑与 20k 直跑
+逐位一致，损坏/版本文件返回退出码 5。下一步是 M4 新可视化、M5 NNetPolicy、M6 新扩展接口。
+详见 docs/ROADMAP.md、docs/BALANCE.md、docs/M3-PLAN.md。

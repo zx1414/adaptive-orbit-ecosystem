@@ -2,6 +2,7 @@
 #include "app/ConsoleRenderer.h"
 #include "app/StatsWriter.h"
 #include "sim/Simulation.h"
+#include "sim/SnapshotStore.h"
 #include <chrono>
 #include <fstream>
 #include <iomanip>
@@ -20,9 +21,21 @@ int main(int argc, char** argv) {
         return 2;
     }
     if (options.help) { std::cout << app::usage(); return 0; }
-    if (options.version) { std::cout << "EcoCore M2\n"; return 0; }
+    if (options.version) { std::cout << "EcoCore M3\n"; return 0; }
     try {
-        sim::Simulation world(options.config);
+        std::unique_ptr<sim::Simulation> worldPtr;
+        if (!options.loadPath.empty()) {
+            std::string snapshotError;
+            worldPtr = sim::SnapshotStore::load(options.loadPath, options.ticksProvided,
+                                                options.config.world.maxTicks, snapshotError);
+            if (!worldPtr) {
+                std::cerr << "cannot load snapshot: " << snapshotError << '\n';
+                return 5;
+            }
+        } else {
+            worldPtr = std::make_unique<sim::Simulation>(options.config);
+        }
+        sim::Simulation& world = *worldPtr;
         app::ConsoleRenderer renderer;
         std::unique_ptr<app::StatsWriter> statsWriter;
         if (!options.statsPath.empty()) {
@@ -47,6 +60,13 @@ int main(int argc, char** argv) {
             world.step();
         }
         if (statsWriter && world.tick() != lastStatsTick) statsWriter->write(world);
+        if (!options.savePath.empty()) {
+            std::string snapshotError;
+            if (!sim::SnapshotStore::save(world, options.savePath, snapshotError)) {
+                std::cerr << "cannot save snapshot: " << snapshotError << '\n';
+                return 4;
+            }
+        }
         const auto end = Clock::now();
         const auto& stats = world.view().stats;
         std::cout << std::setprecision(10)
@@ -58,7 +78,7 @@ int main(int argc, char** argv) {
                   << " dissipated=" << stats.dissipated
                   << " transferred=" << stats.transferred
                   << " audit=" << (stats.auditOk ? "ok" : "FAIL")
-                  << " policy=" << options.config.policy.rule
+                  << " policy=" << world.config().policy.rule
                   << " reason=" << (stats.finishReason.empty() ? "running" : stats.finishReason)
                   << '\n';
         if (options.energySummary) {

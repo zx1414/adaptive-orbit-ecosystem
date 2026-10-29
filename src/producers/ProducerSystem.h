@@ -7,6 +7,8 @@
 #include <memory>
 #include <vector>
 
+namespace sim { class SnapshotStore; }
+
 namespace producers {
 class ProducerSystem {
 public:
@@ -17,6 +19,7 @@ public:
     std::size_t aliveCount() const;
     std::size_t births() const { return births_; }
     std::size_t deaths() const { return deaths_; }
+    core::EntityId nextId() const { return nextId_; }
     std::size_t size() const { return producers_.size(); }
     const std::vector<std::unique_ptr<Producer>>& all() const { return producers_; }
     std::vector<std::unique_ptr<Producer>>& all() { return producers_; }
@@ -33,6 +36,7 @@ public:
     Neighborhood neighborhood(core::Vec2 center, double radius, core::EntityId exclude) const;
     core::EntityId allocateId() { return nextId_++; }
 private:
+    friend class sim::SnapshotStore;
     core::Bounds bounds_;
     core::ProducerConfig config_;
     std::vector<std::unique_ptr<Producer>> producers_;

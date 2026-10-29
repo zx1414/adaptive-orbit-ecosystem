@@ -6,6 +6,7 @@
 #include <string>
 
 namespace producers { class PhotoProducer; }
+namespace sim { class SnapshotStore; }
 
 namespace world {
 enum class EnergyReason : std::uint8_t {
@@ -56,6 +57,7 @@ private:
     static double headroom(const core::EnergyState& state);
     // The only primary energy injector is a producer's photosynthesis.
     friend class producers::PhotoProducer;
+    friend class sim::SnapshotStore;
     double injectPrimary(core::EnergyState& state, core::EntityId id, double amount);
     EnergyStats stats_{};
     bool initialSealed_ = false;

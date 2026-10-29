@@ -92,7 +92,7 @@ build\simulator.exe --no-render --ticks 20000 --seed 42 --audit `
 - 5k tick 预热后，三个 seed 的 producers 与 agents **100% 采样点**都低于 800（0.8 × 1000 上限）。
 - 每 tick 审计通过；进程退出码 0。
 - 同 seed 双跑状态哈希一致；seed 7 额外重复 3 次均为 `2faf3ce0d75683b9`。
-- 默认基线不变：20k 仍是 300/200、总能量 49690.20045；5k 状态哈希 `ae357d4f52c5f4fa` 不变。
+- 默认基线行为不变：20k 仍是 300/200、总能量 49690.20045；M3 扩展 stateHash 覆盖后，5k 哈希更新为 `fea1413153222893`（旧 `ae357d4f52c5f4fa` 仅覆盖旧字段）。
 
 ### 与 M2 的差异
 

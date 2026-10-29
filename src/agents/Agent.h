@@ -6,6 +6,8 @@
 #include <cstdint>
 #include <memory>
 
+namespace sim { class SnapshotStore; }
+
 namespace agentsim {
 
 class Behavior;
@@ -41,6 +43,7 @@ public:
 private:
     friend class Behavior;
     friend class AgentSystem;
+    friend class sim::SnapshotStore;
 
     std::unique_ptr<Agent> cloneForReproduction(
         core::EntityId childId, core::Vec2 childPosition,

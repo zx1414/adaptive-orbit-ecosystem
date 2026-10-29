@@ -8,6 +8,8 @@
 #include <memory>
 #include <vector>
 
+namespace sim { class SnapshotStore; }
+
 namespace agentsim {
 class AgentSystem {
 public:
@@ -19,6 +21,7 @@ public:
     std::size_t aliveCount() const;
     std::size_t births() const { return births_; }
     std::size_t deaths() const { return deaths_; }
+    core::EntityId nextId() const { return nextId_; }
     std::size_t size() const { return agents_.size(); }
     const std::vector<Agent>& agents() const { return agents_; }
     std::vector<Agent>& agents() { return agents_; }
@@ -29,6 +32,7 @@ public:
     const Agent* find(core::EntityId id) const;
     std::size_t localDensity(core::Vec2 center, double radius, core::EntityId exclude) const;
 private:
+    friend class sim::SnapshotStore;
     core::Bounds bounds_;
     core::AgentConfig config_;
     core::PolicyConfig policyConfig_;
