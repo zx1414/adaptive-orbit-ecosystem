@@ -4,6 +4,18 @@
 
 目录、模块边界、构建脚本、无第三方测试框架。已完成设计。
 
+## 架构红线（所有里程碑）
+
+世界 → 探测 → 决策 → 行为，严格单向：
+
+- `src/world` + `src/sim`：世界状态与只读查询。
+- `src/perception`：只构建 Observation，不调用策略、不使用 RNG。
+- `src/decision`：只读 Observation、输出 Action，不读取世界、不使用 RNG。
+- `src/behavior`：唯一写 Agent 状态的层，能量必须走 EnergyLedger。
+- `src/agents`：被动实体与生命周期，不得塞入探测/决策/行为逻辑。
+
+任何里程碑都不得把四层合并，或让探测/决策绕过值对象直接访问对方。
+
 ## M1：最小生态闭环
 
 能量账本、零产能环境、PhotoProducer、Agent、Sensors、Behavior、RulePolicy、StubPolicy、World 管线、CLI、测试。

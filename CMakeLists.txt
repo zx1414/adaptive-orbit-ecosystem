@@ -24,8 +24,8 @@ add_library(eco_core STATIC
   src/producers/ProducerSystem.cpp
   src/agents/Agent.cpp
   src/agents/AgentSystem.cpp
-  src/agents/Behavior.cpp
-  src/agents/Sensors.cpp
+  src/perception/Sensors.cpp
+  src/behavior/Behavior.cpp
 )
 target_include_directories(eco_core PUBLIC src)
 

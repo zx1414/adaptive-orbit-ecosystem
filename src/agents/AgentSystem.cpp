@@ -1,6 +1,6 @@
 #include "agents/AgentSystem.h"
-#include "agents/Behavior.h"
-#include "agents/Sensors.h"
+#include "behavior/Behavior.h"
+#include "perception/Sensors.h"
 #include "core/Math.h"
 #include "decision/PolicyRegistry.h"
 #include <algorithm>

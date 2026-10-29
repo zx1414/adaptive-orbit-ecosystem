@@ -4,17 +4,75 @@
 
 旧版 v2.3.1 的架构与计划文档保留在 [docs/archive/](archive/README.md)，完整源码在 Git 标签 `legacy-v2.3.1`；v3 构建不引用它们。
 
+## 总体架构：世界 → 探测 → 决策 → 行为
+
+这是本项目的目标架构，优先级高于具体文件命名；后续重构不得把四层重新揉回一个模块。
+
+```text
+┌──────────────────────────────┐
+│ 世界 World                    │
+│ Simulation/EnergyLedger/      │
+│ Environment/SpatialIndex      │
+└──────────────┬───────────────┘
+               │ WorldQuery / WorldView（只读样本）
+               ▼
+┌──────────────────────────────┐
+│ 探测 Perception               │
+│ Sensors::buildObservation     │
+└──────────────┬───────────────┘
+               │ Observation（值对象，版本 1）
+               ▼
+┌──────────────────────────────┐
+│ 决策 Decision                 │
+│ IPolicy::decide               │
+└──────────────┬───────────────┘
+               │ Action（值对象）
+               ▼
+┌──────────────────────────────┐
+│ 行为 Behavior                 │
+│ Behavior::execute             │
+└──────────────┬───────────────┘
+               │ 唯一的实体写入 + EnergyLedger
+               ▼
+             世界
+```
+
+严格约束：
+
+1. **世界**只通过 `WorldQuery`/`WorldView`/`Forage` 暴露能力；感知与决策不持有可变世界引用。
+2. **探测**只把世界样本转成 `Observation`，不调用策略，不使用 RNG。
+3. **决策**只读取 `Observation`、返回 `Action`，不读取世界，不使用 RNG。
+4. **行为**是唯一写 Agent 运动/能量/死亡的层；能量必须经过 `EnergyLedger`，收获必须按 id 走 `Forage`。
+5. 层间只传值对象：`Observation` / `Action`；不传策略指针给探测，不传世界给决策。
+6. 同一输入必须产生同一输出；随机只由世界持有的 PCG32 提供。
+
+模块映射：
+
+| 层 | 目录 | 职责 |
+| --- | --- | --- |
+| 世界 | `src/world` + `src/sim` | world 契约 + Simulation 状态/管线/审计 |
+| 探测 | `src/perception` | Sensors::buildObservation |
+| 决策 | `src/decision` | IPolicy / RulePolicy / StubPolicy |
+| 行为 | `src/behavior` | Behavior::execute，唯一状态写入者 |
+| 实体与编排 | `src/agents` | Agent 实体、AgentSystem 生命周期 |
+| 生产 | `src/producers` | Producer / PhotoProducer |
+| 应用 | `src/app` | CLI、渲染、统计 |
+
+`agents` 不是第五层：它只提供被动实体和生命周期编排；不得把探测或行为逻辑塞回 AgentSystem。
+
 ## 模块
 
 - **core**：值类型、向量与边界数学、PCG32 随机、时间、配置、事件。
 - **decision**：定长 Observation、Action 和 IPolicy。规则、占位策略以及后续神经网络实现都走同一接口；决策不可读取世界，不可使用 RNG。
 - **world**：能量账本、环境、空间索引、WorldQuery/Forage 接口与只读 WorldView；不拥有实体容器。
 - **producers**：Producer 抽象基类与 PhotoProducer。生产者将光照转化为生物量；局部光竞争与密度依赖繁殖由邻居查询驱动。
-- **agents**：Agent、Sensors、Behavior 与 AgentSystem。Sensors 只构造观测；Behavior 是行为执行的唯一位置，通过 WorldQuery 读取世界、通过 Forage 按 id 收获；寿命与密度依赖繁殖在 AgentSystem 中结算。
+- **perception**：Sensors 的观测构建；只读取 WorldQuery/WorldView，输出 Observation，不调用策略、不使用 RNG。
+- **behavior**：Behavior 的动作执行；通过 WorldQuery 读取世界、通过 Forage 按 id 收获，是 Agent 状态的唯一写入者。
+- **agents**：Agent 被动实体与 AgentSystem 生命周期编排；不包含探测/决策/行为逻辑。
 - **sim**：Simulation 组合根，持有 Environment、EnergyLedger、Random、ProducerSystem、AgentSystem，实现 WorldQuery + Forage，并负责每 tick 管线、审计与状态哈希。
 - **app**：命令行、控制台展示与 CSV 统计导出，不包含模拟规则。
 
-依赖方向：core ← decision；core ← world；world ← producers/agents（只依赖 world 的接口与账本）；sim → world/producers/agents；app → sim。agents/producers 不 include sim，决策层禁止反向依赖 world。M2.5 已删除 world::World，组合根正式位于 sim 层。
+依赖方向：core ← decision；core ← world；perception/behavior → world + decision 契约；agents → world/perception/behavior；producers → world；sim → world/producers/agents/perception/behavior/decision；app → sim。perception/behavior 不 include sim/app，决策层禁止反向依赖 world；M2.5 已删除 world::World，组合根正式位于 sim 层。
 
 ## 能量不变量
 

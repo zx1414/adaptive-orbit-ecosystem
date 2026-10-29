@@ -1,4 +1,4 @@
-#include "agents/Behavior.h"
+#include "behavior/Behavior.h"
 #include "core/Math.h"
 #include "world/Forage.h"
 #include "world/WorldQuery.h"

@@ -1,5 +1,5 @@
 #include "TestHarness.h"
-#include "agents/Sensors.h"
+#include "perception/Sensors.h"
 #include "sim/Simulation.h"
 #include <cmath>
 

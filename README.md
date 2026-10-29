@@ -8,8 +8,9 @@
 - **生产者是唯一能量来源**：Producer 抽象基类，当前实现 PhotoProducer，把光照转成生物量。
 - **能量账本**：所有能量变化经过 EnergyLedger；转移零和、耗散记账、死亡结算，每个 tick 校验
   injected - dissipated == 全部存活实体能量之和。
+- **四层架构**：世界 → 探测 → 决策 → 行为。探测只把世界样本变成 Observation；决策只把 Observation 变成 Action；行为是唯一写实体/账本的层。
 - **决策层可插拔**：Observation(28 维) + Action + IPolicy；规则策略与固定策略共用接口，后续可直接加神经网络。
-- **依赖方向**：core ← decision；core ← world；`sim::Simulation` 是唯一组合根，持有 producers/agents，并实现 `WorldQuery` 与 `Forage`；agents 只依赖这两个接口，不反向依赖 sim。app 负责装配与驱动。
+- **依赖方向**：core ← decision；core ← world；perception/behavior → world + decision；agents → world/perception/behavior；`sim::Simulation` 是唯一组合根，持有 producers/agents，并实现 `WorldQuery` 与 `Forage`。app 负责装配与驱动。
 
 ## 构建
 
@@ -87,11 +88,13 @@ M2.5 配置双跑确定性、策略确定性、观测版本校验、观测有限
 ## 目录
 
 - src/core：类型、数学、PCG32、时间、配置、事件
-- src/decision：Observation/Action/IPolicy/Registry/RulePolicy/StubPolicy
-- src/world：EnergyLedger、Environment、SpatialIndex、WorldQuery/Forage 接口、WorldView
+- src/world：世界契约——EnergyLedger、Environment、SpatialIndex、WorldQuery/Forage、WorldView
+- src/perception：探测，Sensors 构建 Observation
+- src/decision：决策，Observation/Action/IPolicy/Registry/RulePolicy/StubPolicy
+- src/behavior：行为，Behavior 执行动作并写实体/账本
 - src/producers：Producer 基类、PhotoProducer、ProducerSystem
-- src/agents：Agent、Sensors、Behavior、AgentSystem
-- src/sim：Simulation 组合根（WorldQuery + Forage 实现、审计、状态哈希）
+- src/agents：Agent 被动实体、AgentSystem 生命周期
+- src/sim：世界实现/组合根（Simulation、审计、状态哈希）
 - src/app：CLI、控制台渲染、CSV 统计
 - tests/unit：零第三方断言框架与测试
 - tools：构建与总检查脚本

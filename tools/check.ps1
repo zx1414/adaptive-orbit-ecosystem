@@ -5,24 +5,24 @@ if (-not $SkipBuild) { & (Join-Path $PSScriptRoot 'build.ps1') -Configuration $C
 $violations = @()
 Get-ChildItem -LiteralPath (Join-Path $root 'src/decision') -Include '*.h','*.cpp' -Recurse -File | ForEach-Object {
   $path = $_.FullName; $n = 0
-  Get-Content -LiteralPath $path | ForEach-Object { ++$n; if ($_ -match '^\s*#\s*include\s*[<"](?:world|agents|producers|app)/') { $violations += "${path}:${n}: decision must not depend on world" } }
+  Get-Content -LiteralPath $path | ForEach-Object { ++$n; if ($_ -match '^\s*#\s*include\s*[<"]\s*(?:world|agents|producers|perception|behavior|sim|app)/') { $violations += "${path}:${n}: decision must not depend on higher layers" } }
 }
 Get-ChildItem -LiteralPath (Join-Path $root 'src/core') -Include '*.h','*.cpp' -Recurse -File | ForEach-Object {
   $path = $_.FullName; $n = 0
-  Get-Content -LiteralPath $path | ForEach-Object { ++$n; if ($_ -match '^\s*#\s*include\s*[<"]\s*(?:world|agents|producers|app|decision)/') { $violations += "${path}:${n}: core must not depend on higher layers" } }
+  Get-Content -LiteralPath $path | ForEach-Object { ++$n; if ($_ -match '^\s*#\s*include\s*[<"]\s*(?:world|agents|producers|perception|behavior|sim|app|decision)/') { $violations += "${path}:${n}: core must not depend on higher layers" } }
 }
 Get-ChildItem -LiteralPath (Join-Path $root 'src/world') -Include '*.h','*.cpp' -Recurse -File | ForEach-Object {
   $path = $_.FullName; $n = 0
-  Get-Content -LiteralPath $path | ForEach-Object { ++$n; if ($_ -match '^\s*#\s*include\s*[<"]app/') { $violations += "${path}:${n}: world must not depend on app" } }
+  Get-Content -LiteralPath $path | ForEach-Object { ++$n; if ($_ -match '^\s*#\s*include\s*[<"]\s*(?:app|agents|producers|perception|behavior|sim|decision)/') { $violations += "${path}:${n}: world must not depend on higher layers" } }
 }
 Get-ChildItem -LiteralPath (Join-Path $root 'src') -Include '*.h','*.cpp' -Recurse -File | ForEach-Object {
   $path = $_.FullName; $n = 0
   Get-Content -LiteralPath $path | ForEach-Object { ++$n; if ($_ -match '^\s*#\s*include\s*[<"]\s*\.\.[\\/]') { $violations += "${path}:${n}: relative parent include is forbidden" } }
 }
-foreach ($layer in @('world', 'agents', 'producers')) {
+foreach ($layer in @('world', 'agents', 'producers', 'perception', 'behavior')) {
   Get-ChildItem -LiteralPath (Join-Path $root ('src/' + $layer)) -Include '*.h','*.cpp' -Recurse -File | ForEach-Object {
     $path = $_.FullName; $n = 0
-    Get-Content -LiteralPath $path | ForEach-Object { ++$n; if ($_ -match '^\s*#\s*include\s*[<"]sim/') { $violations += "${path}:${n}: lower layer must not depend on sim" } }
+    Get-Content -LiteralPath $path | ForEach-Object { ++$n; if ($_ -match '^\s*#\s*include\s*[<"]\s*(?:sim|app)/') { $violations += "${path}:${n}: lower layer must not depend on sim/app" } }
   }
 }
 Get-ChildItem -LiteralPath (Join-Path $root 'src/sim') -Include '*.h','*.cpp' -Recurse -File | ForEach-Object {

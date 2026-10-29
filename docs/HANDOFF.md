@@ -14,11 +14,49 @@
 - 单线程、PCG32、固定迭代顺序、稳定 EntityId、可复现状态哈希。
 - 零第三方依赖，MSVC `/W4 /WX /permissive- /utf-8`。
 
+## 1.1 用户目标架构（最高优先级）
+
+用户明确要求的是四层架构：
+
+```text
+世界（World）
+  │ 只读查询/样本
+  ▼
+探测（Perception）
+  │ Observation 值对象
+  ▼
+决策（Decision）
+  │ Action 值对象
+  ▼
+行为（Behavior）
+  │ 唯一实体写入 + 账本
+  ▼
+世界
+```
+
+对应目录：
+
+- 世界：`src/world`（WorldQuery/Forage/WorldView/Energy/Environment/SpatialIndex）+
+  `src/sim`（Simulation 组合根，实现世界状态与每 tick 管线）。
+- 探测：`src/perception`（Sensors::buildObservation）。
+- 决策：`src/decision`（IPolicy/RulePolicy/StubPolicy）。
+- 行为：`src/behavior`（Behavior::execute）。
+- 实体与编排：`src/agents`（Agent 被动实体、AgentSystem 生命周期），不是第五层。
+- 生产：`src/producers`。
+
+不可违反的规则：
+
+1. 探测不调用策略、不使用 RNG，只输出 Observation。
+2. 决策不读取世界、不使用 RNG，只输出 Action。
+3. 行为是唯一写 Agent 状态的层；能量必须走 EnergyLedger，收获必须按 id 走 Forage。
+4. 层间只传值对象；不把策略指针传给探测，不把世界引用传给决策。
+5. 不允许把 Sensors/Behavior 合并回 agents，或让 AgentSystem 直接实现决策/行为。
+
 ## 2. 仓库状态
 
 - 工作目录：`D:\ScuStu\Q\自适应环绕核生态模拟与生存游戏`
 - 分支：`main`。
-- 已有提交：`cbe93a1`（M1）、`66b5c49`（M2 统计/参数化）、`201a18b`（M2.5 交接文档）、`9690e5f`（M2.5 实现与文档）。
+- 已有提交：`cbe93a1`（M1）、`66b5c49`（M2 统计/参数化）、`201a18b`（M2.5 交接文档）、`9690e5f`（M2.5 实现与文档）、`ebd4d92`（v2.3.1 架构归档）、本次提交（四层模块拆分）。
 - 工作树：干净；M2.5 构建/单测/验收通过。
 - 构建产物：`build/simulator.exe`、`build/unit_tests.exe`；CMake 构建目录 `build-cmake/`。
 
@@ -30,12 +68,14 @@
 - `src/decision`：Observation、Action、IPolicy、PolicyRegistry、RulePolicy、StubPolicy。
 - `src/world`：EnergyLedger、Environment、SpatialIndex、WorldQuery、Forage、WorldView。
 - `src/producers`：Producer/PhotoProducer、ProducerSystem。
-- `src/agents`：Agent、Sensors、Behavior、AgentSystem。
+- `src/perception`：Sensors（探测）。
+- `src/behavior`：Behavior（行为）。
+- `src/agents`：Agent 被动实体、AgentSystem 生命周期编排。
 - `src/sim`：Simulation（唯一组合根，实现 WorldQuery + Forage）。
 - `src/app`：Cli、ConsoleRenderer、StatsWriter、main。
 
-依赖方向：core ← decision；core ← world；world ← producers/agents；sim → world/producers/agents；app → sim。
-agents/producers 不 include sim；decision 不依赖 world。`world::World` 已删除。
+依赖方向：core ← decision；core ← world；perception/behavior → world + decision 契约；agents → world/perception/behavior；producers → world；sim → 全部；app → sim。
+perception/behavior 不 include sim/app；decision 不依赖 world。`world::World` 已删除，组合根位于 sim。
 
 能量规则：
 

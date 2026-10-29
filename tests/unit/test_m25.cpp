@@ -1,6 +1,6 @@
 #include "TestHarness.h"
 
-#include "agents/Behavior.h"
+#include "behavior/Behavior.h"
 #include "core/Config.h"
 #include "core/Random.h"
 #include "decision/PolicyRegistry.h"
