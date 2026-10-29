@@ -1,81 +1,55 @@
-cmake_minimum_required(VERSION 3.14)
-project(AdaptiveOrbitSimulator LANGUAGES CXX)
+cmake_minimum_required(VERSION 3.16)
+project(EcoCore LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-if(NOT CMAKE_BUILD_TYPE)
-  set(CMAKE_BUILD_TYPE Release)
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+  set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+endif()
+
+add_library(eco_core STATIC
+  src/core/Events.cpp
+  src/core/Random.cpp
+  src/core/Time.cpp
+  src/decision/PolicyRegistry.cpp
+  src/decision/RulePolicy.cpp
+  src/decision/StubPolicy.cpp
+  src/world/Energy.cpp
+  src/world/Environment.cpp
+  src/world/SpatialIndex.cpp
+  src/world/World.cpp
+  src/producers/Producer.cpp
+  src/producers/ProducerSystem.cpp
+  src/agents/Agent.cpp
+  src/agents/AgentSystem.cpp
+  src/agents/Behavior.cpp
+  src/agents/Sensors.cpp
+)
+target_include_directories(eco_core PUBLIC src)
+
+if(MSVC)
+  target_compile_options(eco_core PUBLIC /W4 /WX /permissive- /utf-8 /fp:precise)
+else()
+  target_compile_options(eco_core PUBLIC -Wall -Wextra -Wpedantic)
 endif()
 
 add_executable(simulator
-  src/main.cpp
-  src/Ball.cpp
-  src/Nucleus.cpp
-  src/NucleusParams.cpp
-  src/World.cpp
-  src/SpatialGrid.cpp
-  src/ConsoleRenderer.cpp
-  src/Sampler.cpp
-  src/ConfigLoader.cpp
-  src/EnvConfig.cpp
-  src/EventBus.h
-  src/EnergySystem.cpp
-  src/EnergySystem.h
-  src/EnvControl.cpp
-  src/EnvControl.h
-  src/Cyanobacteria.cpp
-  src/Cyanobacteria.h
-  src/ParamSchema.cpp
-  src/ParamSchema.h
-  src/LauncherApp.cpp
-  src/LauncherApp.h
-  src/WinFs.cpp
-  src/WinFs.h
-  src/HttpServer.cpp
-  src/HttpServer.h
-  src/WebRenderer.cpp
-  src/WebRenderer.h
-  src/mod_api.h
-  src/mods_registry.cpp
-  src/mods_registry.h
-  mods/example_periodic_drain.cpp  # 显式文件列表：新增 mod = 这里加一行
-  mods/example_plague_strike.cpp
-  mods/ball_loss_relief.cpp
-  mods/rare_ball_subsidy.cpp
-  mods/niche_guild.cpp
-  mods/symbiosis_bond.cpp
-  mods/season_cycle.cpp
-  mods/energy_spill.cpp
-  mods/climate_event.cpp
-  mods/cyano_producer.cpp
-  mods/ball_roles.cpp
-  mods/aging.cpp
-  mods/lucky_lottery.cpp
-  src/Vec2.h
-  src/BallType.h
-  src/Ball.h
-  src/NucleusParams.h
-  src/Nucleus.h
-  src/World.h
-  src/SpatialGrid.h
-  src/IRenderer.h
-  src/ConsoleRenderer.h
-  src/Sampler.h
-  src/ConfigLoader.h
-  src/EnvConfig.h
+  src/app/Cli.cpp
+  src/app/ConsoleRenderer.cpp
+  src/app/main.cpp
 )
+target_link_libraries(simulator PRIVATE eco_core)
 
-target_include_directories(simulator PRIVATE src)
+add_executable(unit_tests
+  tests/unit/main.cpp
+  tests/unit/test_energy.cpp
+  tests/unit/test_policy.cpp
+  tests/unit/test_world.cpp
+)
+target_include_directories(unit_tests PRIVATE tests/unit)
+target_link_libraries(unit_tests PRIVATE eco_core)
 
-if(WIN32)
-  # 启动器模式：HTTP 服务器（WinSock）+ 浏览器自动打开（ShellExecute）。
-  target_link_libraries(simulator PRIVATE ws2_32 shell32)
-endif()
-
-if(MSVC)
-  target_compile_options(simulator PRIVATE /W4)
-else()
-  target_compile_options(simulator PRIVATE -Wall -Wextra)
-endif()
+enable_testing()
+add_test(NAME unit_tests COMMAND unit_tests)
