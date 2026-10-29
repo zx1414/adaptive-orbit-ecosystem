@@ -1,6 +1,7 @@
 # M4 最小可视化：自包含 HTML 轨迹
 
-> 状态：已完成。`tools/m4_acceptance.ps1` 14 项全 PASS；HTML 帧 JSON/Canvas/无外部 URL。
+> 状态：已完成。`tools/m4_acceptance.ps1` 20 项全 PASS；HTML 帧 JSON/Canvas/无外部 URL；
+> 帧满 2000 时降采样并保留末帧，--html 路径在启动阶段 fail-fast。
 
 目标：用 WorldView 生成一个可直接双击打开的单文件 HTML，回放生产者/Agent 的时空轨迹；
 不引入服务器、第三方库或旧 v2 快照协议。
@@ -37,5 +38,7 @@
 
 - 2000 tick 生成 HTML；文件包含 `const TRACE =`、`frames`、`canvas`，帧数 >=2 且 tick 递增。
 - 打开页面可播放；无外部 URL/脚本。
-- `--html` 与 `--load` 组合可用；写入失败退出码 4。
+- `--html` 与 `--load` 组合可用；写入失败退出码 4（启动即探测）。
+- 2500 tick / interval 1：帧数 <=2000、末帧 tick=2500、stdout 标记 downsampled=1。
+- `--load --stats`：CSV 首行为载入 tick（非 interval 对齐时也写出）。
 - `tools/m4_acceptance.ps1` 自动化检查；全量 tools/check.ps1 仍通过。

@@ -42,6 +42,21 @@ if (Test-Path -LiteralPath $tracePath) {
     }
   }
 }
+$densePath = Join-Path $outDir 'dense.html'
+$code = Run-Sim 'dense' @('--no-render','--ticks','2500','--seed','42','--audit','--html',$densePath,'--html-interval','1')
+Check 'dense trace exit' ($code -eq 0) ('code=' + $code)
+$denseOut = [string](Get-Content -Raw -LiteralPath (Join-Path $outDir 'dense.out.txt'))
+Check 'dense trace reports downsample' ($denseOut -match 'downsampled=1') $denseOut
+if (Test-Path -LiteralPath $densePath) {
+  $denseText = Get-Content -Raw -LiteralPath $densePath
+  $denseMatch = [regex]::Match($denseText, '(?s)const TRACE = (\{.*\});')
+  if ($denseMatch.Success) {
+    $dense = $denseMatch.Groups[1].Value | ConvertFrom-Json
+    $denseFrames = @($dense.frames)
+    Check 'dense trace frame cap' ($denseFrames.Count -le 2000) ('frames=' + $denseFrames.Count)
+    Check 'dense trace keeps final tick' (([double]$denseFrames[-1].tick) -eq 2500) ('last=' + $denseFrames[-1].tick)
+  } else { Check 'dense trace json' $false 'regex did not match' }
+}
 $missing = Join-Path $outDir 'missing\x.html'
 $code = Run-Sim 'write-fail' @('--no-render','--ticks','10','--html',$missing)
 Check 'html write failure exit 4' ($code -eq 4) ('code=' + $code)
@@ -53,6 +68,15 @@ $loaded = Join-Path $outDir 'loaded.html'
 $code = Run-Sim 'loaded' @('--no-render','--load',$snap,'--ticks','1000','--html',$loaded,'--html-interval','100')
 Check 'html with load exit' ($code -eq 0) ('code=' + $code)
 Check 'html with load file' (Test-Path -LiteralPath $loaded) $loaded
+$snap505 = Join-Path $outDir 'load505.snap'
+$null = Run-Sim 'save505' @('--no-render','--ticks','505','--seed','42','--save',$snap505)
+$statsPath = Join-Path $outDir 'loadstats.csv'
+$code = Run-Sim 'loadstats' @('--no-render','--load',$snap505,'--ticks','600','--stats',$statsPath,'--stats-interval','100')
+Check 'load stats exit' ($code -eq 0) ('code=' + $code)
+if (Test-Path -LiteralPath $statsPath) {
+  $statsRows = @(Import-Csv -LiteralPath $statsPath)
+  Check 'load stats first row at load tick' ($statsRows.Count -gt 0 -and [double]$statsRows[0].tick -eq 505) ('first=' + $(if ($statsRows.Count -gt 0) { $statsRows[0].tick } else { 'none' }))
+} else { Check 'load stats file' $false $statsPath }
 if ($script:failures -gt 0) { Write-Host ($script:failures.ToString() + ' M4 check(s) FAILED.'); exit 1 }
 Write-Host 'All M4 acceptance checks passed.'
 exit 0

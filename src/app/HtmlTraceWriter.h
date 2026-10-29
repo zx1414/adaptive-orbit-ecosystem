@@ -16,6 +16,8 @@ public:
 
     void capture(const world::WorldView& view);
     bool write();
+    bool ok() const { return ok_; }
+    bool downsampled() const { return downsampled_; }
     const std::string& error() const { return error_; }
     std::size_t frameCount() const { return frames_.size(); }
 
@@ -37,6 +39,8 @@ private:
 
     std::string path_;
     std::string error_;
+    bool ok_ = true;
+    bool downsampled_ = false;
     core::Bounds bounds_{};
     std::vector<Frame> frames_;
 };

@@ -158,7 +158,8 @@ app::HtmlTraceWriter 只读 WorldView，按 `--html-interval` 采样帧（上限
 生产者绿色、Agent 橙色，亮度随 energy/cap；页面无外部 URL/脚本/字体，可双击离线打开。
 
 CLI：`--html <path>`、`--html-interval <n>`（>0，默认 100）；与 `--load`/`--save` 兼容。
-写文件失败退出码 4；参数错误退出码 2。该层只依赖 WorldView，不修改模拟状态。
+构造时探测输出可写，失败立即退出 4；帧满 2000 时等步长降采样并保留末帧，stdout 输出
+`html_frames`/`downsampled`。参数错误退出码 2。该层只依赖 WorldView，不修改模拟状态。
 
 ## 当前 M4 范围
 

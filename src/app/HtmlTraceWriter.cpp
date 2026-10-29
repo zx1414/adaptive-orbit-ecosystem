@@ -151,10 +151,33 @@ if (TRACE.frames.length > 0) {
 )HTML";
 } // namespace
 
-HtmlTraceWriter::HtmlTraceWriter(std::string path) : path_(std::move(path)) {}
+HtmlTraceWriter::HtmlTraceWriter(std::string path) : path_(std::move(path)) {
+    // Fail fast instead of discovering an unwritable destination after a long run.
+    std::ofstream probe(path_, std::ios::binary | std::ios::trunc);
+    if (!probe) {
+        error_ = "cannot open html trace for writing: " + path_;
+        ok_ = false;
+        return;
+    }
+    probe.flush();
+    if (!probe) {
+        error_ = "failed while probing html trace: " + path_;
+        ok_ = false;
+    }
+}
 
 void HtmlTraceWriter::capture(const world::WorldView& view) {
-    if (frames_.size() >= kMaxFrames) return;
+    if (frames_.size() >= kMaxFrames) {
+        // Keep the whole time span but halve the resolution; the final frame is
+        // still appended below, so the end state is never silently lost.
+        std::vector<Frame> reduced;
+        reduced.reserve(frames_.size() / 2 + 1);
+        for (std::size_t i = 0; i < frames_.size(); i += 2) {
+            reduced.push_back(std::move(frames_[i]));
+        }
+        frames_ = std::move(reduced);
+        downsampled_ = true;
+    }
     bounds_ = view.bounds;
     Frame frame;
     frame.tick = view.stats.tick;

@@ -72,7 +72,9 @@ perception/behavior 不 include sim/app；decision 不依赖 world。
 - app::HtmlTraceWriter 只读 WorldView，按 `--html-interval` 采样（上限 2000 帧），生成单文件 HTML：
   内嵌 `const TRACE = {...}`、Canvas 回放、播放/暂停/滑块、tick/种群/总能量。
 - 生产者绿、Agent 橙，亮度随 energy/cap；无外部 URL/脚本/字体，离线可打开。
-- CLI `--html` / `--html-interval`（>0，默认 100），兼容 `--load`/`--save`；写失败退出码 4，参数错误 2。
+- CLI `--html` / `--html-interval`（>0，默认 100），兼容 `--load`/`--save`；
+构造时探测可写（失败立即 4）；帧满 2000 等步长降采样并保留末帧，stdout 打印 html_frames/downsampled；参数错误 2。
+`--load` + `--stats` 会在载入 tick 显式写首行，不等待 tick 对齐。
 
 ### M3 快照
 
@@ -108,7 +110,7 @@ perception/behavior 不 include sim/app；decision 不依赖 world。
 
 - 10k 存档 + 10k 续跑与 20k 直跑的 stateHash、总能量、种群、injected/dissipated/transferred、audit 全部一致。
 - `tools/m3_acceptance.ps1` 全部 PASS；损坏/空文件/版本篡改退出码 5；load+seed 覆盖退出码 2。
-- `tools/m4_acceptance.ps1` 14 项 PASS；HTML 帧/tick 递增/JSON/无外部 URL/错误码。
+- `tools/m4_acceptance.ps1` 20 项 PASS；含 2500 tick/interval1 降采样保末帧、载入态统计首行、无外部 URL/错误码。
 - `tools/acceptance.ps1` 14 项 PASS（M2.5 回归）。
 
 ## 6. 性能

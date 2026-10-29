@@ -42,6 +42,10 @@ int main(int argc, char** argv) {
         std::unique_ptr<app::HtmlTraceWriter> htmlWriter;
         if (!options.htmlPath.empty()) {
             htmlWriter = std::make_unique<app::HtmlTraceWriter>(options.htmlPath);
+            if (!htmlWriter->ok()) {
+                std::cerr << "cannot write html trace: " << htmlWriter->error() << '\n';
+                return 4;
+            }
         }
         if (!options.statsPath.empty()) {
             statsWriter = std::make_unique<app::StatsWriter>(options.statsPath, world);
@@ -53,6 +57,10 @@ int main(int argc, char** argv) {
         const auto start = Clock::now();
         core::Tick lastStatsTick = std::numeric_limits<core::Tick>::max();
         core::Tick lastHtmlTick = std::numeric_limits<core::Tick>::max();
+        if (statsWriter && !options.loadPath.empty()) {
+            statsWriter->write(world);
+            lastStatsTick = world.tick();
+        }
         while (!world.finished()) {
             if (statsWriter && world.tick() % static_cast<core::Tick>(options.statsInterval) == 0 &&
                 world.tick() != lastStatsTick) {
@@ -79,9 +87,13 @@ int main(int argc, char** argv) {
                 return 4;
             }
         }
-        if (htmlWriter && !htmlWriter->write()) {
-            std::cerr << "cannot write html trace: " << htmlWriter->error() << '\n';
-            return 4;
+        if (htmlWriter) {
+            if (!htmlWriter->write()) {
+                std::cerr << "cannot write html trace: " << htmlWriter->error() << '\n';
+                return 4;
+            }
+            std::cout << "html_frames=" << htmlWriter->frameCount()
+                      << " downsampled=" << (htmlWriter->downsampled() ? 1 : 0) << '\n';
         }
         const auto end = Clock::now();
         const auto& stats = world.view().stats;
