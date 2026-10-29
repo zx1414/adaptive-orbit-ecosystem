@@ -35,6 +35,10 @@ struct ProducerConfig {
     double share = 35.0;
     double max = 300.0;
     double radius = 10.0;
+    // Local shading: photosynthesis is divided by (1 + crowding * neighbors).
+    // 0 keeps the unconstrained M1 behavior.
+    double crowding = 0.0;
+    double interactionRadius = 80.0;
 };
 
 struct AgentConfig {
@@ -45,11 +49,13 @@ struct AgentConfig {
     double maxSpeed = 60.0;
     double moveK = 0.0002;
     double harvest = 0.5;
+    double harvestReserve = 0.0; // prey energy left untouched by a harvest
     double radius = 30.0;
     double repro = 80.0;
     double cost = 10.0;
     double child = 30.0;
     double max = 200.0;
+    core::Tick lifespan = 0; // 0 disables aging
     double damping = 0.98;
     double avoidanceRadius = 60.0;
 };

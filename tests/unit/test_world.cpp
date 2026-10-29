@@ -41,6 +41,27 @@ TEST("zero producers means no photosynthesis and eventual starvation") {
     CHECK_NEAR(world.totalEnergy(), 0.0, 1e-9);
 }
 
+TEST("world exposes genome and population statistics") {
+    core::SimConfig config;
+    config.producer.initial = 2;
+    config.agent.initial = 2;
+    config.producer.photo = 0.0;
+    config.agent.metab = 0.0;
+    World world(config);
+    CHECK(world.meanGenome().size() == 6);
+    CHECK(world.meanProducerEnergy() > 0.0);
+    CHECK(world.meanAgentEnergy() > 0.0);
+    CHECK(world.agentSystem().births() == 0);
+    CHECK(world.agentSystem().deaths() == 0);
+
+    config.agent.lifespan = 1;
+    World dying(config);
+    dying.step();
+    CHECK(dying.agentSystem().deaths() == 2);
+    CHECK(dying.view().stats.agents == 0);
+    CHECK(dying.auditOk());
+}
+
 TEST("world is deterministic and observations are finite") {
     core::SimConfig config;
     config.producer.initial = 6;

@@ -14,6 +14,8 @@ AgentSystem::AgentSystem(core::Bounds bounds, core::AgentConfig config, core::Po
 void AgentSystem::initialize(core::Random& random, world::EnergyLedger& ledger) {
     agents_.clear();
     nextId_ = 1;
+    births_ = 0;
+    deaths_ = 0;
     const std::size_t count = config_.initial;
     for (std::size_t i = 0; i < count; ++i) {
         auto policy = decision::PolicyRegistry::create(policyConfig_.rule);
@@ -35,8 +37,11 @@ void AgentSystem::tick(world::World& world, core::Random& random, world::EnergyL
         const decision::Action action = agent.policy_->decide(observation);
         Behavior::execute(agent, action, world, ledger);
         ++agent.age_;
+        if (config_.lifespan > 0 && agent.alive() && agent.age_ >= config_.lifespan) {
+            ledger.kill(agent.energy_, agent.id_, world::EnergyReason::AgentDeath);
+        }
     }
-    const std::size_t populationLimit = static_cast<std::size_t>(std::max(0.0, config_.max));
+    const std::size_t populationLimit = core::Math::toSizeClamped(config_.max);
     for (std::size_t i = 0; i < initial; ++i) {
         Agent& parent = agents_[i];
         if (!parent.alive() || parent.energy_.energy < config_.repro) continue;
@@ -57,11 +62,14 @@ void AgentSystem::tick(world::World& world, core::Random& random, world::EnergyL
                          world::EnergyReason::AgentReproduction);
         if (parent.energy_.energy <= 1e-12) ledger.kill(parent.energy_, parent.id_, world::EnergyReason::AgentDeath);
         agents_.push_back(std::move(*child));
+        ++births_;
     }
 }
 void AgentSystem::removeDead() {
+    const std::size_t before = agents_.size();
     agents_.erase(std::remove_if(agents_.begin(), agents_.end(),
         [](const Agent& agent) { return !agent.alive(); }), agents_.end());
+    deaths_ += before - agents_.size();
 }
 std::size_t AgentSystem::aliveCount() const {
     return static_cast<std::size_t>(std::count_if(agents_.begin(), agents_.end(),

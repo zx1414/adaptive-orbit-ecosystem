@@ -7,9 +7,9 @@
 - **core**：值类型、向量与边界数学、PCG32 随机、时间、配置、事件。
 - **decision**：定长 Observation、Action 和 IPolicy。规则、占位策略以及后续神经网络实现都走同一接口；决策不可读取世界，不可使用 RNG。
 - **world**：实体容器、空间查询、环境与每 tick 管线。应用层只能读取 WorldView。
-- **producers**：Producer 抽象基类与 PhotoProducer。生产者将光照转化为生物量。
-- **agents**：Agent、Sensors、Behavior 与 AgentSystem。Sensors 只构造观测，Behavior 是行为执行的唯一位置。
-- **app**：命令行与控制台展示，不包含模拟规则。
+- **producers**：Producer 抽象基类与 PhotoProducer。生产者将光照转化为生物量；可选局部遮荫让光合作用随邻居密度下降。
+- **agents**：Agent、Sensors、Behavior 与 AgentSystem。Sensors 只构造观测，Behavior 是行为执行的唯一位置；收获可保留猎物的最低能量，可选寿命在 AgentSystem 中结算。
+- **app**：命令行、控制台展示与 CSV 统计导出，不包含模拟规则。
 
 依赖方向：core ← decision；core ← world；world 提供 Energy、Environment、SpatialIndex、WorldQuery 与 WorldView；World 是 M1 的组合根，持有 ProducerSystem 与 AgentSystem；producers/agents 通过 world 的查询、环境与账本接口参与模拟，不拥有世界状态；app 负责装配与驱动。决策层禁止反向依赖 world。M2 计划把组合根抽到独立 sim 层，消除 world 聚合头对 agents/producers 的编译期依赖。
 
@@ -65,11 +65,13 @@ Sensors 和 IPolicy::decide 均不使用 RNG。所有随机来自世界持有的
 
 空槽距离使用 -1 哨兵，因此“距离为 0 的有效目标”不会被误判为空。新增字段必须提升版本号并同步更新所有策略。
 
-## 当前 M1 范围
+## 当前 M2 范围
 
 - 生产者与 Agent 的最小生态闭环。
 - 规则与固定行为两种可替换策略。
 - 无头模拟、控制台视图、能量摘要与状态哈希。
-- 单元测试与集成验收。
+- 种群/能量/基因 CSV 统计，出生/死亡累计计数。
+- 平衡参数命令行覆盖：光合、维持、繁殖、上限、感知半径、变异、遮荫、寿命。
+- 单元测试与集成验收；平衡实验结论见 BALANCE.md。
 
 后续里程碑见 ROADMAP.md。

@@ -38,6 +38,7 @@ endif()
 add_executable(simulator
   src/app/Cli.cpp
   src/app/ConsoleRenderer.cpp
+  src/app/StatsWriter.cpp
   src/app/main.cpp
 )
 target_link_libraries(simulator PRIVATE eco_core)

@@ -26,6 +26,13 @@ $summary = Invoke-Sim 'summary' @('--no-render','--ticks','200','--seed','7','--
 if ($summary -notmatch 'energy summary:') { throw 'Energy summary was not printed.' }
 if (-not (Test-Path -LiteralPath $hashPath)) { throw 'State hash file was not written.' }
 if ((Get-Content -Raw -LiteralPath $hashPath).Trim() -notmatch '^[0-9a-f]+$') { throw 'State hash file is malformed.' }
+$statsPath = Join-Path $artifacts 'stats.csv'
+$null = Invoke-Sim 'stats' @('--no-render','--ticks','200','--seed','7','--audit','--stats',$statsPath,'--stats-interval','50')
+if (-not (Test-Path -LiteralPath $statsPath)) { throw 'Stats CSV was not written.' }
+$statsLines = @(Get-Content -LiteralPath $statsPath)
+if ($statsLines.Count -lt 4) { throw 'Stats CSV has too few rows.' }
+if ($statsLines[0] -notmatch '^tick,producers,agents,.*gene_5,audit_ok$') { throw 'Stats CSV header is malformed.' }
 $null = Invoke-SimProcess 'bad-policy' @('--no-render','--ticks','10','--policy','bogus') 2
+$null = Invoke-SimProcess 'bad-producers' @('--no-render','--ticks','10','--producers','-1') 2
 $null = Invoke-SimProcess 'bad-hash' @('--no-render','--ticks','10','--state-hash',(Join-Path $artifacts 'missing/hash.txt')) 4
 Write-Host 'Integration smoke checks passed.'

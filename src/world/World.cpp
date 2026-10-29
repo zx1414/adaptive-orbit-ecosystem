@@ -103,6 +103,47 @@ double World::totalEnergy() const {
     for (const auto& agent : agents_.agents()) if (agent.alive()) total += agent.energy().energy;
     return total;
 }
+double World::meanProducerEnergy() const {
+    double total = 0.0;
+    std::size_t count = 0;
+    for (const auto& producer : producers_.all()) {
+        if (!producer || !producer->alive()) continue;
+        total += producer->energy.energy;
+        ++count;
+    }
+    return count > 0 ? total / static_cast<double>(count) : 0.0;
+}
+double World::meanAgentEnergy() const {
+    double total = 0.0;
+    std::size_t count = 0;
+    for (const auto& agent : agents_.agents()) {
+        if (!agent.alive()) continue;
+        total += agent.energy().energy;
+        ++count;
+    }
+    return count > 0 ? total / static_cast<double>(count) : 0.0;
+}
+std::vector<double> World::meanGenome() const {
+    std::vector<double> sums;
+    std::vector<std::size_t> counts;
+    for (const auto& agent : agents_.agents()) {
+        if (!agent.alive()) continue;
+        const std::vector<float> genome = agent.policy().genome();
+        if (sums.size() < genome.size()) {
+            sums.resize(genome.size(), 0.0);
+            counts.resize(genome.size(), 0);
+        }
+        for (std::size_t i = 0; i < genome.size(); ++i) {
+            if (!std::isfinite(genome[i])) continue;
+            sums[i] += genome[i];
+            ++counts[i];
+        }
+    }
+    for (std::size_t i = 0; i < sums.size(); ++i) {
+        if (counts[i] > 0) sums[i] /= static_cast<double>(counts[i]);
+    }
+    return sums;
+}
 std::uint64_t World::stateHash() const {
     std::uint64_t hash = 1469598103934665603ULL;
     hash = hashBytes(hash, &tick_, sizeof(tick_));

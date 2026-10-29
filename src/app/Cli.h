@@ -12,6 +12,8 @@ struct CliOptions {
     bool help = false;
     bool version = false;
     std::string stateHashPath;
+    std::string statsPath;
+    int statsInterval = 100;
 };
 CliOptions parseCli(int argc, char** argv);
 std::string usage();

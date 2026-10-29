@@ -16,6 +16,8 @@ public:
     void tick(world::World& world, core::Random& random, world::EnergyLedger& ledger);
     void removeDead();
     std::size_t aliveCount() const;
+    std::size_t births() const { return births_; }
+    std::size_t deaths() const { return deaths_; }
     std::size_t size() const { return agents_.size(); }
     const std::vector<Agent>& agents() const { return agents_; }
     std::vector<Agent>& agents() { return agents_; }
@@ -29,5 +31,7 @@ private:
     std::vector<Agent> agents_;
     world::SpatialIndex index_;
     core::EntityId nextId_ = 1;
+    std::size_t births_ = 0;
+    std::size_t deaths_ = 0;
 };
 } // namespace agentsim

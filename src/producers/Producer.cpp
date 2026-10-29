@@ -22,7 +22,8 @@ void PhotoProducer::tick(ProducerContext& context) {
     const double light = context.environment->lightAt(pos, context.tick);
     const double capacity = std::max(1e-9, energy.cap);
     const double fraction = std::clamp(energy.energy / capacity, 0.0, 1.0);
-    const double gain = std::max(0.0, config_.photo * light * (1.0 - fraction));
+    const double shading = 1.0 / (1.0 + std::max(0.0, config_.crowding) * static_cast<double>(context.localDensity));
+    const double gain = std::max(0.0, config_.photo * light * (1.0 - fraction) * shading);
     if (gain > 0.0) context.ledger->injectPrimary(energy, id, gain);
     context.ledger->dissipate(energy, id, std::max(0.0, config_.maint), world::EnergyReason::ProducerMaintenance);
     if (energy.energy <= 1e-12) {

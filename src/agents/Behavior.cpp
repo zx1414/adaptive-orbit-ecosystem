@@ -24,9 +24,15 @@ void Behavior::execute(Agent& agent, const decision::Action& intent,
             const core::Vec2 delta = target->pos - agent.pos_;
             const core::Vec2 direction = core::Math::unit(delta);
             agent.vel_ = core::Math::limit(agent.vel_ * 0.5 + direction * (maxSpeed * 0.15), maxSpeed);
-            const double requested = std::max(0.0, config.agent.harvest);
-            ledger.transfer(target->energy, agent.energy_, requested, world::EnergyReason::AgentHarvest);
-            if (target->energy.energy <= 1e-12) ledger.kill(target->energy, target->id, world::EnergyReason::ProducerDeath);
+            const double reserve = std::max(0.0, config.agent.harvestReserve);
+            const double available = std::max(0.0, target->energy.energy - reserve);
+            const double requested = std::min(std::max(0.0, config.agent.harvest), available);
+            if (requested > 0.0) {
+                ledger.transfer(target->energy, agent.energy_, requested, world::EnergyReason::AgentHarvest);
+                if (target->energy.energy <= 1e-12) {
+                    ledger.kill(target->energy, target->id, world::EnergyReason::ProducerDeath);
+                }
+            }
         }
     } else if (action.kind == decision::Action::Kind::Move) {
         const core::Vec2 direction = core::Math::unit({action.dirX, action.dirY});

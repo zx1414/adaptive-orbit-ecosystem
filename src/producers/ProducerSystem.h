@@ -14,6 +14,8 @@ public:
     void tick(core::Random& random, world::EnergyLedger& ledger, world::Environment& environment, core::Tick tick);
     void removeDead();
     std::size_t aliveCount() const;
+    std::size_t births() const { return births_; }
+    std::size_t deaths() const { return deaths_; }
     std::size_t size() const { return producers_.size(); }
     const std::vector<std::unique_ptr<Producer>>& all() const { return producers_; }
     std::vector<std::unique_ptr<Producer>>& all() { return producers_; }
@@ -26,5 +28,7 @@ private:
     std::vector<std::unique_ptr<Producer>> producers_;
     world::SpatialIndex index_;
     core::EntityId nextId_ = 1;
+    std::size_t births_ = 0;
+    std::size_t deaths_ = 0;
 };
 } // namespace producers

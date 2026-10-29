@@ -10,6 +10,8 @@ ProducerSystem::ProducerSystem(core::Bounds bounds, core::ProducerConfig config)
 void ProducerSystem::initialize(core::Random& random, world::EnergyLedger& ledger, world::Environment& environment) {
     producers_.clear();
     nextId_ = 1;
+    births_ = 0;
+    deaths_ = 0;
     const std::size_t count = config_.initial;
     for (std::size_t i = 0; i < count; ++i) {
         core::EnergyState state{0.0, std::max(1e-9, static_cast<double>(config_.cap)), true};
@@ -26,7 +28,9 @@ void ProducerSystem::initialize(core::Random& random, world::EnergyLedger& ledge
 
 void ProducerSystem::tick(core::Random& random, world::EnergyLedger& ledger, world::Environment& environment, core::Tick tick) {
     std::vector<std::unique_ptr<Producer>> newborns;
+    std::vector<core::EntityId> neighbors;
     const std::size_t initial = producers_.size();
+    const bool useShading = config_.crowding > 0.0 && config_.interactionRadius > 0.0;
     for (std::size_t i = 0; i < initial; ++i) {
         if (!producers_[i] || !producers_[i]->alive()) continue;
         ProducerContext context;
@@ -35,23 +39,30 @@ void ProducerSystem::tick(core::Random& random, world::EnergyLedger& ledger, wor
         context.random = &random;
         context.tick = tick;
         context.population = initial;
-        context.maxPopulation = static_cast<std::size_t>(std::max(0.0, config_.max));
+        context.maxPopulation = core::Math::toSizeClamped(config_.max);
         context.newborns = &newborns;
+        if (useShading) {
+            index_.query(producers_[i]->pos, config_.interactionRadius, neighbors);
+            context.localDensity = neighbors.empty() ? 0 : neighbors.size() - 1;
+        }
         producers_[i]->tick(context);
     }
     for (auto& newborn : newborns) {
         if (!newborn || !newborn->alive()) continue;
         newborn->id = allocateId();
         producers_.push_back(std::move(newborn));
+        ++births_;
     }
     removeDead();
     rebuildIndex();
 }
 
 void ProducerSystem::removeDead() {
+    const std::size_t before = producers_.size();
     producers_.erase(std::remove_if(producers_.begin(), producers_.end(),
         [](const std::unique_ptr<Producer>& producer) { return !producer || !producer->alive(); }),
         producers_.end());
+    deaths_ += before - producers_.size();
 }
 std::size_t ProducerSystem::aliveCount() const {
     return static_cast<std::size_t>(std::count_if(producers_.begin(), producers_.end(),

@@ -9,6 +9,7 @@
 #include "world/WorldView.h"
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace world {
 class World final : public WorldQuery {
@@ -29,6 +30,9 @@ public:
     producers::Producer* nearestProducer(core::Vec2 position, double radius);
     const EnergyStats& energyStats() const { return ledger_.stats(); }
     double totalEnergy() const;
+    double meanProducerEnergy() const;
+    double meanAgentEnergy() const;
+    std::vector<double> meanGenome() const;
     bool auditOk() const { return auditOk_; }
     std::uint64_t stateHash() const;
     const producers::ProducerSystem& producerSystem() const { return producers_; }

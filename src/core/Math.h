@@ -4,6 +4,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
+#include <limits>
 
 namespace core::Math {
 
@@ -20,6 +22,11 @@ constexpr const T& clamp(const T& value, const T& minimum, const T& maximum) {
 }
 
 inline double clamp01(double value) { return clamp(value, 0.0, 1.0); }
+inline std::size_t toSizeClamped(double value) {
+    if (!isFinite(value) || value <= 0.0) return 0;
+    const double limit = static_cast<double>(std::numeric_limits<std::size_t>::max() / 2);
+    return static_cast<std::size_t>(std::min(value, limit));
+}
 inline double safeDivide(double numerator, double denominator, double fallback = 0.0) {
     return isFinite(numerator) && isFinite(denominator) && std::abs(denominator) > 1e-12
         ? numerator / denominator : fallback;
