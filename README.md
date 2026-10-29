@@ -100,6 +100,7 @@ M2.5 配置双跑确定性、策略确定性、观测版本校验、观测有限
 - tools：构建与总检查脚本
 - docs/ARCH.md、docs/ROADMAP.md、docs/BALANCE.md：架构、里程碑与平衡实验
 - docs/HANDOFF.md：跨会话交接、当前状态与 M3 目标
+- docs/REVIEW_PROTOCOL.md：生成者 / 红队 / 验证者分离的对抗式审查协议
 - docs/archive/：v2.3.1 旧架构与计划归档（只读，不参与构建）
 
 ## 后续

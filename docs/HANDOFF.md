@@ -189,6 +189,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/acceptance.ps1
 - docs/BALANCE.md
 - docs/ROADMAP.md
 - docs/M2.5-DESIGN.md
+- docs/REVIEW_PROTOCOL.md
 - README.md
 - git log --oneline -10；git status --short
 
@@ -242,7 +243,16 @@ producers/agents、injected/dissipated、audit 全部一致。
 - CMake：cmake -S . -B build-cmake -G "Visual Studio 17 2022" -A x64；
   cmake --build build-cmake --config Release；ctest --test-dir build-cmake -C Release
 
-## 5. 子代理
+## 5. 子代理：生成 + 对抗式审查
+
+审查也交给子代理，不要让实现者自证正确。按 docs/REVIEW_PROTOCOL.md 执行：
+
+- Generator：实现一个小切片，同时写正常测试与对抗测试；不审查自己的 diff。
+- Red Team：独立上下文，只拿契约 + diff + 测试输出，不给作者解释；目标是证明实现是错的。
+- Verifier：干净工作树上跑 build/check/acceptance/CMake，不改代码。
+- 只有一个子代理时，分两轮两个角色：先实现，再清空作者视角做红队；禁止“我已经实现了，请确认”。
+- 审查输出必须带 [P0/P1/P2] 文件:行、触发条件、期望/实际、最小修复；能复现的给命令。
+- 主 agent 负责契约、仲裁 P0/P1、最终门禁；不要把所有实现和审查都揽在自己身上。
 
 优先探测：provider zcode-start-plan-acct-4e049fa5-29da-4e8e-9d84-4f95ff6e657c，
 model GLM-5.3-Flash；不可用则试 zcode-start-plan-acct-1e99ffd8-0ecc-4b88-b477-7be8d2f78439；
@@ -254,7 +264,8 @@ model GLM-5.3-Flash；不可用则试 zcode-start-plan-acct-1e99ffd8-0ecc-4b88-b
 - 保持 /W4 /WX、零第三方依赖、确定性、能量不变量。
 - 不删除 docs/archive 或旧标签。
 - 每个里程碑先给计划，再改代码；改完必须跑全量检查并提交。
-- 用户要求节约主 agent token：能交给子代理的调研/实验就交，关键代码和审查自己做。
+- 用户要求节约主 agent token：能交给子代理的调研/实验/实现/审查就交；主 agent 保留契约、P0/P1 仲裁和最终门禁。
+- 实现者与审查者必须隔离；审查默认由红队子代理完成，主 agent 只抽样复核。
 
 先输出一份 M3 实施计划（文件级改动、快照字段、测试与验收），不要直接开始改代码。
 ```
