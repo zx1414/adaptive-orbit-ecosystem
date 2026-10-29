@@ -56,7 +56,7 @@
 
 - 工作目录：`D:\ScuStu\Q\自适应环绕核生态模拟与生存游戏`
 - 分支：`main`。
-- 已有提交：`cbe93a1`（M1）、`66b5c49`（M2 统计/参数化）、`201a18b`（M2.5 交接文档）、`9690e5f`（M2.5 实现与文档）、`ebd4d92`（v2.3.1 架构归档）、本次提交（四层模块拆分）。
+- 已有提交：`cbe93a1`（M1）、`66b5c49`（M2 统计/参数化）、`201a18b`（M2.5 交接文档）、`9690e5f`（M2.5 实现与文档）、`ebd4d92`（v2.3.1 架构归档）、`36102ba`（四层模块拆分）。
 - 工作树：干净；M2.5 构建/单测/验收通过。
 - 构建产物：`build/simulator.exe`、`build/unit_tests.exe`；CMake 构建目录 `build-cmake/`。
 
@@ -167,7 +167,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/acceptance.ps1
 - 查询/收获接口：[src/world/WorldQuery.h](src/world/WorldQuery.h)、[src/world/Forage.h](src/world/Forage.h)
 - 空间索引：[src/world/SpatialIndex.h](src/world/SpatialIndex.h)
 - 生产者：[src/producers/Producer.cpp](src/producers/Producer.cpp)、[src/producers/ProducerSystem.cpp](src/producers/ProducerSystem.cpp)
-- Agent：[src/agents/AgentSystem.cpp](src/agents/AgentSystem.cpp)、[src/agents/Behavior.cpp](src/agents/Behavior.cpp)、[src/agents/Sensors.cpp](src/agents/Sensors.cpp)
+- Agent 实体/编排：[src/agents/AgentSystem.cpp](src/agents/AgentSystem.cpp)
+- 探测：[src/perception/Sensors.cpp](src/perception/Sensors.cpp)
+- 行为：[src/behavior/Behavior.cpp](src/behavior/Behavior.cpp)
 - 配置/CLI：[src/core/Config.h](src/core/Config.h)、[src/app/Cli.cpp](src/app/Cli.cpp)
 - 验收：[tools/acceptance.ps1](tools/acceptance.ps1)、[docs/BALANCE.md](docs/BALANCE.md)
 - 设计：[docs/M2.5-DESIGN.md](docs/M2.5-DESIGN.md)、[docs/ARCH.md](docs/ARCH.md)
@@ -175,9 +177,84 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/acceptance.ps1
 ## 11. 新会话开场提示
 
 ```text
-继续 EcoCore v3 项目，工作目录：D:\ScuStu\Q\自适应环绕核生态模拟与生存游戏。
-先读 docs/HANDOFF.md、docs/ARCH.md、docs/BALANCE.md、docs/ROADMAP.md、docs/M2.5-DESIGN.md，再读源码。
-M2.5 已完成并通过 19 个单测、tools/check.ps1、tools/acceptance.ps1（14 项）。
-下一步是 M3 存档/快照：保存 sim 组合根、实体 id、策略基因组与 PCG32 状态，验证读档续跑一致。
-子代理优先 zcode-start-plan-acct-…/GLM-5.3-Flash；任务拆小，关键代码由指挥者审查。
+继续 EcoCore v3，工作目录：D:\ScuStu\Q\自适应环绕核生态模拟与生存游戏。
+
+你是总指挥：负责拆任务、审查关键代码、控制提交节奏；子代理 token 充足但链路不稳、智商有限，
+任务要小、文件范围明确，失败就重试，关键实现由你审查，不要把所有代码都自己写。
+
+## 0. 先读，不要改代码
+
+- docs/HANDOFF.md（尤其 1.1「用户目标架构」）
+- docs/ARCH.md
+- docs/BALANCE.md
+- docs/ROADMAP.md
+- docs/M2.5-DESIGN.md
+- README.md
+- git log --oneline -10；git status --short
+
+当前关键提交：36102ba（四层拆分）、9690e5f（M2.5）、66b5c49（M2）、cbe93a1（M1）、
+ebd4d92（v2.3.1 文档归档）。工作树应干净。
+
+## 1. 最高优先级：世界 → 探测 → 决策 → 行为
+
+用户明确要求四层架构，任何重构不得合并或绕过：
+
+- 世界：src/world（WorldQuery/Forage/WorldView/Energy/Environment/SpatialIndex）+ src/sim
+  （Simulation 组合根、状态、每 tick 管线、审计、状态哈希）。
+- 探测：src/perception（Sensors::buildObservation）。只输出 Observation，不调用策略、不使用 RNG。
+- 决策：src/decision（IPolicy/RulePolicy/StubPolicy）。只读 Observation 输出 Action，不读世界、不使用 RNG。
+- 行为：src/behavior（Behavior::execute）。唯一写 Agent 运动/能量/死亡的层；能量必须走 EnergyLedger，
+  收获必须按 id 走 Forage。
+- src/agents 只放 Agent 被动实体与 AgentSystem 生命周期，不是第五层。
+- 层间只传值对象；禁止把策略指针给探测、把世界引用给决策。
+- 旧 v2 架构文档在 docs/archive，完整源码在标签 legacy-v2.3.1；禁止删除或合并回活动树。
+
+## 2. 当前状态
+
+M1/M2/M2.5 已完成：零产能环境、唯一生产者注入、EnergyLedger 零和与逐 tick 审计、
+28 维 Observation、可插拔策略、资源竞争、密度依赖繁殖、饱和收获、sim 组合根、SpatialIndex 接入。
+19 个单测、tools/check.ps1、tools/acceptance.ps1（14 项）通过；默认 20k 约 16 秒。
+
+## 3. 下一步目标：M3 存档/快照
+
+要求：
+
+1. 保存/加载完整的 Simulation 状态，读档续跑与不中断运行逐位一致。
+2. 至少保存：SimConfig、tick、PCG32 完整状态（含 cached normal）、EnergyLedger 全部统计与
+   injected/dissipated/transferred、Producer/Agent 的稳定 id/位置/速度/能量/age/cap、
+   nextId、策略 spec.id 与 genome；为未来 NNetPolicy 预留 policy state 字段。
+3. 读档时不得重新 injectInitial；直接恢复实体与账本后封存，并立即审计。
+4. 存档格式必须带 magic/version/长度或校验和；损坏/版本不匹配要返回明确错误，不崩溃。
+5. CLI 增加 --save <path> 与 --load <path>（或等价快照命令），不能破坏现有参数与退出码。
+6. 单元测试：roundtrip、10k 存档 + 10k 续跑 == 20k 直跑（stateHash/总能量/审计/种群/账本一致）、
+   损坏文件拒绝、旧版本拒绝。
+7. 文档更新 ARCH/ROADMAP/README；M3 完成后再提交。
+
+验收命令示例：同 seed 直跑 20k 与 10k 存档后读档再跑 10k，最终 stateHash、总能量、
+producers/agents、injected/dissipated、audit 全部一致。
+
+## 4. 构建与验证
+
+- powershell -NoProfile -ExecutionPolicy Bypass -File tools/build.ps1
+- build\unit_tests.exe
+- powershell -NoProfile -ExecutionPolicy Bypass -File tools/check.ps1
+- powershell -NoProfile -ExecutionPolicy Bypass -File tools/acceptance.ps1
+- CMake：cmake -S . -B build-cmake -G "Visual Studio 17 2022" -A x64；
+  cmake --build build-cmake --config Release；ctest --test-dir build-cmake -C Release
+
+## 5. 子代理
+
+优先探测：provider zcode-start-plan-acct-4e049fa5-29da-4e8e-9d84-4f95ff6e657c，
+model GLM-5.3-Flash；不可用则试 zcode-start-plan-acct-1e99ffd8-0ecc-4b88-b477-7be8d2f78439；
+再不行用 workbuddy/glm-5.3-flash。先让子代理只回复 OK 做探针，不要直接派大任务。
+链接可能长时间无输出；任务拆小，失败重试，必要时中断后自己接手。
+
+## 6. 工作纪律
+
+- 保持 /W4 /WX、零第三方依赖、确定性、能量不变量。
+- 不删除 docs/archive 或旧标签。
+- 每个里程碑先给计划，再改代码；改完必须跑全量检查并提交。
+- 用户要求节约主 agent token：能交给子代理的调研/实验就交，关键代码和审查自己做。
+
+先输出一份 M3 实施计划（文件级改动、快照字段、测试与验收），不要直接开始改代码。
 ```
