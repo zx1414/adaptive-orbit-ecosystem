@@ -3,7 +3,19 @@
 > 新会话先读本文件，再读 `README.md`、`docs/ARCH.md`、`docs/BALANCE.md`、`docs/ROADMAP.md`、
 > `docs/M2.5-DESIGN.md`、`docs/M3-PLAN.md`、`docs/M4-PLAN.md`、`docs/REVIEW_PROTOCOL.md`。
 
-## 0. 当前状态（优先阅读）
+## 0. 四文件架构（状态与目标以此为准）
+
+本仓库用四文件维护可审计状态，**其余文档不再承担状态职责**：
+
+- [GOAL.md](GOAL.md)：唯一目标源，含编号成功标准 S1–S14 与阶段退出条件。
+- [TODO.md](TODO.md)：唯一任务状态源（正在进行 / 已完成 / 尝试过但放弃 / 还没干）。
+- [INDEX.md](INDEX.md)：已完成任务的**可执行证据**，每行映射到某个 S 编号。
+- [DECISIONS/](DECISIONS/)：ADR，仅收录可逆性低、影响面大或有争议的决策。
+
+`HANDOFF.md`（本文件）保留为**交接背景与历史脉络**，不写任务状态；
+状态冲突时以 TODO.md 为准，目标冲突时以 GOAL.md 为准。
+
+## 0.1 历史状态（M5 之前）
 
 M1–M4 的实现**偏离了 v2.3.1 的生态语义**：它做的是"静止生产者 + 独立 Agent 追食物"，
 而目标是"蓝细菌生产 → 核消费并决策 → 小球绕核旋转"。偏离原因与恢复计划见

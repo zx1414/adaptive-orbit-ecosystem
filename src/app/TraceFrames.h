@@ -12,8 +12,8 @@ namespace app {
 // Shared frame buffer for the trace exporters (HTML replay and plain JSON).
 // Contract:
 //   { "bounds": {...}, "frames": [ { "tick", "cyanobacteria", "nuclei", "balls",
-//     "totalEnergy", "c": [[x,y,energy,cap]], "n": [[x,y,energy,cap,id,0]],
-//     "b": [[x,y,energy,cap,ownerId,type]] } ] }
+//     "totalEnergy", "c": [[x,y,energy,cap,id,0]],
+//     "n": [[x,y,energy,cap,id,0]], "b": [[x,y,energy,cap,id,ownerId,type]] } ] }
 // Nodes are the environment layer (producers), nuclei are the consumers, and balls carry
 // ownerId so the frontend can draw them orbiting their nucleus.
 namespace trace {
@@ -23,6 +23,9 @@ struct Body {
     double y = 0.0;
     double energy = 0.0;
     double cap = 1.0;
+    // id lets a consumer follow one entity across frames; without it a ball cannot be tracked
+    // (the renderer would have to guess by index, which changes as entities die).
+    std::uint64_t id = 0;
     std::uint64_t ownerId = 0;
     std::uint8_t type = 0;
 };

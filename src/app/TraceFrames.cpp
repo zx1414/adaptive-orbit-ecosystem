@@ -46,6 +46,9 @@ void appendBodies(std::string& out, const std::vector<Body>& bodies) {
         appendDouble(out, bodies[i].energy);
         out += ',';
         appendDouble(out, bodies[i].cap);
+        // id is always present so every body can be tracked; balls add owner and type.
+        out += ',';
+        appendU64(out, bodies[i].id);
         if (bodies[i].ownerId != 0 || bodies[i].type != 0) {
             out += ',';
             appendU64(out, bodies[i].ownerId);
@@ -77,17 +80,18 @@ void Buffer::capture(const world::WorldView& view) {
     frame.totalEnergy = view.stats.totalEnergy;
     frame.nodeBodies.reserve(view.cyanobacteria.size());
     for (const world::CyanoView& node : view.cyanobacteria) {
-        frame.nodeBodies.push_back({node.position.x, node.position.y, node.energy, node.cap, 0, 0});
+        frame.nodeBodies.push_back({node.position.x, node.position.y, node.energy, node.cap,
+                                    node.id, 0, 0});
     }
     frame.nucleusBodies.reserve(view.nuclei.size());
     for (const world::NucleusView& nucleus : view.nuclei) {
         frame.nucleusBodies.push_back({nucleus.position.x, nucleus.position.y, nucleus.energy,
-                                       nucleus.cap, nucleus.id, 0});
+                                       nucleus.cap, nucleus.id, 0, 0});
     }
     frame.ballBodies.reserve(view.balls.size());
     for (const world::BallView& ball : view.balls) {
         frame.ballBodies.push_back({ball.position.x, ball.position.y, ball.energy, ball.cap,
-                                    ball.ownerId, ball.type});
+                                    ball.id, ball.ownerId, ball.type});
     }
     frames_.push_back(std::move(frame));
 }
