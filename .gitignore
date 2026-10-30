@@ -10,11 +10,18 @@ out/
 *.log
 *.bin
 *.state
+*.hash
+*.snap
+*.rsp
+*.trace
+*.profraw
 .vs/
 .vscode/
 .idea/
 .DS_Store
 Thumbs.db
+# legacy/ is retired: the full v2.3.1 tree lives in the legacy-v2.3.1 tag.
+# Keep the rule so an accidental restore stays out of version control.
 legacy/
 tests/artifacts/
 

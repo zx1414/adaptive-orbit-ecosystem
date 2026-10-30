@@ -5,9 +5,9 @@
 
 ## 为什么在这里
 
-v3 重构时，旧实现被移到 `legacy/`（被 `.gitignore` 忽略）并冻结在 Git 标签
-`legacy-v2.3.1`。当时只保留了标签，没有在活动 `docs/` 里留下索引，导致旧架构文档
-在仓库里“看不见”。这是一次交接失误；现在把文档副本放回 `docs/archive/` 并纳入版本管理。
+v3 重构时，旧实现被冻结在 Git 标签 `legacy-v2.3.1`。当时只保留了标签，没有在活动
+`docs/` 里留下索引，导致旧架构文档在仓库里“看不见”。这是一次交接失误；现在把文档副本
+放回 `docs/archive/` 并纳入版本管理。
 
 当前架构请看 [../ARCH.md](../ARCH.md)，当前路线图看 [../ROADMAP.md](../ROADMAP.md)。
 
@@ -44,5 +44,6 @@ git worktree add ../eco-legacy-v2.3.1 legacy-v2.3.1
 git show legacy-v2.3.1:src/World.cpp
 ```
 
-磁盘上的 `legacy/` 也有完整副本（含构建产物、mods、web、resourcepacks），但被
-`.gitignore` 忽略，不会进入提交。
+工作区里曾保留一份 `legacy/` 副本（含构建产物、mods、web、resourcepacks）；经逐文件
+比对，其中受版本控制的 96 个文件与标签完全一致、0 处差异，其余 263 个均为构建产物与本地
+配置，因此已删除以保持工作区整洁。需要旧源码时用上面的 `git worktree` 或 `git show` 恢复。
