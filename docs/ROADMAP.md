@@ -59,7 +59,8 @@ CLI `--save` / `--load`；损坏、截断、版本不匹配返回退出码 5，l
 
 app::HtmlTraceWriter 只读 WorldView，按 `--html-interval` 采样，生成单文件 HTML：
 内嵌 JSON、Canvas 回放、播放/暂停/滑块、tick/种群/总能量；无外部 URL/脚本，离线可打开。
-CLI `--html` / `--html-interval`，兼容 `--load`/`--save`；写失败退出码 4。
+CLI `--html` / `--html-interval` 与 `--trace-json` / `--trace-json-interval`，兼容 `--load`/`--save`；写失败退出码 4。
+`--trace-json` 输出前端（`frontend/`，独立维护）可直接消费的纯 JSON；HTML 与 JSON 共用 trace::Buffer。
 
 验收：`tools/m4_acceptance.ps1` 全 PASS（帧数/tick 递增/JSON/无外部 URL/错误码）。
 

@@ -1,6 +1,6 @@
 # M4 最小可视化：自包含 HTML 轨迹
 
-> 状态：已完成。`tools/m4_acceptance.ps1` 20 项全 PASS；HTML 帧 JSON/Canvas/无外部 URL；
+> 状态：已完成。`tools/m4_acceptance.ps1` 26 项全 PASS；HTML 帧 JSON/Canvas/无外部 URL；
 > 帧满 2000 时降采样并保留末帧，--html 路径在启动阶段 fail-fast。
 
 目标：用 WorldView 生成一个可直接双击打开的单文件 HTML，回放生产者/Agent 的时空轨迹；
@@ -9,7 +9,8 @@
 ## 1. 范围
 
 - 新增 app::HtmlTraceWriter：只读 WorldView，按固定间隔采样帧，运行结束写单个 HTML。
-- CLI：`--html <path>`，`--html-interval <n>`（默认 100，必须 >0）。
+- CLI：`--html <path>`/`--html-interval <n>`，`--trace-json <path>`/`--trace-json-interval <n>`（默认 100，必须 >0）。
+- `--trace-json` 与 HTML 共用 trace::Buffer 序列化，契约：`{name,meta,bounds,frames}`；前端在 `frontend/` 独立维护。
 - 兼容 `--load`：从读档 tick 开始采样；`--save` 与 HTML 可同时使用。
 - 失败（无法写文件）退出码 4；旧参数与退出码不变。
 

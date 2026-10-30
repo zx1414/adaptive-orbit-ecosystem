@@ -77,6 +77,8 @@ CliOptions parseCli(int argc, char** argv) {
         else if (arg == "--load") options.loadPath = nextValue(i, argc, argv, "--load");
         else if (arg == "--html") options.htmlPath = nextValue(i, argc, argv, "--html");
         else if (arg == "--html-interval") options.htmlInterval = std::stoi(nextValue(i, argc, argv, "--html-interval"));
+        else if (arg == "--trace-json") options.traceJsonPath = nextValue(i, argc, argv, "--trace-json");
+        else if (arg == "--trace-json-interval") options.traceJsonInterval = std::stoi(nextValue(i, argc, argv, "--trace-json-interval"));
         else if (arg == "--state-hash") options.stateHashPath = nextValue(i, argc, argv, "--state-hash");
         else if (arg == "--stats") options.statsPath = nextValue(i, argc, argv, "--stats");
         else if (arg == "--stats-interval") options.statsInterval = std::stoi(nextValue(i, argc, argv, "--stats-interval"));
@@ -111,6 +113,7 @@ CliOptions parseCli(int argc, char** argv) {
     }
     if (options.statsInterval <= 0) throw std::runtime_error("--stats-interval must be positive");
     if (options.htmlInterval <= 0) throw std::runtime_error("--html-interval must be positive");
+    if (options.traceJsonInterval <= 0) throw std::runtime_error("--trace-json-interval must be positive");
     if (!std::isfinite(options.config.policy.senseRadius) || options.config.policy.senseRadius <= 0.0) {
         throw std::runtime_error("--sense-radius must be positive and finite");
     }
@@ -128,7 +131,7 @@ std::string usage() {
            "  --sense-radius --mutation\n"
            "  --energy-summary --stats <path> --stats-interval <n>\n"
            "  --save <path> --load <path>\n"
-           "  --html <path> --html-interval <n>\n"
+           "  --html <path> --html-interval <n> --trace-json <path> --trace-json-interval <n>\n"
            "  --state-hash <path> --bench --audit --help --version\n";
 }
 } // namespace app

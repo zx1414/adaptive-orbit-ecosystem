@@ -157,6 +157,9 @@ app::HtmlTraceWriter 只读 WorldView，按 `--html-interval` 采样帧（上限
 单个 UTF-8 HTML：内嵌 `const TRACE = {...}` JSON、Canvas、播放/暂停/滑块、tick/种群/总能量。
 生产者绿色、Agent 橙色，亮度随 energy/cap；页面无外部 URL/脚本/字体，可双击离线打开。
 
+JSON 数据源：`--trace-json <path>`、`--trace-json-interval <n>`（>0，默认 100），复用同一个
+trace::Buffer 序列化，输出 `{name, meta, bounds, frames}`；前端 `frontend/` 直接消费该文件。
+
 CLI：`--html <path>`、`--html-interval <n>`（>0，默认 100）；与 `--load`/`--save` 兼容。
 构造时探测输出可写，失败立即退出 4；帧满 2000 时等步长降采样并保留末帧，stdout 输出
 `html_frames`/`downsampled`。参数错误退出码 2。该层只依赖 WorldView，不修改模拟状态。
@@ -170,7 +173,7 @@ CLI：`--html <path>`、`--html-interval <n>`（>0，默认 100）；与 `--load
 - 所有感知/收获/邻居查询接入 SpatialIndex；Sensors 只取最近两个槽位，复用 scratch 缓冲。
 - 默认 max 仍为 300/200；标定配置用 1000 作为安全阀，平衡点由资源与密度决定。
 - M3 快照：--save/--load、完整状态恢复、损坏/版本拒绝；10k 存档 + 10k 续跑 == 20k 直跑。
-- M4 最小可视化：--html 单文件 Canvas 轨迹；无服务器/第三方依赖。
+- M4 最小可视化：--html 单文件 Canvas 轨迹；--trace-json 纯 JSON 前端数据源；无服务器/第三方依赖。
 - 单元测试 30 个，集成冒烟、tools/acceptance.ps1、tools/m3_acceptance.ps1、tools/m4_acceptance.ps1；
   平衡结果见 BALANCE.md，M3/M4 设计见 M3-PLAN.md、M4-PLAN.md。
 

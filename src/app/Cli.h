@@ -16,8 +16,10 @@ struct CliOptions {
     std::string savePath;
     std::string loadPath;
     std::string htmlPath;
+    std::string traceJsonPath;
     bool ticksProvided = false;
     int htmlInterval = 100;
+    int traceJsonInterval = 100;
     int statsInterval = 100;
 };
 CliOptions parseCli(int argc, char** argv);

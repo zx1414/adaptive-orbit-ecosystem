@@ -1,6 +1,7 @@
 #include "app/Cli.h"
 #include "app/ConsoleRenderer.h"
 #include "app/HtmlTraceWriter.h"
+#include "app/TraceJsonWriter.h"
 #include "app/StatsWriter.h"
 #include "sim/Simulation.h"
 #include "sim/SnapshotStore.h"
@@ -47,6 +48,17 @@ int main(int argc, char** argv) {
                 return 4;
             }
         }
+        std::unique_ptr<app::TraceJsonWriter> traceJsonWriter;
+        if (!options.traceJsonPath.empty()) {
+            std::string metaJson = "{\"seed\":" + std::to_string(world.config().world.seed) +
+                ",\"maxTicks\":" + std::to_string(world.config().world.maxTicks) + "}";
+            traceJsonWriter = std::make_unique<app::TraceJsonWriter>(
+                options.traceJsonPath, "EcoCore trace", metaJson);
+            if (!traceJsonWriter->ok()) {
+                std::cerr << "cannot write trace json: " << traceJsonWriter->error() << '\n';
+                return 4;
+            }
+        }
         if (!options.statsPath.empty()) {
             statsWriter = std::make_unique<app::StatsWriter>(options.statsPath, world);
             if (!statsWriter->ok()) {
@@ -57,6 +69,7 @@ int main(int argc, char** argv) {
         const auto start = Clock::now();
         core::Tick lastStatsTick = std::numeric_limits<core::Tick>::max();
         core::Tick lastHtmlTick = std::numeric_limits<core::Tick>::max();
+        core::Tick lastTraceJsonTick = std::numeric_limits<core::Tick>::max();
         if (statsWriter && !options.loadPath.empty()) {
             statsWriter->write(world);
             lastStatsTick = world.tick();
@@ -72,6 +85,11 @@ int main(int argc, char** argv) {
                 htmlWriter->capture(world.view());
                 lastHtmlTick = world.tick();
             }
+            if (traceJsonWriter && world.tick() % static_cast<core::Tick>(options.traceJsonInterval) == 0 &&
+                world.tick() != lastTraceJsonTick) {
+                traceJsonWriter->capture(world.view());
+                lastTraceJsonTick = world.tick();
+            }
             if (options.render && options.renderInterval > 0 &&
                 world.tick() % static_cast<core::Tick>(options.renderInterval) == 0) {
                 renderer.render(world.view(), std::cout);
@@ -80,6 +98,7 @@ int main(int argc, char** argv) {
         }
         if (statsWriter && world.tick() != lastStatsTick) statsWriter->write(world);
         if (htmlWriter && world.tick() != lastHtmlTick) htmlWriter->capture(world.view());
+        if (traceJsonWriter && world.tick() != lastTraceJsonTick) traceJsonWriter->capture(world.view());
         if (!options.savePath.empty()) {
             std::string snapshotError;
             if (!sim::SnapshotStore::save(world, options.savePath, snapshotError)) {
@@ -94,6 +113,14 @@ int main(int argc, char** argv) {
             }
             std::cout << "html_frames=" << htmlWriter->frameCount()
                       << " downsampled=" << (htmlWriter->downsampled() ? 1 : 0) << '\n';
+        }
+        if (traceJsonWriter) {
+            if (!traceJsonWriter->write()) {
+                std::cerr << "cannot write trace json: " << traceJsonWriter->error() << '\n';
+                return 4;
+            }
+            std::cout << "trace_json_frames=" << traceJsonWriter->frameCount()
+                      << " downsampled=" << (traceJsonWriter->downsampled() ? 1 : 0) << '\n';
         }
         const auto end = Clock::now();
         const auto& stats = world.view().stats;

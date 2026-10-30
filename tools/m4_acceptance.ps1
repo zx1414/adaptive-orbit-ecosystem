@@ -42,6 +42,21 @@ if (Test-Path -LiteralPath $tracePath) {
     }
   }
 }
+$jsonPath = Join-Path $outDir 'trace.json'
+$code = Run-Sim 'trace-json' @('--no-render','--ticks','2000','--seed','42','--audit','--trace-json',$jsonPath,'--trace-json-interval','100')
+Check 'trace-json run exit' ($code -eq 0) ('code=' + $code)
+if (Test-Path -LiteralPath $jsonPath) {
+  $j = Get-Content -Raw -LiteralPath $jsonPath | ConvertFrom-Json
+  $jf = @($j.frames)
+  Check 'trace-json frame count' ($jf.Count -ge 2) ('frames=' + $jf.Count)
+  Check 'trace-json last tick' (([double]$jf[-1].tick) -eq 2000) ('last=' + $jf[-1].tick)
+  Check 'trace-json name/meta' (($j.name -eq 'EcoCore trace') -and ([int]$j.meta.seed -eq 42)) ('name=' + $j.name)
+} else { Check 'trace-json file' $false $jsonPath }
+$missingJson = Join-Path $outDir 'missing\x.json'
+$code = Run-Sim 'json-write-fail' @('--no-render','--ticks','10','--trace-json',$missingJson)
+Check 'trace-json write failure exit 4' ($code -eq 4) ('code=' + $code)
+$code = Run-Sim 'json-bad-interval' @('--no-render','--ticks','10','--trace-json',(Join-Path $outDir 'x.json'),'--trace-json-interval','0')
+Check 'trace-json interval validation exit 2' ($code -eq 2) ('code=' + $code)
 $densePath = Join-Path $outDir 'dense.html'
 $code = Run-Sim 'dense' @('--no-render','--ticks','2500','--seed','42','--audit','--html',$densePath,'--html-interval','1')
 Check 'dense trace exit' ($code -eq 0) ('code=' + $code)

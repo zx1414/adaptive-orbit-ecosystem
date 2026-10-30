@@ -65,11 +65,14 @@ build\simulator.exe --no-render --load build\m3\mid.snap --ticks 20000 --audit
 
 # M4 可视化：生成单文件 HTML 轨迹（双击打开，可播放）
 build\simulator.exe --no-render --ticks 2000 --seed 42 --audit --html build\m4\trace.html --html-interval 100
+
+# M4 前端数据源：导出纯 JSON trace，供 frontend/ 拖拽回放
+build\simulator.exe --no-render --ticks 2000 --seed 42 --audit --trace-json frontend\build\sample.json --trace-json-interval 100
 ~~~
 
 参数：--width --height --seed --ticks --producers --agents --policy --render/--no-render
 --render-interval --energy-summary --state-hash --stats --stats-interval --save --load
---html --html-interval --bench --audit --help --version。
+--html --html-interval --trace-json --trace-json-interval --bench --audit --help --version。
 
 平衡参数：--photo --producer-maint --producer-repro --producer-max --producer-crowding
 --producer-radius --producer-competition --producer-density-repro --agent-metab --agent-max-speed
@@ -103,7 +106,7 @@ M2.5 配置双跑确定性、策略确定性、观测版本校验、观测有限
 - src/producers：Producer 基类、PhotoProducer、ProducerSystem
 - src/agents：Agent 被动实体、AgentSystem 生命周期
 - src/sim：世界实现/组合根（Simulation、审计、状态哈希）
-- src/app：CLI、控制台渲染、CSV 统计、单文件 HTML 轨迹
+- src/app：CLI、控制台渲染、CSV 统计、单文件 HTML 轨迹、纯 JSON trace 导出
 - tests/unit：零第三方断言框架与测试
 - tools：构建与总检查脚本
 - docs/ARCH.md、docs/ROADMAP.md、docs/BALANCE.md：架构、里程碑与平衡实验
@@ -114,5 +117,20 @@ M2.5 配置双跑确定性、策略确定性、观测版本校验、观测有限
 ## 后续
 
 M2.5 已完成；M3 存档/快照已完成：完整 Simulation 状态可保存/恢复，10k 存档 + 10k 续跑与 20k 直跑
-逐位一致，损坏/版本文件返回退出码 5。M4 最小可视化已完成：`--html` 生成单文件 Canvas 轨迹回放。
+逐位一致，损坏/版本文件返回退出码 5。M4 最小可视化已完成：`--html` 生成单文件 Canvas 轨迹回放；`--trace-json` 输出前端可直接拖拽的纯 JSON。
 下一步 M5 NNetPolicy、M6 新扩展接口。详见 docs/ROADMAP.md、docs/M3-PLAN.md、docs/M4-PLAN.md。
+## 前端（frontend）
+
+`frontend/` 是独立维护的前端，不属于 C++ 构建。模拟器只负责导出数据：
+
+- `--trace-json <path>`：纯 JSON，契约见下；`--trace-json-interval <n>` 默认 100。
+- 示例：`frontend/build/sample.json`（已由 `--trace-json` 生成，供前端契约测试）。
+
+```json
+{ "name": "EcoCore trace", "meta": {"seed": 42, "maxTicks": 2000},
+  "bounds": {"minX":0,"minY":0,"maxX":2000,"maxY":2000},
+  "frames": [ {"tick":0,"producers":30,"agents":12,"totalEnergy":1260,
+               "p":[[x,y,energy,cap],...], "a":[[x,y,energy,cap],...]} ] }
+```
+
+每帧只有 `tick` 必填；`p`/`a` 缺省为空数组，`producers`/`agents` 缺省时按实体数回填。

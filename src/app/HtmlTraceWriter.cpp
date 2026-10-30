@@ -1,57 +1,10 @@
 #include "app/HtmlTraceWriter.h"
 
-#include <charconv>
-#include <cmath>
 #include <fstream>
-#include <string>
 #include <utility>
 
 namespace app {
 namespace {
-constexpr std::size_t kMaxFrames = 2000;
-
-void appendDouble(std::string& out, double value) {
-    if (!std::isfinite(value)) value = 0.0;
-    char buffer[64] = {};
-    const auto result = std::to_chars(buffer, buffer + sizeof(buffer), value,
-                                      std::chars_format::general, 10);
-    if (result.ec == std::errc()) out.append(buffer, result.ptr);
-    else out += '0';
-}
-void appendU64(std::string& out, std::uint64_t value) {
-    char buffer[32] = {};
-    const auto result = std::to_chars(buffer, buffer + sizeof(buffer), value);
-    if (result.ec == std::errc()) out.append(buffer, result.ptr);
-    else out += '0';
-}
-void appendBounds(std::string& out, const core::Bounds& bounds) {
-    out += "{\"minX\":";
-    appendDouble(out, bounds.minX);
-    out += ",\"minY\":";
-    appendDouble(out, bounds.minY);
-    out += ",\"maxX\":";
-    appendDouble(out, bounds.maxX);
-    out += ",\"maxY\":";
-    appendDouble(out, bounds.maxY);
-    out += '}';
-}
-template <typename BodyVector>
-void appendBodies(std::string& out, const BodyVector& bodies) {
-    out += '[';
-    for (std::size_t i = 0; i < bodies.size(); ++i) {
-        if (i != 0) out += ',';
-        out += '[';
-        appendDouble(out, bodies[i].x);
-        out += ',';
-        appendDouble(out, bodies[i].y);
-        out += ',';
-        appendDouble(out, bodies[i].energy);
-        out += ',';
-        appendDouble(out, bodies[i].cap);
-        out += ']';
-    }
-    out += ']';
-}
 const char* const kHead = R"HTML(<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>EcoCore v3 trace</title>
 <style>
@@ -166,61 +119,11 @@ HtmlTraceWriter::HtmlTraceWriter(std::string path) : path_(std::move(path)) {
     }
 }
 
-void HtmlTraceWriter::capture(const world::WorldView& view) {
-    if (frames_.size() >= kMaxFrames) {
-        // Keep the whole time span but halve the resolution; the final frame is
-        // still appended below, so the end state is never silently lost.
-        std::vector<Frame> reduced;
-        reduced.reserve(frames_.size() / 2 + 1);
-        for (std::size_t i = 0; i < frames_.size(); i += 2) {
-            reduced.push_back(std::move(frames_[i]));
-        }
-        frames_ = std::move(reduced);
-        downsampled_ = true;
-    }
-    bounds_ = view.bounds;
-    Frame frame;
-    frame.tick = view.stats.tick;
-    frame.producers = view.stats.producers;
-    frame.agents = view.stats.agents;
-    frame.totalEnergy = view.stats.totalEnergy;
-    frame.producerBodies.reserve(view.producers.size());
-    for (const world::ProducerView& producer : view.producers) {
-        frame.producerBodies.push_back({producer.position.x, producer.position.y,
-                                        producer.energy, producer.cap});
-    }
-    frame.agentBodies.reserve(view.agents.size());
-    for (const world::AgentView& agent : view.agents) {
-        frame.agentBodies.push_back({agent.position.x, agent.position.y, agent.energy, agent.cap});
-    }
-    frames_.push_back(std::move(frame));
-}
+void HtmlTraceWriter::capture(const world::WorldView& view) { buffer_.capture(view); }
 
 bool HtmlTraceWriter::write() {
-    std::string json;
-    json.reserve(frames_.size() * 4096 + 256);
-    json += "{\"bounds\":";
-    appendBounds(json, bounds_);
-    json += ",\"frames\":[";
-    for (std::size_t i = 0; i < frames_.size(); ++i) {
-        if (i != 0) json += ',';
-        const Frame& frame = frames_[i];
-        json += "{\"tick\":";
-        appendU64(json, frame.tick);
-        json += ",\"producers\":";
-        appendU64(json, static_cast<std::uint64_t>(frame.producers));
-        json += ",\"agents\":";
-        appendU64(json, static_cast<std::uint64_t>(frame.agents));
-        json += ",\"totalEnergy\":";
-        appendDouble(json, frame.totalEnergy);
-        json += ",\"p\":";
-        appendBodies(json, frame.producerBodies);
-        json += ",\"a\":";
-        appendBodies(json, frame.agentBodies);
-        json += '}';
-    }
-    json += "]}";
-
+    if (!ok_) return false;
+    const std::string json = buffer_.toJson(std::string(), std::string());
     std::string html;
     html.reserve(json.size() + 8192);
     html += kHead;

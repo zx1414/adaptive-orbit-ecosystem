@@ -72,7 +72,8 @@ perception/behavior 不 include sim/app；decision 不依赖 world。
 - app::HtmlTraceWriter 只读 WorldView，按 `--html-interval` 采样（上限 2000 帧），生成单文件 HTML：
   内嵌 `const TRACE = {...}`、Canvas 回放、播放/暂停/滑块、tick/种群/总能量。
 - 生产者绿、Agent 橙，亮度随 energy/cap；无外部 URL/脚本/字体，离线可打开。
-- CLI `--html` / `--html-interval`（>0，默认 100），兼容 `--load`/`--save`；
+- CLI `--html` / `--html-interval`（>0，默认 100）与 `--trace-json` / `--trace-json-interval`，兼容 `--load`/`--save`；
+- `--trace-json` 输出纯 JSON（`{name,meta,bounds,frames}`），与 HTML 内嵌 payload 共用 trace::Buffer；前端 `frontend/` 独立维护。
 构造时探测可写（失败立即 4）；帧满 2000 等步长降采样并保留末帧，stdout 打印 html_frames/downsampled；参数错误 2。
 `--load` + `--stats` 会在载入 tick 显式写首行，不等待 tick 对齐。
 
@@ -110,7 +111,7 @@ perception/behavior 不 include sim/app；decision 不依赖 world。
 
 - 10k 存档 + 10k 续跑与 20k 直跑的 stateHash、总能量、种群、injected/dissipated/transferred、audit 全部一致。
 - `tools/m3_acceptance.ps1` 全部 PASS；损坏/空文件/版本篡改退出码 5；load+seed 覆盖退出码 2。
-- `tools/m4_acceptance.ps1` 20 项 PASS；含 2500 tick/interval1 降采样保末帧、载入态统计首行、无外部 URL/错误码。
+- `tools/m4_acceptance.ps1` 26 项 PASS；含 JSON trace 契约、2500 tick 降采样保末帧、载入态统计首行、错误码。
 - `tools/acceptance.ps1` 14 项 PASS（M2.5 回归）。
 
 ## 6. 性能
@@ -162,7 +163,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/m4_acceptance.ps1
 - 生产者：[src/producers/Producer.cpp](src/producers/Producer.cpp)、[src/producers/ProducerSystem.cpp](src/producers/ProducerSystem.cpp)
 - Agent：[src/agents/AgentSystem.cpp](src/agents/AgentSystem.cpp)
 - 探测/行为：[src/perception/Sensors.cpp](src/perception/Sensors.cpp)、[src/behavior/Behavior.cpp](src/behavior/Behavior.cpp)
-- 可视化：[src/app/HtmlTraceWriter.cpp](src/app/HtmlTraceWriter.cpp)、[tools/m4_acceptance.ps1](tools/m4_acceptance.ps1)
+- 可视化/数据源：[src/app/HtmlTraceWriter.cpp](src/app/HtmlTraceWriter.cpp)、[src/app/TraceFrames.cpp](src/app/TraceFrames.cpp)、[src/app/TraceJsonWriter.cpp](src/app/TraceJsonWriter.cpp)、[tools/m4_acceptance.ps1](tools/m4_acceptance.ps1)
 - 配置/CLI：[src/core/Config.h](src/core/Config.h)、[src/app/Cli.cpp](src/app/Cli.cpp)
 - 验收：[tools/acceptance.ps1](tools/acceptance.ps1)、[tools/m3_acceptance.ps1](tools/m3_acceptance.ps1)
 - 设计/协议：[docs/M3-PLAN.md](docs/M3-PLAN.md)、[docs/REVIEW_PROTOCOL.md](docs/REVIEW_PROTOCOL.md)
