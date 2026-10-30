@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/Types.h"
+#include "sim/Snapshot.h"
 
 #include <memory>
 #include <string>
@@ -18,9 +19,10 @@ public:
     static bool save(const Simulation& simulation, const std::string& path, std::string& error);
 
     // Load a complete snapshot. When overrideTicks is true, maxTicks replaces
-    // the stored world.maxTicks. Returns nullptr and fills error on any format,
-    // validation, or audit failure.
+    // the stored world.maxTicks. Returns nullptr and fills error on failure; `status`
+    // reports whether the failure was I/O (exit 4) or format/semantic (exit 5).
     static std::unique_ptr<Simulation> load(const std::string& path, bool overrideTicks,
-                                            core::Tick maxTicks, std::string& error);
+                                            core::Tick maxTicks, std::string& error,
+                                            snapshot::LoadStatus& status);
 };
 } // namespace sim

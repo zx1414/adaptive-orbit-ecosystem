@@ -93,21 +93,28 @@ void ProducerSystem::querySamples(core::Vec2 center, double radius,
     static thread_local std::vector<core::EntityId> ids;
     index_.queryUnsorted(center, radius, ids);
     out.reserve(ids.size());
+    const double radiusSq = radius * radius;
     for (const core::EntityId id : ids) {
         const Producer* producer = find(id);
         if (!producer || !producer->alive()) continue;
+        // The index is a candidate filter only; positions can change during a tick.
+        if ((producer->pos - center).lengthSq() > radiusSq) continue;
         out.push_back({producer->id, producer->pos, producer->energy.energy, producer->energy.cap});
     }
 }
+
 ProducerSystem::Neighborhood ProducerSystem::neighborhood(core::Vec2 center, double radius,
                                                           core::EntityId exclude) const {
     Neighborhood result;
     static thread_local std::vector<core::EntityId> ids;
     index_.query(center, radius, ids);
+    const double radiusSq = radius * radius;
     for (const core::EntityId id : ids) {
         if (id == exclude) continue;
         const Producer* producer = find(id);
         if (!producer || !producer->alive()) continue;
+        // Neighbour density and biomass must reflect the current state, not stale index cells.
+        if ((producer->pos - center).lengthSq() > radiusSq) continue;
         ++result.count;
         result.biomass += producer->energy.energy;
     }

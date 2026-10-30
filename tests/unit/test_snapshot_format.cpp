@@ -117,10 +117,12 @@ TEST("snapshot file roundtrip and missing file error") {
     std::string error;
     CHECK(sim::snapshot::writeFile(path.string(), samplePayload(), error));
     std::vector<std::uint8_t> payload;
-    CHECK(sim::snapshot::readFile(path.string(), payload, error));
+    CHECK(sim::snapshot::readFile(path.string(), payload, error) == sim::snapshot::LoadStatus::Ok);
     CHECK(payload == samplePayload());
     std::filesystem::remove(path);
 
-    CHECK(!sim::snapshot::readFile(tempPath("missing").string(), payload, error));
+    // A missing file is an I/O problem, not a format problem: the CLI relies on the split.
+    CHECK(sim::snapshot::readFile(tempPath("missing").string(), payload, error) ==
+          sim::snapshot::LoadStatus::IoError);
     CHECK(!error.empty());
 }

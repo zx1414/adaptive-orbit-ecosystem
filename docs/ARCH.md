@@ -141,15 +141,19 @@ FNV-1a 校验和；payload 使用手写 little-endian 读写，不依赖主机�
 
 读档路径：
 
-1. 校验头、版本、长度、校验和；任何损坏立即返回错误（CLI 退出码 5）。
-2. 解析并做语义校验：有限值、cap>0、energy∈[0,cap]、id 唯一、nextId 大于已有 id、
-   策略 id 可创建且 spec/genome 匹配、账本已封存。
-3. 构造未初始化的 Simulation，直接替换实体、账本、RNG、tick；
+1. 读取失败分类：打不开/读不完属于 I/O 错误（CLI 退出码 4）；内容有问题属于快照错误（退出码 5）。
+2. 校验头、版本、长度、校验和；任何损坏立即返回错误。
+3. 解析并做语义校验：有限值、cap>0、energy∈[0,cap]、id 唯一、nextId 大于已有 id、
+   策略 id 可创建且 spec/genome 匹配、账本已封存、**PCG32 increment 非零且为奇数**、
+   实体计数不超过 payload 剩余字节所能容纳的数量。
+4. 构造未初始化的 Simulation，直接替换实体、账本、RNG、tick；
    **不调用 initialize/injectInitial**。
-4. 重建空间索引与 WorldView，立即执行能量审计；审计失败拒绝加载。
+5. 重建空间索引与 WorldView，立即执行能量审计；审计失败拒绝加载。
+   对称地，`save` 也拒绝写出已审计失败的模拟，避免产生无法读回的文件。
 
-`Simulation::stateHash` 已覆盖 policy spec.id/版本/维度、energy cap、age、nextId、births/deaths、
-账本 transferred 与全部 reason 统计，作为续跑一致性的比较依据。
+`Simulation::stateHash` 覆盖全部 `SimConfig` 字段（world/light/producer/agent/policy）、
+policy spec.id/版本/维度、每 agent 的 genome 与 opaque policy state、energy cap、age、nextId、
+births/deaths、账本 transferred 与全部 reason 统计，作为续跑一致性的比较依据。
 
 ## 可视化（M4）
 
@@ -161,6 +165,8 @@ JSON 数据源：`--trace-json <path>`、`--trace-json-interval <n>`（>0，默�
 trace::Buffer 序列化，输出 `{name, meta, bounds, frames}`；前端 `frontend/` 直接消费该文件。
 
 CLI：`--html <path>`、`--html-interval <n>`（>0，默认 100）；与 `--load`/`--save` 兼容。
+从快照载入且 tick 不在采样网格上时，统计与 HTML/JSON 轨迹都会先输出载入态，再按间隔继续采样。
+所有输出路径（stats/save/html/trace-json/state-hash）必须互不相同，重复即参数错误（退出码 2）。
 构造时探测输出可写，失败立即退出 4；帧满 2000 时等步长降采样并保留末帧，stdout 输出
 `html_frames`/`downsampled`。参数错误退出码 2。该层只依赖 WorldView，不修改模拟状态。
 

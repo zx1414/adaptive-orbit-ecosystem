@@ -13,6 +13,9 @@ constexpr std::size_t kMaxPayload = 1024ULL * 1024ULL * 1024ULL;
 constexpr std::size_t kMaxString = 1024ULL * 1024ULL;
 inline constexpr std::uint8_t kMagic[8] = {'E', 'C', 'O', 'C', 'O', 'R', 'E', '3'};
 
+// Failure class for the load path. The CLI maps IoError to exit 4 and FormatError to exit 5.
+enum class LoadStatus { Ok, IoError, FormatError };
+
 // Little-endian payload writer. Once an error is recorded, ok() is false and
 // callers must abort encoding.
 class Writer {
@@ -70,6 +73,9 @@ bool decode(const std::vector<std::uint8_t>& file, std::vector<std::uint8_t>& pa
 
 bool writeFile(const std::string& path, const std::vector<std::uint8_t>& payload,
                std::string& error);
-bool readFile(const std::string& path, std::vector<std::uint8_t>& payload, std::string& error);
+// Reports IoError for open/size/read failures and FormatError for an undecodable file, so the
+// CLI can map them to distinct exit codes without matching error strings.
+LoadStatus readFile(const std::string& path, std::vector<std::uint8_t>& payload,
+                    std::string& error);
 
 } // namespace sim::snapshot

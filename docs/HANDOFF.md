@@ -75,7 +75,8 @@ perception/behavior 不 include sim/app；decision 不依赖 world。
 - CLI `--html` / `--html-interval`（>0，默认 100）与 `--trace-json` / `--trace-json-interval`，兼容 `--load`/`--save`；
 - `--trace-json` 输出纯 JSON（`{name,meta,bounds,frames}`），与 HTML 内嵌 payload 共用 trace::Buffer；前端 `frontend/` 独立维护。
 构造时探测可写（失败立即 4）；帧满 2000 等步长降采样并保留末帧，stdout 打印 html_frames/downsampled；参数错误 2。
-`--load` + `--stats` 会在载入 tick 显式写首行，不等待 tick 对齐。
+`--load` 载入后，stats 与 HTML/JSON 轨迹都会先在载入 tick 输出一帧/一行，再按间隔继续采样。
+所有输出路径（stats/save/html/trace-json/state-hash）必须互不相同，重复即退出 2。
 
 ### M3 快照
 
@@ -86,10 +87,13 @@ perception/behavior 不 include sim/app；decision 不依赖 world。
   Agent id/pos/vel/energy/cap/age、policy spec.id/版本/维度/genome/policy state。
 - 读档：校验头/版本/长度/校验和/语义；构造未初始化的 Simulation，直接替换状态，
   **不调用 initialize/injectInitial**；重建索引与 view，立即 audit。
-- CLI：`--save <path>`、`--load <path>`，`--ticks` 为绝对结束 tick；
-  load 拒绝世界/seed/平衡参数覆盖；错误码 2 参数、3 审计、4 I/O、5 快照无效。
+- CLI：`--save <path>`、`--load <path>`，`--ticks` 为绝对结束 tick；`--ticks 0` 合法且不执行任何 step。
+  load 拒绝世界/seed/平衡参数覆盖；错误码 2 参数、3 审计、4 I/O（含路径不可读）、5 快照内容无效。
+- 读档额外校验：PCG32 increment 必须非零且为奇数；实体计数不得超过 payload 剩余字节容量。
+  `save` 拒绝写出已审计失败的模拟。
 - stateHash 覆盖 policy spec id/版本/维度、cap、age、nextId、births/deaths、transferred 与全部 reason 统计。
-  M3 后默认 5k 哈希为 `fea1413153222893`（旧值仅覆盖旧字段）。
+  stateHash 现已覆盖全部 SimConfig 字段与每 agent 的策略 opaque state，参考值：默认 5k 种子 42 为
+  `7d6686d72a87853e`，20k 种子 42 为 `aebfe1fac8afaf2c`，20k 种子 7 为 `c0b49e80ca961953`。
 
 ## 5. 验收数据
 
@@ -106,12 +110,12 @@ perception/behavior 不 include sim/app；decision 不依赖 world。
 
 | seed | tick | producers | agents | total_energy | direct/resumed hash |
 | --- | --- | --- | --- | --- | --- |
-| 42 | 20000 | 300 | 200 | 49690.20045 | `869ad9e17baf19ae` |
-| 7 | 20000 | 300 | 200 | 49687.76436 | `b8b02aa8e02ce634` |
+| 42 | 20000 | 300 | 200 | 49690.20045 | `aebfe1fac8afaf2c` |
+| 7 | 20000 | 300 | 200 | 49687.76436 | `c0b49e80ca961953` |
 
 - 10k 存档 + 10k 续跑与 20k 直跑的 stateHash、总能量、种群、injected/dissipated/transferred、audit 全部一致。
 - `tools/m3_acceptance.ps1` 全部 PASS；损坏/空文件/版本篡改退出码 5；load+seed 覆盖退出码 2。
-- `tools/m4_acceptance.ps1` 26 项 PASS；含 JSON trace 契约、2500 tick 降采样保末帧、载入态统计首行、错误码。
+- `tools/m4_acceptance.ps1` 33 项 PASS；含 JSON trace 契约、2500 tick 降采样保末帧、载入态统计首行、错误码。
 - `tools/acceptance.ps1` 14 项 PASS（M2.5 回归）。
 
 ## 6. 性能
@@ -131,7 +135,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/m3_acceptance.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/m4_acceptance.ps1
 ```
 
-- 单测：30 passed（空间索引/竞争/密度/饱和收获/快照格式/存读续跑/损坏拒绝）。
+- 单测：33 passed（空间索引/竞争/密度/饱和收获/快照格式/存读续跑/损坏拒绝）。
 - CMake：VS2022 内置 cmake；`cmake -S . -B build-cmake -G "Visual Studio 17 2022" -A x64`，
   `cmake --build build-cmake --config Release`，`ctest --test-dir build-cmake -C Release`。
 - 注意：CMake 内置 cmake 不在 PATH 时用
@@ -173,7 +177,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/m4_acceptance.ps1
 ```text
 继续 EcoCore v3，工作目录：D:\ScuStu\Q\自适应环绕核生态模拟与生存游戏。
 先读 docs/HANDOFF.md、docs/ARCH.md、docs/ROADMAP.md、docs/M3-PLAN.md、docs/REVIEW_PROTOCOL.md。
-M3 存档/快照已完成：29 个单测、tools/check.ps1、tools/acceptance.ps1、tools/m3_acceptance.ps1 通过。
+M3 存档/快照已完成：33 个单测、tools/check.ps1、tools/acceptance.ps1、tools/m3_acceptance.ps1 通过。
 M4 最小可视化已完成（--html 单文件 Canvas 轨迹）。下一步 M5 NNetPolicy。
 子代理优先 zcode-start-plan-acct-1e99ffd8-.../GLM-5.3-Flash；任务拆小，实现与红队隔离。
 ```

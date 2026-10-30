@@ -78,8 +78,12 @@ Check 'html write failure exit 4' ($code -eq 4) ('code=' + $code)
 $code = Run-Sim 'bad-interval' @('--no-render','--ticks','10','--html',(Join-Path $outDir 'x.html'),'--html-interval','0')
 Check 'html interval validation exit 2' ($code -eq 2) ('code=' + $code)
 $snap = Join-Path $outDir 'mid.snap'
-$null = Run-Sim 'save' @('--no-render','--ticks','500','--seed','42','--save',$snap)
+if (Test-Path -LiteralPath $snap) { Remove-Item -LiteralPath $snap }
+$code = Run-Sim 'save' @('--no-render','--ticks','500','--seed','42','--save',$snap)
+Check 'save exit' ($code -eq 0) ('code=' + $code)
+Check 'save produced file' (Test-Path -LiteralPath $snap) $snap
 $loaded = Join-Path $outDir 'loaded.html'
+if (Test-Path -LiteralPath $loaded) { Remove-Item -LiteralPath $loaded }
 $code = Run-Sim 'loaded' @('--no-render','--load',$snap,'--ticks','1000','--html',$loaded,'--html-interval','100')
 Check 'html with load exit' ($code -eq 0) ('code=' + $code)
 Check 'html with load file' (Test-Path -LiteralPath $loaded) $loaded
@@ -92,6 +96,44 @@ if (Test-Path -LiteralPath $statsPath) {
   $statsRows = @(Import-Csv -LiteralPath $statsPath)
   Check 'load stats first row at load tick' ($statsRows.Count -gt 0 -and [double]$statsRows[0].tick -eq 505) ('first=' + $(if ($statsRows.Count -gt 0) { $statsRows[0].tick } else { 'none' }))
 } else { Check 'load stats file' $false $statsPath }
+# Zero tick budget must not step: the summary must still describe tick 0.
+$code = Run-Sim 'zero-ticks' @('--no-render','--ticks','0','--seed','42','--audit')
+Check 'zero ticks exit' ($code -eq 0) ('code=' + $code)
+$zeroOut = [string](Get-Content -Raw -LiteralPath (Join-Path $outDir 'zero-ticks.out.txt'))
+Check 'zero ticks reports tick 0' ($zeroOut -match 'done tick=0 ') $zeroOut
+Check 'zero ticks dissipated nothing' ($zeroOut -match 'dissipated=0 ') $zeroOut
+$zeroJson = Join-Path $outDir 'zero.json'
+if (Test-Path -LiteralPath $zeroJson) { Remove-Item -LiteralPath $zeroJson }
+$code = Run-Sim 'zero-trace' @('--no-render','--ticks','0','--seed','42','--trace-json',$zeroJson)
+Check 'zero trace exit' ($code -eq 0) ('code=' + $code)
+if (Test-Path -LiteralPath $zeroJson) {
+  $zj = Get-Content -Raw -LiteralPath $zeroJson | ConvertFrom-Json
+  $zf = @($zj.frames)
+  Check 'zero trace single frame' ($zf.Count -eq 1) ('frames=' + $zf.Count)
+  Check 'zero trace frame at tick 0' (($zf.Count -eq 1) -and ([double]$zf[0].tick -eq 0)) 'unexpected first tick'
+  Remove-Item -LiteralPath $zeroJson
+}
+
+# A load that lands off the reporting grid must still emit the resumed state first (P2-6).
+$offSnap = Join-Path $outDir 'off.snap'
+if (Test-Path -LiteralPath $offSnap) { Remove-Item -LiteralPath $offSnap }
+$null = Run-Sim 'offsave' @('--no-render','--ticks','505','--seed','42','--save',$offSnap)
+$offJson = Join-Path $outDir 'off.json'
+if (Test-Path -LiteralPath $offJson) { Remove-Item -LiteralPath $offJson }
+$code = Run-Sim 'off' @('--no-render','--load',$offSnap,'--ticks','600','--trace-json',$offJson,'--trace-json-interval','100')
+Check 'off-grid load exit' ($code -eq 0) ('code=' + $code)
+if (Test-Path -LiteralPath $offJson) {
+  $oj = Get-Content -Raw -LiteralPath $offJson | ConvertFrom-Json
+  $of = @($oj.frames)
+  Check 'off-grid trace starts at load tick' (($of.Count -ge 2) -and ([double]$of[0].tick -eq 505)) ('first=' + $(if ($of.Count -gt 0) { $of[0].tick } else { 'none' }))
+  Check 'off-grid trace ends at end tick' (($of.Count -ge 1) -and ([double]$of[-1].tick -eq 600)) ('last=' + $(if ($of.Count -gt 0) { $of[-1].tick } else { 'none' }))
+  Remove-Item -LiteralPath $offJson
+}
+
+# A missing snapshot path is an I/O failure (4); bad contents stay a snapshot error (5).
+$code = Run-Sim 'missing-load' @('--no-render','--load',(Join-Path $outDir 'absent.snap'))
+Check 'missing load path exit 4' ($code -eq 4) ('code=' + $code)
+
 if ($script:failures -gt 0) { Write-Host ($script:failures.ToString() + ' M4 check(s) FAILED.'); exit 1 }
 Write-Host 'All M4 acceptance checks passed.'
 exit 0

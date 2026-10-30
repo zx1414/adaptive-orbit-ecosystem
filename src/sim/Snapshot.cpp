@@ -186,22 +186,25 @@ bool writeFile(const std::string& path, const std::vector<std::uint8_t>& payload
     return true;
 }
 
-bool readFile(const std::string& path, std::vector<std::uint8_t>& payload, std::string& error) {
+LoadStatus readFile(const std::string& path, std::vector<std::uint8_t>& payload,
+                    std::string& error) {
     std::ifstream in(path, std::ios::binary | std::ios::ate);
-    if (!in) { error = "cannot open snapshot: " + path; return false; }
+    if (!in) { error = "cannot open snapshot: " + path; return LoadStatus::IoError; }
     const std::streamoff length = in.tellg();
-    if (length < 0) { error = "cannot determine snapshot size: " + path; return false; }
+    if (length < 0) { error = "cannot determine snapshot size: " + path; return LoadStatus::IoError; }
     if (static_cast<std::uint64_t>(length) > kMaxPayload + kHeaderSize) {
         error = "snapshot file exceeds size limit: " + path;
-        return false;
+        return LoadStatus::FormatError;
     }
     std::vector<std::uint8_t> file(static_cast<std::size_t>(length));
     in.seekg(0, std::ios::beg);
+    if (!in) { error = "cannot seek snapshot: " + path; return LoadStatus::IoError; }
     if (!file.empty()) {
         in.read(reinterpret_cast<char*>(file.data()), static_cast<std::streamsize>(file.size()));
-        if (!in) { error = "failed while reading snapshot: " + path; return false; }
+        if (!in) { error = "failed while reading snapshot: " + path; return LoadStatus::IoError; }
     }
-    return decode(file, payload, error);
+    // Anything past this point is a problem with the file contents, not the file system.
+    return decode(file, payload, error) ? LoadStatus::Ok : LoadStatus::FormatError;
 }
 
 } // namespace sim::snapshot

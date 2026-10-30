@@ -13,6 +13,16 @@
 #include <memory>
 #include <string>
 
+namespace {
+// Writes a CSV row or aborts with the I/O exit code. Statistics failures must never be
+// swallowed: a truncated CSV that reports success is worse than a hard failure.
+int writeStatsOrFail(app::StatsWriter& writer, const sim::Simulation& world) {
+    if (writer.write(world)) return 0;
+    std::cerr << "cannot write stats: " << writer.error() << '\n';
+    return 4;
+}
+} // namespace
+
 int main(int argc, char** argv) {
     using Clock = std::chrono::steady_clock;
     app::CliOptions options;
@@ -28,11 +38,14 @@ int main(int argc, char** argv) {
         std::unique_ptr<sim::Simulation> worldPtr;
         if (!options.loadPath.empty()) {
             std::string snapshotError;
+            sim::snapshot::LoadStatus loadStatus = sim::snapshot::LoadStatus::FormatError;
             worldPtr = sim::SnapshotStore::load(options.loadPath, options.ticksProvided,
-                                                options.config.world.maxTicks, snapshotError);
+                                                options.config.world.maxTicks, snapshotError,
+                                                loadStatus);
             if (!worldPtr) {
                 std::cerr << "cannot load snapshot: " << snapshotError << '\n';
-                return 5;
+                // Unreadable files are I/O failures (4); bad contents are snapshot errors (5).
+                return loadStatus == sim::snapshot::LoadStatus::IoError ? 4 : 5;
             }
         } else {
             worldPtr = std::make_unique<sim::Simulation>(options.config);
@@ -41,6 +54,7 @@ int main(int argc, char** argv) {
         app::ConsoleRenderer renderer;
         std::unique_ptr<app::StatsWriter> statsWriter;
         std::unique_ptr<app::HtmlTraceWriter> htmlWriter;
+        std::unique_ptr<app::TraceJsonWriter> traceJsonWriter;
         if (!options.htmlPath.empty()) {
             htmlWriter = std::make_unique<app::HtmlTraceWriter>(options.htmlPath);
             if (!htmlWriter->ok()) {
@@ -48,7 +62,6 @@ int main(int argc, char** argv) {
                 return 4;
             }
         }
-        std::unique_ptr<app::TraceJsonWriter> traceJsonWriter;
         if (!options.traceJsonPath.empty()) {
             std::string metaJson = "{\"seed\":" + std::to_string(world.config().world.seed) +
                 ",\"maxTicks\":" + std::to_string(world.config().world.maxTicks) + "}";
@@ -62,7 +75,7 @@ int main(int argc, char** argv) {
         if (!options.statsPath.empty()) {
             statsWriter = std::make_unique<app::StatsWriter>(options.statsPath, world);
             if (!statsWriter->ok()) {
-                std::cerr << "cannot write stats: " << options.statsPath << '\n';
+                std::cerr << "cannot write stats: " << statsWriter->error() << '\n';
                 return 4;
             }
         }
@@ -70,14 +83,29 @@ int main(int argc, char** argv) {
         core::Tick lastStatsTick = std::numeric_limits<core::Tick>::max();
         core::Tick lastHtmlTick = std::numeric_limits<core::Tick>::max();
         core::Tick lastTraceJsonTick = std::numeric_limits<core::Tick>::max();
-        if (statsWriter && !options.loadPath.empty()) {
-            statsWriter->write(world);
-            lastStatsTick = world.tick();
+
+        // A loaded run starts at its snapshot tick, which is usually not aligned to the
+        // reporting intervals. Emit the loaded state for every output before stepping so the
+        // first CSV row and the first trace frame both describe the state we resumed from.
+        if (!options.loadPath.empty()) {
+            if (statsWriter) {
+                if (const int code = writeStatsOrFail(*statsWriter, world); code != 0) return code;
+                lastStatsTick = world.tick();
+            }
+            if (htmlWriter) {
+                htmlWriter->capture(world.view());
+                lastHtmlTick = world.tick();
+            }
+            if (traceJsonWriter) {
+                traceJsonWriter->capture(world.view());
+                lastTraceJsonTick = world.tick();
+            }
         }
+
         while (!world.finished()) {
             if (statsWriter && world.tick() % static_cast<core::Tick>(options.statsInterval) == 0 &&
                 world.tick() != lastStatsTick) {
-                statsWriter->write(world);
+                if (const int code = writeStatsOrFail(*statsWriter, world); code != 0) return code;
                 lastStatsTick = world.tick();
             }
             if (htmlWriter && world.tick() % static_cast<core::Tick>(options.htmlInterval) == 0 &&
@@ -96,9 +124,13 @@ int main(int argc, char** argv) {
             }
             world.step();
         }
-        if (statsWriter && world.tick() != lastStatsTick) statsWriter->write(world);
+
+        if (statsWriter && world.tick() != lastStatsTick) {
+            if (const int code = writeStatsOrFail(*statsWriter, world); code != 0) return code;
+        }
         if (htmlWriter && world.tick() != lastHtmlTick) htmlWriter->capture(world.view());
         if (traceJsonWriter && world.tick() != lastTraceJsonTick) traceJsonWriter->capture(world.view());
+
         if (!options.savePath.empty()) {
             std::string snapshotError;
             if (!sim::SnapshotStore::save(world, options.savePath, snapshotError)) {

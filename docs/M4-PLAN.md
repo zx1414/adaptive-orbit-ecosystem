@@ -1,6 +1,6 @@
 # M4 最小可视化：自包含 HTML 轨迹
 
-> 状态：已完成。`tools/m4_acceptance.ps1` 26 项全 PASS；HTML 帧 JSON/Canvas/无外部 URL；
+> 状态：已完成。`tools/m4_acceptance.ps1` 33 项全 PASS；HTML 帧 JSON/Canvas/无外部 URL；
 > 帧满 2000 时降采样并保留末帧，--html 路径在启动阶段 fail-fast。
 
 目标：用 WorldView 生成一个可直接双击打开的单文件 HTML，回放生产者/Agent 的时空轨迹；

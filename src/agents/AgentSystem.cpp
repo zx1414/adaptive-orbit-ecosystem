@@ -101,17 +101,19 @@ const Agent* AgentSystem::find(core::EntityId id) const {
 std::size_t AgentSystem::localDensity(core::Vec2 center, double radius, core::EntityId exclude) const {
     static thread_local std::vector<core::EntityId> ids;
     index_.queryUnsorted(center, radius, ids);
-    // Count index entries only. The index is the candidate set captured at the
-    // start of the tick; avoiding byId_ dereferences keeps this safe while the
-    // reproduction loop appends children (which may reallocate agents_).
-    std::size_t count = ids.size();
-    if (exclude != core::kInvalidEntityId) {
-        for (const core::EntityId id : ids) {
-            if (id == exclude) { --count; break; }
-        }
+    // Count living agents whose *current* position is inside the radius. The index cell
+    // membership is only a candidate filter, and dead agents must not raise the threshold.
+    std::size_t count = 0;
+    for (const core::EntityId id : ids) {
+        if (id == exclude) continue;
+        const Agent* agent = find(id);
+        if (!agent || !agent->alive()) continue;
+        if ((agent->pos() - center).lengthSq() > radius * radius) continue;
+        ++count;
     }
     return count;
 }
+
 void AgentSystem::querySamples(core::Vec2 center, double radius, std::vector<world::AgentSample>& out) const {
     out.clear();
     if (!core::Math::isFinite(center) || !std::isfinite(radius) || radius <= 0.0) return;
@@ -121,6 +123,10 @@ void AgentSystem::querySamples(core::Vec2 center, double radius, std::vector<wor
     for (const core::EntityId id : ids) {
         const Agent* agent = find(id);
         if (!agent || !agent->alive()) continue;
+        // The index holds positions captured at the start of the tick, but agents move during
+        // the tick. Re-test the current position so perception never reports a body that has
+        // already left the radius and never drops one that has entered it.
+        if ((agent->pos() - center).lengthSq() > radius * radius) continue;
         out.push_back({agent->id(), agent->pos(), agent->energy().energy, agent->energy().cap});
     }
 }

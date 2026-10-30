@@ -2,6 +2,7 @@
 #include "decision/PolicyRegistry.h"
 #include <cmath>
 #include <cstdlib>
+#include <limits>
 #include <stdexcept>
 #include <string>
 
@@ -11,10 +12,13 @@ std::string nextValue(int& index, int argc, char** argv, const char* name) {
     if (index + 1 >= argc) throw std::runtime_error(std::string("missing value for ") + name);
     return argv[++index];
 }
+// Rejects trailing garbage: std::stod("1junk") parses 1 and silently ignores the rest.
 double parseNonNegative(int& index, int argc, char** argv, const char* name) {
     const std::string text = nextValue(index, argc, argv, name);
     if (text.empty() || text[0] == '-') throw std::runtime_error(std::string(name) + " must be non-negative");
-    const double value = std::stod(text);
+    std::size_t consumed = 0;
+    const double value = std::stod(text, &consumed);
+    if (consumed != text.size()) throw std::runtime_error(std::string(name) + " is not a number");
     if (!std::isfinite(value)) throw std::runtime_error(std::string(name) + " must be finite");
     return value;
 }
@@ -27,17 +31,36 @@ std::size_t parseNonNegativeSize(int& index, int argc, char** argv, const char* 
     std::size_t consumed = 0;
     const unsigned long long value = std::stoull(text, &consumed);
     if (consumed != text.size()) throw std::runtime_error(std::string(name) + " is not an integer");
+    if (value > static_cast<unsigned long long>(std::numeric_limits<std::size_t>::max())) {
+        throw std::runtime_error(std::string(name) + " is out of range");
+    }
     return static_cast<std::size_t>(value);
 }
+// Intervals are strict positive integers; -1/0/junk must be parameter errors (exit 2).
+int parsePositiveInt(int& index, int argc, char** argv, const char* name) {
+    const std::string text = nextValue(index, argc, argv, name);
+    const std::size_t first = text.find_first_not_of(" \t");
+    if (first == std::string::npos || text[first] == '-') {
+        throw std::runtime_error(std::string(name) + " must be a positive integer");
+    }
+    std::size_t consumed = 0;
+    const long long value = std::stoll(text, &consumed);
+    if (consumed != text.size()) throw std::runtime_error(std::string(name) + " is not an integer");
+    if (value <= 0 || value > std::numeric_limits<int>::max()) {
+        throw std::runtime_error(std::string(name) + " must be a positive integer");
+    }
+    return static_cast<int>(value);
 }
+} // namespace
+
 CliOptions parseCli(int argc, char** argv) {
     CliOptions options;
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         if (arg == "--help") { options.help = true; }
         else if (arg == "--version") { options.version = true; }
-        else if (arg == "--width") options.config.world.width = std::stod(nextValue(i, argc, argv, "--width"));
-        else if (arg == "--height") options.config.world.height = std::stod(nextValue(i, argc, argv, "--height"));
+        else if (arg == "--width") options.config.world.width = parseNonNegative(i, argc, argv, "--width");
+        else if (arg == "--height") options.config.world.height = parseNonNegative(i, argc, argv, "--height");
         else if (arg == "--seed") options.config.world.seed = static_cast<std::uint64_t>(parseNonNegativeSize(i, argc, argv, "--seed"));
         else if (arg == "--ticks") {
             options.config.world.maxTicks = static_cast<core::Tick>(parseNonNegativeSize(i, argc, argv, "--ticks"));
@@ -48,7 +71,7 @@ CliOptions parseCli(int argc, char** argv) {
         else if (arg == "--policy") options.config.policy.rule = nextValue(i, argc, argv, "--policy");
         else if (arg == "--render") options.render = true;
         else if (arg == "--no-render") options.render = false;
-        else if (arg == "--render-interval") options.renderInterval = std::stoi(nextValue(i, argc, argv, "--render-interval"));
+        else if (arg == "--render-interval") options.renderInterval = parsePositiveInt(i, argc, argv, "--render-interval");
         else if (arg == "--photo") options.config.producer.photo = parseNonNegative(i, argc, argv, "--photo");
         else if (arg == "--producer-maint") options.config.producer.maint = parseNonNegative(i, argc, argv, "--producer-maint");
         else if (arg == "--producer-repro") options.config.producer.repro = parseNonNegative(i, argc, argv, "--producer-repro");
@@ -76,12 +99,12 @@ CliOptions parseCli(int argc, char** argv) {
         else if (arg == "--save") options.savePath = nextValue(i, argc, argv, "--save");
         else if (arg == "--load") options.loadPath = nextValue(i, argc, argv, "--load");
         else if (arg == "--html") options.htmlPath = nextValue(i, argc, argv, "--html");
-        else if (arg == "--html-interval") options.htmlInterval = std::stoi(nextValue(i, argc, argv, "--html-interval"));
+        else if (arg == "--html-interval") options.htmlInterval = parsePositiveInt(i, argc, argv, "--html-interval");
         else if (arg == "--trace-json") options.traceJsonPath = nextValue(i, argc, argv, "--trace-json");
-        else if (arg == "--trace-json-interval") options.traceJsonInterval = std::stoi(nextValue(i, argc, argv, "--trace-json-interval"));
+        else if (arg == "--trace-json-interval") options.traceJsonInterval = parsePositiveInt(i, argc, argv, "--trace-json-interval");
         else if (arg == "--state-hash") options.stateHashPath = nextValue(i, argc, argv, "--state-hash");
         else if (arg == "--stats") options.statsPath = nextValue(i, argc, argv, "--stats");
-        else if (arg == "--stats-interval") options.statsInterval = std::stoi(nextValue(i, argc, argv, "--stats-interval"));
+        else if (arg == "--stats-interval") options.statsInterval = parsePositiveInt(i, argc, argv, "--stats-interval");
         else throw std::runtime_error("unknown argument: " + arg);
     }
     if (!options.loadPath.empty()) {
@@ -104,6 +127,21 @@ CliOptions parseCli(int argc, char** argv) {
             }
         }
     }
+    // Every output path truncates its target; pointing two flags at one file would silently
+    // destroy the earlier output, so reject that at parse time.
+    {
+        const std::string* paths[] = {&options.statsPath, &options.savePath, &options.htmlPath,
+                                      &options.traceJsonPath, &options.stateHashPath};
+        for (std::size_t i = 0; i < std::size(paths); ++i) {
+            if (paths[i]->empty()) continue;
+            for (std::size_t j = i + 1; j < std::size(paths); ++j) {
+                if (paths[j]->empty()) continue;
+                if (*paths[i] == *paths[j]) {
+                    throw std::runtime_error("output paths must be distinct: " + *paths[i]);
+                }
+            }
+        }
+    }
     if (!std::isfinite(options.config.world.width) || options.config.world.width <= 0.0 ||
         !std::isfinite(options.config.world.height) || options.config.world.height <= 0.0) {
         throw std::runtime_error("world dimensions must be positive and finite");
@@ -120,7 +158,7 @@ CliOptions parseCli(int argc, char** argv) {
     return options;
 }
 std::string usage() {
-    return "EcoCore M2\n"
+    return "EcoCore M4\n"
            "  --width <n> --height <n> --seed <n> --ticks <n>\n"
            "  --producers <n> --agents <n> --policy rule|stub\n"
            "  --render | --no-render --render-interval <n>\n"

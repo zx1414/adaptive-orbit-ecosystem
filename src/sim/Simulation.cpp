@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <vector>
 
 namespace sim {
 namespace {
@@ -31,8 +32,70 @@ std::uint64_t hashString(std::uint64_t hash, const std::string& value) {
     hash = hashBytes(hash, &size, sizeof(size));
     return hashBytes(hash, value.data(), value.size());
 }
-} // namespace
+// Every field below is restored from a snapshot, so every field must feed the hash.
+void hashConfig(std::uint64_t& hash, const core::SimConfig& config) {
+    hash = hashDouble(hash, config.world.width);
+    hash = hashDouble(hash, config.world.height);
+    const std::uint64_t seed = config.world.seed;
+    hash = hashBytes(hash, &seed, sizeof(seed));
+    const std::uint64_t maxTicks = config.world.maxTicks;
+    hash = hashBytes(hash, &maxTicks, sizeof(maxTicks));
 
+    hash = hashDouble(hash, config.light.base);
+    hash = hashDouble(hash, config.light.amplitude);
+    const std::uint64_t period = config.light.period;
+    hash = hashBytes(hash, &period, sizeof(period));
+    hash = hashDouble(hash, config.light.phase);
+    hash = hashDouble(hash, config.light.halfSaturation);
+    hash = hashDouble(hash, config.light.verticalGradient);
+
+    const std::uint64_t producerInitial = config.producer.initial;
+    const std::uint64_t producerCap = config.producer.cap;
+    hash = hashBytes(hash, &producerInitial, sizeof(producerInitial));
+    hash = hashBytes(hash, &producerCap, sizeof(producerCap));
+    hash = hashDouble(hash, config.producer.initialEnergy);
+    hash = hashDouble(hash, config.producer.photo);
+    hash = hashDouble(hash, config.producer.maint);
+    hash = hashDouble(hash, config.producer.repro);
+    hash = hashDouble(hash, config.producer.share);
+    hash = hashDouble(hash, config.producer.max);
+    hash = hashDouble(hash, config.producer.radius);
+    hash = hashDouble(hash, config.producer.crowding);
+    hash = hashDouble(hash, config.producer.interactionRadius);
+    hash = hashDouble(hash, config.producer.competition);
+    hash = hashDouble(hash, config.producer.densityRepro);
+
+    const std::uint64_t agentInitial = config.agent.initial;
+    const std::uint64_t agentCap = config.agent.cap;
+    hash = hashBytes(hash, &agentInitial, sizeof(agentInitial));
+    hash = hashBytes(hash, &agentCap, sizeof(agentCap));
+    hash = hashDouble(hash, config.agent.initialEnergy);
+    hash = hashDouble(hash, config.agent.metab);
+    hash = hashDouble(hash, config.agent.maxSpeed);
+    hash = hashDouble(hash, config.agent.moveK);
+    hash = hashDouble(hash, config.agent.harvest);
+    hash = hashDouble(hash, config.agent.harvestReserve);
+    hash = hashDouble(hash, config.agent.harvestHalfSaturation);
+    hash = hashDouble(hash, config.agent.densityRepro);
+    hash = hashDouble(hash, config.agent.densityRadius);
+    hash = hashDouble(hash, config.agent.radius);
+    hash = hashDouble(hash, config.agent.repro);
+    hash = hashDouble(hash, config.agent.cost);
+    hash = hashDouble(hash, config.agent.child);
+    hash = hashDouble(hash, config.agent.max);
+    const std::uint64_t lifespan = config.agent.lifespan;
+    hash = hashBytes(hash, &lifespan, sizeof(lifespan));
+    hash = hashDouble(hash, config.agent.damping);
+    hash = hashDouble(hash, config.agent.avoidanceRadius);
+
+    hash = hashString(hash, config.policy.rule);
+    hash = hashDouble(hash, config.policy.mutation);
+    hash = hashDouble(hash, config.policy.senseRadius);
+    const std::uint64_t slots = config.policy.slots;
+    hash = hashBytes(hash, &slots, sizeof(slots));
+    hash = hashDouble(hash, config.policy.damping);
+}
+} // namespace
 Simulation::Simulation(const core::SimConfig& config) : Simulation(LoadTag{}, config) {
     initialize();
 }
@@ -54,8 +117,14 @@ void Simulation::initialize() {
     finishReason_.clear();
     auditOk_ = true;
     updateView();
+    // A zero-budget run must not step at all: honor maxTicks before the first step so the
+    // initial state and every exported artefact describe tick 0.
+    if (config_.world.maxTicks == 0) {
+        finished_ = true;
+        finishReason_ = "达到最大 tick";
+        updateView();
+    }
 }
-
 void Simulation::step() {
     if (finished_) return;
     producers_.tick(random_, ledger_, environment_, tick_);
@@ -166,7 +235,9 @@ std::uint64_t Simulation::stateHash() const {
     hash = hashBytes(hash, &rng.increment, sizeof(rng.increment));
     hash = hashDouble(hash, rng.cachedNormal);
     hash = hashBytes(hash, &rng.hasCachedNormal, sizeof(rng.hasCachedNormal));
-    hash = hashString(hash, config_.policy.rule);
+    // The hash must cover every input that can change a resumed run, not just the entities:
+    // two configurations that diverge after a reload must not share a state hash.
+    hashConfig(hash, config_);
     for (const auto& producer : producers_.all()) {
         if (!producer || !producer->alive()) continue;
         hash = hashBytes(hash, &producer->id, sizeof(producer->id));
@@ -197,6 +268,13 @@ std::uint64_t Simulation::stateHash() const {
         hash = hashBytes(hash, &spec.genomeDim, sizeof(spec.genomeDim));
         const auto genome = agent.policy().genome();
         for (float value : genome) { const double d = value; hash = hashDouble(hash, d); }
+        // Opaque policy state is part of the saved snapshot, so it must be part of the hash;
+        // otherwise a stateful policy could reload differently while hashes still agree.
+        std::vector<unsigned char> state;
+        agent.policy().serializeState(state);
+        const std::uint64_t stateSize = static_cast<std::uint64_t>(state.size());
+        hash = hashBytes(hash, &stateSize, sizeof(stateSize));
+        if (!state.empty()) hash = hashBytes(hash, state.data(), state.size());
     }
     const std::size_t producerBirths = producers_.births();
     const std::size_t producerDeaths = producers_.deaths();
@@ -230,7 +308,8 @@ void Simulation::updateView() {
     view_.agents.reserve(agents_.size());
     for (const auto& producer : producers_.all()) {
         if (!producer || !producer->alive()) continue;
-        view_.producers.push_back({producer->id, producer->pos, producer->energy.energy, producer->energy.cap});
+        view_.producers.push_back({producer->id, producer->pos, producer->energy.energy,
+                                   producer->energy.cap});
     }
     for (const auto& agent : agents_.agents()) {
         if (!agent.alive()) continue;

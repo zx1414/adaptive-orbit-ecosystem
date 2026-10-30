@@ -1,6 +1,6 @@
 # M3 实施计划：存档 / 快照
 
-> 状态：已完成。30 个单测、tools/m3_acceptance.ps1 全 PASS；
+> 状态：已完成。33 个单测、tools/m3_acceptance.ps1 全 PASS；
 > 20k 直跑 vs 10k 存档 + 10k 续跑哈希/能量/种群/账本一致。实现与格式见 ARCH.md。
 
 目标：保存并恢复完整 Simulation 状态，读档续跑与不中断运行逐位一致；损坏/版本不匹配明确拒绝。

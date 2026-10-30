@@ -253,6 +253,11 @@ bool readRandom(Reader& reader, core::RandomState& state, std::string& error) {
     if (!reader.ok()) return fail(error, reader.error());
     if (cached > 1) return fail(error, "random cached-normal flag is invalid");
     if (!std::isfinite(state.cachedNormal)) return fail(error, "random cached normal is not finite");
+    // PCG32 requires an odd increment. Reject it here so a checksum-valid but semantically
+    // corrupt snapshot becomes a snapshot error (exit 5) instead of an uncaught throw.
+    if (state.increment == 0 || (state.increment & 1ULL) == 0ULL) {
+        return fail(error, "random increment must be odd");
+    }
     state.hasCachedNormal = cached != 0;
     return true;
 }
@@ -265,6 +270,11 @@ bool readSize(Reader& reader, std::uint64_t& value, const char* name, std::strin
 } // namespace
 
 bool SnapshotStore::save(const Simulation& simulation, const std::string& path, std::string& error) {
+    // load() rejects a snapshot whose saved state fails the energy audit, so writing one would
+    // only produce a file that can never be resumed. Fail here instead.
+    if (!simulation.auditOk_) {
+        return fail(error, "refusing to save a simulation that failed the energy audit");
+    }
     Writer writer;
     writeConfig(writer, simulation.config_);
     writer.u64(simulation.tick_);
@@ -327,9 +337,15 @@ bool SnapshotStore::save(const Simulation& simulation, const std::string& path, 
 }
 
 std::unique_ptr<Simulation> SnapshotStore::load(const std::string& path, bool overrideTicks,
-                                                core::Tick maxTicks, std::string& error) {
+                                                core::Tick maxTicks, std::string& error,
+                                                snapshot::LoadStatus& status) {
+    status = snapshot::LoadStatus::FormatError;
     std::vector<std::uint8_t> payload;
-    if (!snapshot::readFile(path, payload, error)) return nullptr;
+    const snapshot::LoadStatus read = snapshot::readFile(path, payload, error);
+    if (read != snapshot::LoadStatus::Ok) {
+        status = read;
+        return nullptr;
+    }
     Reader reader(payload);
 
     core::SimConfig config;
@@ -365,6 +381,11 @@ std::unique_ptr<Simulation> SnapshotStore::load(const std::string& path, bool ov
     std::uint64_t producerCount = 0;
     if (!readSize(reader, producerCount, "producer count", error)) return nullptr;
     if (producerCount > producerNextId) { error = "producer count exceeds next-id"; return nullptr; }
+    // Reject impossible counts before allocating: each record needs at least 41 payload bytes.
+    if (producerCount > reader.remaining() / 41ULL) {
+        error = "producer count exceeds remaining payload";
+        return nullptr;
+    }
     std::vector<std::unique_ptr<producers::Producer>> producers;
     producers.reserve(static_cast<std::size_t>(producerCount));
     std::unordered_set<core::EntityId> producerIds;
@@ -400,6 +421,11 @@ std::unique_ptr<Simulation> SnapshotStore::load(const std::string& path, bool ov
     std::uint64_t agentCount = 0;
     if (!readSize(reader, agentCount, "agent count", error)) return nullptr;
     if (agentCount > agentNextId) { error = "agent count exceeds next-id"; return nullptr; }
+    // Each agent record needs at least 92 payload bytes: refuse impossible counts before allocating.
+    if (agentCount > reader.remaining() / 92ULL) {
+        error = "agent count exceeds remaining payload";
+        return nullptr;
+    }
     std::vector<agentsim::Agent> agents;
     agents.reserve(static_cast<std::size_t>(agentCount));
     std::unordered_set<core::EntityId> agentIds;
@@ -503,6 +529,7 @@ std::unique_ptr<Simulation> SnapshotStore::load(const std::string& path, bool ov
         1e-9 * std::max(1.0, simulation->ledger_.stats().injected));
     simulation->view_.stats.auditOk = simulation->auditOk_;
     if (!simulation->auditOk_) { error = "snapshot audit failed"; return nullptr; }
+    status = snapshot::LoadStatus::Ok;
     return simulation;
 }
 
