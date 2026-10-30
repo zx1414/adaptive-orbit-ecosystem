@@ -90,10 +90,30 @@ struct CyanoConfig {
     double minSeparation = 15.0;
 };
 
+// Colony (nucleus + organ balls) parameters. Declared in core so SimConfig stays free of a
+// dependency on the colony layer.
+struct ColonyConfig {
+    std::size_t initialNuclei = 0;
+    std::size_t maxNuclei = 200;
+    double initialEnergy = 40.0;
+    double initialBallsPerNucleus = 3.0;
+    // Deploying a ball costs energy from the nucleus; recycling returns a fraction of the
+    // ball's stored energy.
+    double deployCost = 12.0;
+    double recycleReturn = 0.35;
+    // A ball further than this from its owner detaches but keeps its energy.
+    double detachRadius = 600.0;
+    // Free balls within this radius of a nucleus may be adopted.
+    double adoptRadius = 120.0;
+    double metabolism = 0.01;
+    double moveCostK = 0.0002;
+};
+
 struct SimConfig {
     WorldConfig world{};
     LightConfig light{};
     CyanoConfig cyano{};
+    ColonyConfig colony{};
     ProducerConfig producer{};
     AgentConfig agent{};
     PolicyConfig policy{};

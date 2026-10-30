@@ -27,6 +27,17 @@ enum class EnergyReason : std::uint8_t {
     CyanoTransfer,         // reserved: zero-sum flow between connected nodes
     CyanoReproduction,     // parent node -> child node
     CyanoDeath,            // node residual energy at death
+    // ---- M6: colony organ balls (append only) ----
+    BallCharge,            // nucleus spends energy to deploy a ball
+    BallDischarge,         // ball energy transferred back into the nucleus
+    BallRecycle,           // ball consumed for a partial refund
+    BallDeath,             // ball residual energy at destruction
+    CapOverflow,           // energy destroyed when storage capacity shrinks
+    NucleusMetabolism,     // nucleus upkeep
+    NucleusMove,           // nucleus locomotion cost
+    NucleusPrey,           // energy gained by consuming a cyanobacteria node
+    NucleusReproduction,   // parent nucleus -> child nucleus
+    NucleusDeath,          // nucleus residual energy at death
     Count
 };
 constexpr std::size_t kEnergyReasonCount = static_cast<std::size_t>(EnergyReason::Count);

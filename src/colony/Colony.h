@@ -55,9 +55,17 @@ struct Ball {
     BallType type = BallType::Resource;
     core::EntityId id = core::kInvalidEntityId;
     core::EntityId ownerId = core::kInvalidEntityId;  // 0 = free floating
-    double energy = 0.0;
-    double cap = 0.0;  // storage contribution when type == Resource
+    // A ball's energy is real and audited. Detaching only clears ownerId, so the energy travels
+    // with the ball and any nucleus can pick it up. cap is this ball's storage contribution.
+    core::EnergyState energy{0.0, 1.0, true};
+    bool alive() const { return energy.alive; }
 };
+
+// Storage a single Resource ball contributes to its owner's capacity. Scout and Shield balls
+// store nothing, so hoarding storage and seeing far are competing investments.
+constexpr double kResourceBallCap = 40.0;
+// Capacity of a nucleus that owns no resource balls.
+constexpr double kNucleusNativeCap = 30.0;
 
 // The consumer and sole decision maker.
 struct Nucleus {
@@ -66,8 +74,8 @@ struct Nucleus {
     core::EntityId id = core::kInvalidEntityId;
     core::Tick age = 0;
     NucleusParams params{};
-    // Energy above nativeCap must live in resource balls; see colonyCap().
-    core::EnergyState energy{0.0, 30.0, true};
+    // Energy above kNucleusNativeCap must live in resource balls; see colonyCap().
+    core::EnergyState energy{0.0, kNucleusNativeCap, true};
     double wanderAngle = 0.0;
     bool alive() const { return energy.alive; }
 };

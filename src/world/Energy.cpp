@@ -20,6 +20,16 @@ const char* energyReasonName(EnergyReason reason) {
         case EnergyReason::CyanoTransfer: return "CYANO_TRANSFER";
         case EnergyReason::CyanoReproduction: return "CYANO_REPRODUCTION";
         case EnergyReason::CyanoDeath: return "CYANO_DEATH";
+        case EnergyReason::BallCharge: return "BALL_CHARGE";
+        case EnergyReason::BallDischarge: return "BALL_DISCHARGE";
+        case EnergyReason::BallRecycle: return "BALL_RECYCLE";
+        case EnergyReason::BallDeath: return "BALL_DEATH";
+        case EnergyReason::CapOverflow: return "CAP_OVERFLOW";
+        case EnergyReason::NucleusMetabolism: return "NUCLEUS_METABOLISM";
+        case EnergyReason::NucleusMove: return "NUCLEUS_MOVE";
+        case EnergyReason::NucleusPrey: return "NUCLEUS_PREY";
+        case EnergyReason::NucleusReproduction: return "NUCLEUS_REPRODUCTION";
+        case EnergyReason::NucleusDeath: return "NUCLEUS_DEATH";
         case EnergyReason::Count: break;
     }
     return "UNKNOWN";
