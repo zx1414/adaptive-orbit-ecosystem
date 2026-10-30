@@ -103,12 +103,14 @@ Simulation::Simulation(const core::SimConfig& config) : Simulation(LoadTag{}, co
 Simulation::Simulation(LoadTag, const core::SimConfig& config)
     : config_(normalizedConfig(config)),
       environment_(config_.world.bounds(), config_.light),
+      cyanobacteria_(config_.world.bounds(), config_.cyano),
       random_(config_.world.seed),
       producers_(config_.world.bounds(), config_.producer),
       agents_(config_.world.bounds(), config_.agent, config_.policy) {}
 
 void Simulation::initialize() {
     ledger_.reset();
+    cyanobacteria_.initialize(random_, ledger_);
     producers_.initialize(random_, ledger_, environment_);
     agents_.initialize(random_, ledger_);
     ledger_.sealInitial();
@@ -125,8 +127,11 @@ void Simulation::initialize() {
         updateView();
     }
 }
+
 void Simulation::step() {
     if (finished_) return;
+    // Environment layer first: cyanobacteria are the only primary energy source.
+    cyanobacteria_.tick(random_, ledger_, environment_, tick_);
     producers_.tick(random_, ledger_, environment_, tick_);
     agents_.tick(*this, *this, random_, ledger_);
     producers_.removeDead();
@@ -180,6 +185,7 @@ double Simulation::totalEnergy() const {
     double total = 0.0;
     for (const auto& producer : producers_.all()) if (producer && producer->alive()) total += producer->energy.energy;
     for (const auto& agent : agents_.agents()) if (agent.alive()) total += agent.energy().energy;
+    total += cyanobacteria_.totalEnergy();
     return total;
 }
 

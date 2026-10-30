@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdint>
 #include <string>
 
 namespace core {
@@ -73,9 +74,26 @@ struct PolicyConfig {
     double damping = 0.98;
 };
 
+// Cyanobacteria (environment producer) parameters. Declared in core so SimConfig does not
+// depend on the environment layer; environment::Cyanobacteria consumes it.
+struct CyanoConfig {
+    std::size_t initial = 0;
+    std::size_t maxNodes = 4000;
+    double initialEnergy = 10.0;
+    double cap = 40.0;
+    double photoRate = 0.02;
+    double lightHalfSaturation = 0.5;
+    double metabolism = 0.005;
+    double reproThreshold = 30.0;
+    double reproProbability = 0.001;
+    double reproOffset = 60.0;
+    double minSeparation = 15.0;
+};
+
 struct SimConfig {
     WorldConfig world{};
     LightConfig light{};
+    CyanoConfig cyano{};
     ProducerConfig producer{};
     AgentConfig agent{};
     PolicyConfig policy{};

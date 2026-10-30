@@ -1,5 +1,6 @@
 #pragma once
 #include "agents/AgentSystem.h"
+#include "environment/Cyanobacteria.h"
 #include "core/Config.h"
 #include "core/Random.h"
 #include "producers/ProducerSystem.h"
@@ -47,6 +48,7 @@ public:
     const producers::ProducerSystem& producerSystem() const { return producers_; }
     const agentsim::AgentSystem& agentSystem() const { return agents_; }
     const world::EnergyLedger& ledger() const { return ledger_; }
+    const environment::Cyanobacteria& cyanobacteria() const { return cyanobacteria_; }
 
 private:
     friend class SnapshotStore;
@@ -57,6 +59,7 @@ private:
 
     core::SimConfig config_;
     world::Environment environment_;
+    environment::Cyanobacteria cyanobacteria_;
     world::EnergyLedger ledger_;
     core::Random random_;
     producers::ProducerSystem producers_;

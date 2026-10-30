@@ -15,6 +15,11 @@ const char* energyReasonName(EnergyReason reason) {
         case EnergyReason::AgentReproduction: return "AGENT_REPRODUCTION";
         case EnergyReason::AgentDeath: return "AGENT_DEATH";
         case EnergyReason::ProducerDeath: return "PRODUCER_DEATH";
+        case EnergyReason::CyanoPhotosynthesis: return "CYANO_PHOTOSYNTHESIS";
+        case EnergyReason::CyanoMetabolism: return "CYANO_METABOLISM";
+        case EnergyReason::CyanoTransfer: return "CYANO_TRANSFER";
+        case EnergyReason::CyanoReproduction: return "CYANO_REPRODUCTION";
+        case EnergyReason::CyanoDeath: return "CYANO_DEATH";
         case EnergyReason::Count: break;
     }
     return "UNKNOWN";

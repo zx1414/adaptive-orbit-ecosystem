@@ -80,6 +80,18 @@ void writeConfig(Writer& writer, const core::SimConfig& config) {
     writer.f64(config.agent.damping);
     writer.f64(config.agent.avoidanceRadius);
 
+    writer.u64(static_cast<std::uint64_t>(config.cyano.initial));
+    writer.u64(static_cast<std::uint64_t>(config.cyano.maxNodes));
+    writer.f64(config.cyano.initialEnergy);
+    writer.f64(config.cyano.cap);
+    writer.f64(config.cyano.photoRate);
+    writer.f64(config.cyano.lightHalfSaturation);
+    writer.f64(config.cyano.metabolism);
+    writer.f64(config.cyano.reproThreshold);
+    writer.f64(config.cyano.reproProbability);
+    writer.f64(config.cyano.reproOffset);
+    writer.f64(config.cyano.minSeparation);
+
     writer.str(config.policy.rule);
     writer.f64(config.policy.mutation);
     writer.f64(config.policy.senseRadius);
@@ -147,6 +159,33 @@ bool readConfig(Reader& reader, core::SimConfig& config, std::string& error) {
     config.agent.lifespan = static_cast<core::Tick>(lifetime);
     reader.f64(config.agent.damping);
     reader.f64(config.agent.avoidanceRadius);
+
+    reader.u64(initial);
+    if (initial > kMaxEntities) return fail(error, "cyano.initial exceeds limit");
+    config.cyano.initial = static_cast<std::size_t>(initial);
+    reader.u64(cap);
+    if (cap > kMaxEntities || cap == 0) return fail(error, "cyano.maxNodes is invalid");
+    config.cyano.maxNodes = static_cast<std::size_t>(cap);
+    reader.f64(config.cyano.initialEnergy);
+    reader.f64(config.cyano.cap);
+    reader.f64(config.cyano.photoRate);
+    reader.f64(config.cyano.lightHalfSaturation);
+    reader.f64(config.cyano.metabolism);
+    reader.f64(config.cyano.reproThreshold);
+    reader.f64(config.cyano.reproProbability);
+    reader.f64(config.cyano.reproOffset);
+    reader.f64(config.cyano.minSeparation);
+    if (!reader.ok()) return fail(error, reader.error());
+    if (!finiteNonNegative(config.cyano.initialEnergy) || !finitePositive(config.cyano.cap) ||
+        !finiteNonNegative(config.cyano.photoRate) ||
+        !finiteNonNegative(config.cyano.lightHalfSaturation) ||
+        !finiteNonNegative(config.cyano.metabolism) ||
+        !finiteNonNegative(config.cyano.reproThreshold) ||
+        !finiteNonNegative(config.cyano.reproProbability) ||
+        !finiteNonNegative(config.cyano.reproOffset) ||
+        !finiteNonNegative(config.cyano.minSeparation)) {
+        return fail(error, "cyanobacteria configuration is invalid");
+    }
 
     reader.str(config.policy.rule);
     reader.f64(config.policy.mutation);
@@ -333,6 +372,22 @@ bool SnapshotStore::save(const Simulation& simulation, const std::string& path, 
         writer.bytes(state.data(), state.size());
     }
     if (!writer.ok()) return fail(error, writer.error());
+    // Environment layer: cyanobacteria nodes hold the only primary energy, so they must be
+    // part of the snapshot or a reload would silently drop most of the world's energy.
+    std::size_t cyanoCount = 0;
+    for (const auto& node : simulation.cyanobacteria_.all()) if (node.alive()) ++cyanoCount;
+    writer.u64(static_cast<std::uint64_t>(cyanoCount));
+    for (const auto& node : simulation.cyanobacteria_.all()) {
+        if (!node.alive()) continue;
+        writer.u64(node.id);
+        writer.f64(node.pos.x);
+        writer.f64(node.pos.y);
+        writer.f64(node.energy.energy);
+        writer.f64(node.energy.cap);
+        writer.f64(node.age);
+    }
+
+    if (!writer.ok()) return fail(error, writer.error());
     return snapshot::writeFile(path, writer.data(), error);
 }
 
@@ -491,6 +546,42 @@ std::unique_ptr<Simulation> SnapshotStore::load(const std::string& path, bool ov
                             core::EnergyState{energy, cap, true}, std::move(policy));
         agents.back().age_ = static_cast<core::Tick>(age);
     }
+    // Environment layer nodes.
+    std::uint64_t cyanoCount = 0;
+    if (!readSize(reader, cyanoCount, "cyano count", error)) return nullptr;
+    if (cyanoCount > reader.remaining() / 40ULL) {
+        error = "cyano count exceeds remaining payload";
+        return nullptr;
+    }
+    std::vector<environment::CyanoNode> cyanoNodes;
+    cyanoNodes.reserve(static_cast<std::size_t>(cyanoCount));
+    std::unordered_set<core::EntityId> cyanoIds;
+    for (std::uint64_t i = 0; i < cyanoCount; ++i) {
+        std::uint64_t id = 0;
+        double px = 0.0, py = 0.0, energy = 0.0, cap = 0.0, age = 0.0;
+        reader.u64(id);
+        reader.f64(px);
+        reader.f64(py);
+        reader.f64(energy);
+        reader.f64(cap);
+        reader.f64(age);
+        if (!reader.ok()) { fail(error, reader.error()); return nullptr; }
+        if (id == 0) { error = "cyano node id is invalid"; return nullptr; }
+        if (!cyanoIds.insert(id).second) { error = "duplicate cyano node id"; return nullptr; }
+        if (!std::isfinite(px) || !std::isfinite(py) || !std::isfinite(energy) ||
+            !std::isfinite(cap) || cap <= 0.0 || energy < 0.0 || energy > cap + 1e-9 ||
+            !std::isfinite(age) || age < 0.0) {
+            error = "cyano node state is invalid";
+            return nullptr;
+        }
+        environment::CyanoNode node;
+        node.id = id;
+        node.pos = {px, py};
+        node.energy = core::EnergyState{energy, cap, true};
+        node.age = age;
+        cyanoNodes.push_back(node);
+    }
+
     if (reader.remaining() != 0) { error = "snapshot has trailing payload bytes"; return nullptr; }
     if (producerNextId <= producerIds.size() || agentNextId <= agentIds.size()) {
         error = "snapshot next-id does not exceed entity ids";
@@ -508,6 +599,15 @@ std::unique_ptr<Simulation> SnapshotStore::load(const std::string& path, bool ov
     simulation->agents_.deaths_ = static_cast<std::size_t>(agentDeaths);
     simulation->producers_.rebuildIndex();
     simulation->agents_.rebuildIndex();
+    simulation->cyanobacteria_.nodes_ = std::move(cyanoNodes);
+    {
+        core::EntityId maxId = 0;
+        for (const auto& node : simulation->cyanobacteria_.nodes_) {
+            maxId = std::max(maxId, node.id);
+        }
+        simulation->cyanobacteria_.nextId_ = maxId + 1;
+    }
+    simulation->cyanobacteria_.rebuildIndex();
     simulation->ledger_.stats_ = stats;
     simulation->ledger_.initialSealed_ = true;
     simulation->random_.setState(randomState);

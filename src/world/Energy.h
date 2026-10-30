@@ -6,6 +6,7 @@
 #include <string>
 
 namespace producers { class PhotoProducer; }
+namespace environment { class Cyanobacteria; }
 namespace sim { class SnapshotStore; }
 
 namespace world {
@@ -20,6 +21,12 @@ enum class EnergyReason : std::uint8_t {
     AgentReproduction,
     AgentDeath,
     ProducerDeath,
+    // ---- M5: cyanobacteria environment layer (append only) ----
+    CyanoPhotosynthesis,   // primary injection by cyanobacteria nodes
+    CyanoMetabolism,       // node maintenance dissipation
+    CyanoTransfer,         // reserved: zero-sum flow between connected nodes
+    CyanoReproduction,     // parent node -> child node
+    CyanoDeath,            // node residual energy at death
     Count
 };
 constexpr std::size_t kEnergyReasonCount = static_cast<std::size_t>(EnergyReason::Count);
@@ -55,8 +62,9 @@ public:
 private:
     static bool validAmount(double amount);
     static double headroom(const core::EnergyState& state);
-    // The only primary energy injector is a producer's photosynthesis.
+    // Primary injection is photosynthesis only: producer (legacy) or cyanobacteria (M5).
     friend class producers::PhotoProducer;
+    friend class environment::Cyanobacteria;
     friend class sim::SnapshotStore;
     double injectPrimary(core::EnergyState& state, core::EntityId id, double amount);
     EnergyStats stats_{};
