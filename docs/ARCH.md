@@ -1,8 +1,36 @@
 # EcoCore v3 架构
 
-这是一个从零建立的 C++17 单线程生态模拟核心，不包含旧版 Ball、Nucleus、World、存档、Mod 或二进制快照接口。
+这是一个 C++17 单线程生态模拟核心。**当前实现（M1–M4）偏离了 v2.3.1 的生态语义**：
+它把"核-小球-蓝细菌"换成了"生产者-独立 Agent"，丢掉了轨道物理、器官、遗传参数与蓝细菌网络。
+[ROADMAP.md](ROADMAP.md) 的 M4.5 记录了偏离，M5–M7 是恢复计划。
 
-旧版 v2.3.1 的架构与计划文档保留在 [docs/archive/](archive/README.md)，完整源码在 Git 标签 `legacy-v2.3.1`；v3 构建不引用它们。
+旧版 v2.3.1 的架构与计划文档保留在 [docs/archive/](archive/README.md)，完整源码在 Git 标签 `legacy-v2.3.1`。
+它是恢复工作的**语义基准**：移植时必须逐函数对照，不得凭记忆重写。
+
+## 与 v2.3.1 的对应关系
+
+| 概念 | v2.3.1 | 角色 | v3 现状 |
+| --- | --- | --- | --- |
+| 生产者 | `CyanoNode` 蓝细菌节点 | **环境层**，唯一光合者，能量在节点间传输、繁殖、产球 | 缺失；被静止的 `PhotoProducer` 替代 |
+| 消费者 | `Nucleus` 核 | 唯一决策体，22 项遗传参数，靠捕食节点与吸球获能 | 被拆成"独立 Agent"，无核概念 |
+| 器官 | `Ball` 小球（Shield/Worker/Scout） | 被核力场束缚，无决策能力 | 缺失 |
+| 玩家视角 | 核 | 探测环境 → 决策 → 行为 | 由 Agent 承担，但语义不同 |
+
+v2.3.1 的每帧管线（`World::step()`）：
+
+```
+updateCyanobacteria → buildGrid → updateBallDynamics → updateOwnership
+→ absorbBalls → nucleusCombat → nucleusMovement → reproduce → removeDead
+```
+
+v3 的四层解耦是把**这条管线**按"环境 / 探测 / 决策 / 行为"重新切分，**不是重新设计生态**。
+
+## 偏离记录
+
+- M1 提交 `cbe93a1` 是推倒重来，不是渐进解耦。它把生态本体换成了"静止生产者 + 独立 Agent 追食物"。
+- 原始设计 `docs/archive/PLAN_AGENTS.md` 要求用 `agent_mode` 开关让两种范式长期共存、轨道基线逐字节不变；该开关从未实现。
+- 后果：小球轨道、三型器官、能力随器官持有量变化、22 项基因组、蓝细菌网络全部缺失。
+- 决策（用户确认）：放弃 v2 的 mod 兼容与逐字节基线，不做双模式，直接实现单模式目标模型。
 
 ## 总体架构：世界 → 探测 → 决策 → 行为
 
@@ -40,8 +68,8 @@
 严格约束：
 
 1. **世界**只通过 `WorldQuery`/`WorldView`/`Forage` 暴露能力；感知与决策不持有可变世界引用。
-2. **探测**只把世界样本转成 `Observation`，不调用策略，不使用 RNG。
-3. **决策**只读取 `Observation`、返回 `Action`，不读取世界，不使用 RNG。
+2. **探测**只把世界样本转成 `Observation`，不调用策略。传感器噪声**必须**来自 `Simulation` 持有的 PCG32，并沿固定实体顺序消费，以保持确定性。
+3. **决策**只读取 `Observation`、返回 `Action`，不读取世界，**不使用 RNG**（决策保持纯函数）。
 4. **行为**是唯一写 Agent 运动/能量/死亡的层；能量必须经过 `EnergyLedger`，收获必须按 id 走 `Forage`。
 5. 层间只传值对象：`Observation` / `Action`；不传策略指针给探测，不传世界给决策。
 6. 同一输入必须产生同一输出；随机只由世界持有的 PCG32 提供。
@@ -65,10 +93,11 @@
 - **core**：值类型、向量与边界数学、PCG32 随机、时间、配置、事件。
 - **decision**：定长 Observation、Action 和 IPolicy。规则、占位策略以及后续神经网络实现都走同一接口；决策不可读取世界，不可使用 RNG。
 - **world**：能量账本、环境、空间索引、WorldQuery/Forage 接口与只读 WorldView；不拥有实体容器。
-- **producers**：Producer 抽象基类与 PhotoProducer。生产者将光照转化为生物量；局部光竞争与密度依赖繁殖由邻居查询驱动。
-- **perception**：Sensors 的观测构建；只读取 WorldQuery/WorldView，输出 Observation，不调用策略、不使用 RNG。
-- **behavior**：Behavior 的动作执行；通过 WorldQuery 读取世界、通过 Forage 按 id 收获，是 Agent 状态的唯一写入者。
-- **agents**：Agent 被动实体与 AgentSystem 生命周期编排；不包含探测/决策/行为逻辑。
+- **environment**（目标）：蓝细菌网络与阳光。节点光合是唯一初级注入；节点间能量传输零和，节点会繁殖、产球。**这是环境层，不是实体层。**
+- **colony**（目标）：`Nucleus`（核，消费者与唯一决策体）、`Ball`（器官，Resource/Scout/Shield）、`NucleusParams`（遗传参数）与 `ParamRanges`（初始化与变异范围）。被动实体，不含决策逻辑。
+- **perception**：Sensors 的观测构建；只读取 WorldQuery/WorldView，输出 Observation，不调用策略。噪声经注入的 RNG 产生（见红线 2）。
+- **behavior**：唯一写实体状态的层。核移动、捕食蓝细菌节点、回收小球、球轨道物理、经 `EnergyLedger` 记账。
+- **producers / agents**（当前，待替换）：M1–M4 的过渡结构。M5–M7 将删除并替换为 `environment` + `colony`。
 - **sim**：Simulation 组合根，持有 Environment、EnergyLedger、Random、ProducerSystem、AgentSystem，实现 WorldQuery + Forage，并负责每 tick 管线、审计与状态哈希。
 - **app**：命令行、控制台展示与 CSV 统计导出，不包含模拟规则。
 
@@ -102,7 +131,7 @@
 4. 按固定顺序处理 Agent 繁殖与策略变异；繁殖阈值可随局部 Agent 密度提高。
 5. 推进 tick，执行能量审计与结束判定，更新 WorldView。
 
-Sensors 和 IPolicy::decide 均不使用 RNG。所有随机来自世界持有的 PCG32。
+`IPolicy::decide` 是纯函数，零随机。传感器噪声与所有其他随机一样来自世界持有的 PCG32，按固定实体顺序消费；禁止 `rand()` 与时间种子。
 
 ## Observation v1（28 维）
 

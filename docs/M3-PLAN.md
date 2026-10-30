@@ -1,5 +1,7 @@
 # M3 实施计划：存档 / 快照
 
+> 适用于 M1–M4 的过渡模型。快照格式在 M5 之后需升级到 version 2，见 [M5-PLAN.md](M5-PLAN.md)。
+
 > 状态：已完成。33 个单测、tools/m3_acceptance.ps1 全 PASS；
 > 20k 直跑 vs 10k 存档 + 10k 续跑哈希/能量/种群/账本一致。实现与格式见 ARCH.md。
 

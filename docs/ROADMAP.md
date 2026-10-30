@@ -66,10 +66,57 @@ CLI `--html` / `--html-interval` 与 `--trace-json` / `--trace-json-interval`，
 
 后续可扩展：真实浏览器 UI、服务器推送、多轨迹对比；仍不得复用 v2 快照协议。
 
-## M5：神经网络
+## M4.5：设计纠正（已完成）
 
-新增 NNetPolicy，保持 Observation/Action 契约；加载带维度与版本校验的权重文件。优先使用神经进化，后续再考虑强化学习。
+M1 的 `cbe93a1` 是推倒重来而非渐进解耦，把 v2.3.1 的"蓝细菌-核-小球"生态换成了"静止生产者-独立 Agent"，
+丢掉了轨道物理、三型器官、22 项遗传参数与蓝细菌网络。原始设计要求的 `agent_mode` 共存开关从未实现。
 
-## M6：扩展接口
+决策（用户确认）：**放弃 v2 的 mod 兼容与逐字节基线，不做双模式**，直接实现单模式目标模型。
+语义基准是 Git 标签 `legacy-v2.3.1`，移植时逐函数对照。详见 [M5-PLAN.md](M5-PLAN.md)。
+
+## M5：环境层——蓝细菌与阳光
+
+新增 `src/environment`：`CyanoNode`（位置、能量、id、存活、年龄）。
+每 tick：光合 → 代谢耗散 → 死亡清理 → 概率繁殖。`nodesNear` 零分配查询，`consumeNode` 返回能量并标记死亡。
+
+**光合是唯一的持续初级注入**（`injectPrimary`）；节点间能量传输零和。复用现有 `world::Environment::lightAt`。
+本期不做节点连接网络与聚落。
+
+验收：光合是唯一注入源；节点能量守恒；每 tick 审计通过。
+
+## M6：核与小球——轨道物理与器官
+
+删除 `src/agents` 与 `src/producers`，新增 `src/colony`：
+
+- `Ball{pos, vel, type, ownerId, energy, cap}`，`BallType = Resource/Scout/Shield`。
+- `Nucleus{pos, vel, energy, nativeCap, id, age, params, wanderAngle}`。
+- `NucleusParams`：精简 8 项（orbitRadius、affinity、maxSpeed、maxAccel、energyThreshold、mutationRate、harvestRate、spotRadius）。
+
+轨道物理写在 `Behavior`：径向弹簧 + 切向驱动 + 球间排斥。**所有球共用核的单一 `orbitRadius`**，
+球本身没有个体力学参数，`type` 只决定功能。
+
+能量存在于资源球内：核与球之间零和转账；球脱离只改 `ownerId`，能量随球走，可被任意核拾取；
+`colonyCap = nativeCap + Σ(resourceBall.cap)`，超容量立即裁剪并记账。
+
+侦察：每个侦察球独立采样，强度随距离衰减并叠加 PCG32 噪声；核汇总取最显著的目标；无侦察球时外部通道全零。
+
+护盾只保留类型与计数，不参与计算。核间战斗不实现。
+
+验收：单核单球半径收敛到 `orbitRadius` ±20%、切向速度非零；拆卸资源球后容量下降且审计平衡；
+带能量的球脱离与被拾取时总能量不变；同 seed 双跑哈希一致。
+
+## M7：决策与遗传
+
+`Observation` 升到 v2（约 24 维）：自身能量比、储能比、三型球计数、最近节点、最近他核、边界、昼夜相位。
+`Action` 增加造球；`RulePolicy` 的阈值取自 `NucleusParams`，保持纯函数零随机。
+繁殖时子核继承参数并按 `mutationRate` 变异、按 `ParamRanges` 裁剪。
+
+验收：5000 tick 后参数均值出现可测漂移；不同 seed 产生不同轨道特征；无球的核无法长期存活。
+
+## M8：神经网络
+
+新增 NNetPolicy，保持 Observation/Action 契约；加载带维度与版本校验的权重文件。优先神经进化，后续再考虑强化学习。
+
+## M9：扩展接口
 
 若需要 Mod，重新定义只读视图 + 事件 + EnergyLedger 的扩展 API。禁止扩展模块绕过账本或修改决策层内部状态。

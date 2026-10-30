@@ -1,5 +1,7 @@
 # M4 最小可视化：自包含 HTML 轨迹
 
+> 适用于 M1–M4 的过渡模型。轨迹契约会随 M5 扩展，见 [M5-PLAN.md](M5-PLAN.md)。
+
 > 状态：已完成。`tools/m4_acceptance.ps1` 33 项全 PASS；HTML 帧 JSON/Canvas/无外部 URL；
 > 帧满 2000 时降采样并保留末帧，--html 路径在启动阶段 fail-fast。
 

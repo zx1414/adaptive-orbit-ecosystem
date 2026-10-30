@@ -3,6 +3,18 @@
 > 新会话先读本文件，再读 `README.md`、`docs/ARCH.md`、`docs/BALANCE.md`、`docs/ROADMAP.md`、
 > `docs/M2.5-DESIGN.md`、`docs/M3-PLAN.md`、`docs/M4-PLAN.md`、`docs/REVIEW_PROTOCOL.md`。
 
+## 0. 当前状态（优先阅读）
+
+M1–M4 的实现**偏离了 v2.3.1 的生态语义**：它做的是"静止生产者 + 独立 Agent 追食物"，
+而目标是"蓝细菌生产 → 核消费并决策 → 小球绕核旋转"。偏离原因与恢复计划见
+[ROADMAP.md](ROADMAP.md) 的 M4.5，实施细节见 [M5-PLAN.md](M5-PLAN.md)。
+
+语义基准是 Git 标签 `legacy-v2.3.1`。移植时必须逐函数对照，不要凭记忆重写。
+
+已决定：放弃 v2 的 mod 兼容与逐字节基线，不做 `agent_mode` 双模式。
+
+下文 §3–§6 描述的是 M1–M4 的**过渡实现**，其平衡数据（BALANCE.md）已作废。
+
 ## 1. 项目意图
 
 从零重建的 C++17 单线程生态模拟核心，旧版 v2 冻结在 Git 标签 `legacy-v2.3.1`，不参与构建。
