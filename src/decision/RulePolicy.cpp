@@ -5,16 +5,15 @@
 
 namespace decision {
 namespace {
-constexpr float kEpsilon = 1e-6f;
-constexpr double kPi = 3.14159265358979323846;
 float finiteOr(float value, float fallback) { return std::isfinite(value) ? value : fallback; }
-}
+} // namespace
 
 RulePolicy::RulePolicy() {
-    genes_ = {{0.22f, 1.0f, 0.75f, 0.7f, 0.55f, 0.25f}};
+    genes_ = {{0.22f, 0.70f, 0.55f, 0.30f, 0.45f, 0.50f}};
 }
 PolicySpec RulePolicy::spec() const {
-    return {"rule", kObservationVersion, Observation::kDim, 1, static_cast<std::uint32_t>(GeneCount)};
+    return {"rule", kObservationVersion, Observation::kDim, 2,
+            static_cast<std::uint32_t>(GeneCount)};
 }
 void RulePolicy::setGene(std::size_t index, float value) {
     if (index < genes_.size()) genes_[index] = std::clamp(finiteOr(value, 0.0f), 0.0f, 1.0f);
@@ -40,49 +39,64 @@ void RulePolicy::mutate(core::Random& random, float rate) {
 Action RulePolicy::decide(const Observation& observation) {
     Action action;
     if (observation.version != kObservationVersion) return action;
-    const float energyRatio = std::clamp(finiteOr(observation[0], 0.0f), 0.0f, 1.0f);
-    const float producerX = observation[obs::Producer0];
-    const float producerY = observation[obs::Producer0 + 1];
-    const float producerDistance = observation[obs::Producer0 + 2];
-    const bool hasProducer = std::isfinite(producerDistance) && producerDistance >= 0.0f;
-    const float agentX = observation[obs::Agent0];
-    const float agentY = observation[obs::Agent0 + 1];
-    const float agentDistance = observation[obs::Agent0 + 2];
-    const bool hasAgent = std::isfinite(agentDistance) && agentDistance >= 0.0f;
 
-    if (energyRatio < genes_[RestBelow]) {
+    const float energyRatio = std::clamp(finiteOr(observation[obs::EnergyRatio], 0.0f), 0.0f, 1.0f);
+    const float preyX = observation[obs::Prey0];
+    const float preyY = observation[obs::Prey0 + 1];
+    const float preyDistance = observation[obs::Prey0 + 2];
+    const bool hasPrey = std::isfinite(preyDistance) && preyDistance >= 0.0f;
+    const float rivalX = observation[obs::Rival0];
+    const float rivalY = observation[obs::Rival0 + 1];
+    const float rivalDistance = observation[obs::Rival0 + 2];
+    const bool hasRival = std::isfinite(rivalDistance) && rivalDistance >= 0.0f;
+    const float resourceBalls =
+        std::clamp(finiteOr(observation[obs::ResourceBalls], 0.0f), 0.0f, 1.0f);
+
+    // Eating a reachable prey always beats resting: otherwise a starving nucleus with food in
+    // reach would conserve itself to death. The threshold is normalized by spotRadius, matching
+    // the unit the observation reports, and the behaviour layer converts it back with the same
+    // factor, so the two layers cannot disagree about "close enough".
+    const float harvestThreshold = std::clamp(0.02f + genes_[HarvestBias] * 0.20f, 0.02f, 0.35f);
+    if (hasPrey && preyDistance <= harvestThreshold) {
+        action.kind = Action::Kind::Harvest;
+        action.dirX = preyX;
+        action.dirY = preyY;
+        action.magnitude = 1.0f;
+        return action;
+    }
+
+    // Hungry with nothing in reach: hunt rather than idle, since resting cannot gain energy.
+    if (energyRatio < genes_[RestBelow] && !hasPrey) {
         action.kind = Action::Kind::Rest;
         action.magnitude = 0.0f;
         return action;
     }
 
+    // Invest in storage when carrying surplus with nowhere to put it.
+    if (energyRatio > 0.6f && resourceBalls < genes_[StoreBias] * 4.0f && !hasPrey) {
+        action.kind = Action::Kind::DeployBall;
+        action.magnitude = 1.0f;
+        return action;
+    }
+
     core::Vec2 direction{};
-    if (hasProducer) {
-        direction = core::Vec2(producerX, producerY);
-        const float harvestThreshold = 0.01f + genes_[HarvestBias] * 0.04f;
-        if (producerDistance <= harvestThreshold) {
-            action.kind = Action::Kind::Harvest;
-            action.dirX = producerX;
-            action.dirY = producerY;
-            action.magnitude = 1.0f;
-            return action;
-        }
+    if (hasPrey) {
+        direction = core::Vec2(preyX, preyY);
     } else {
-        const double angle = std::atan2(observation[obs::DaySinRepeat], observation[obs::DayCos]) +
-                             static_cast<double>(genes_[WanderBias] - 0.5f) * kPi;
+        const double angle = static_cast<double>(genes_[WanderBias]) * 6.28318530717958647692;
         direction = {std::cos(angle), std::sin(angle)};
     }
 
     core::Vec2 normalized = core::Math::unit(direction);
-    if (hasAgent && agentDistance < 0.18f) {
-        const core::Vec2 away = core::Math::unit(core::Vec2(-agentX, -agentY));
-        normalized += away * static_cast<double>(genes_[CrowdAvoidance] * (1.0f - agentDistance / 0.18f));
+    if (hasRival && rivalDistance < 0.12f) {
+        const core::Vec2 away = core::Math::unit(core::Vec2(-rivalX, -rivalY));
+        normalized += away * static_cast<double>(genes_[RivalAvoid] * (1.0f - rivalDistance / 0.12f));
     }
     normalized = core::Math::unit(normalized);
     action.kind = Action::Kind::Move;
     action.dirX = static_cast<float>(normalized.x);
     action.dirY = static_cast<float>(normalized.y);
-    action.magnitude = std::clamp(genes_[SpeedPreference] * (0.65f + 0.35f * genes_[TurnGain]), 0.0f, 1.0f);
+    action.magnitude = std::clamp(genes_[SpeedPreference], 0.0f, 1.0f);
     return action;
 }
 

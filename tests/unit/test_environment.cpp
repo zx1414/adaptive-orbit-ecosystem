@@ -32,9 +32,11 @@ core::SimConfig cyanoSimConfig() {
     core::SimConfig config;
     config.world.maxTicks = 200;
     config.cyano = smallConfig();
-    // Isolate the environment layer: no legacy producers, no agents.
-    config.producer.initial = 0;
-    config.agent.initial = 0;
+    // Two nuclei so the world stays alive and the snapshot carries a full state.
+    config.colony.initialNuclei = 2;
+    config.colony.maxNuclei = 8;
+    config.colony.initialEnergy = 120.0;
+    config.colony.initialBallsPerNucleus = 2.0;
     return config;
 }
 } // namespace
@@ -119,15 +121,20 @@ TEST("cyanobacteria queries respect the radius and skip dead nodes") {
     for (const auto& sample : samples) CHECK(sample.id != id);
 }
 
-TEST("simulation includes cyanobacteria in the per-tick audit") {
+TEST("simulation audits the whole ecosystem, not just one layer") {
     sim::Simulation simulation(cyanoSimConfig());
     CHECK(simulation.cyanobacteria().aliveCount() == 20);
+    CHECK(simulation.colonies().colonies().size() == 2);
     for (int i = 0; i < 100; ++i) {
         simulation.step();
         CHECK(simulation.auditOk());
     }
     CHECK(simulation.cyanobacteria().aliveCount() > 0);
-    CHECK_NEAR(simulation.totalEnergy(), simulation.cyanobacteria().totalEnergy(), 1e-9);
+    // The audited total is environment + nuclei + balls, not any single layer.
+    const double expected = simulation.cyanobacteria().totalEnergy() +
+                            simulation.colonies().nucleusEnergy() +
+                            simulation.colonies().ballEnergy();
+    CHECK_NEAR(simulation.totalEnergy(), expected, 1e-9);
     CHECK(simulation.ledger().stats().injectedPrimary() > 0.0);
 }
 

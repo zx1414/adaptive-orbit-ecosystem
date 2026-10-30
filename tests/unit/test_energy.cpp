@@ -1,7 +1,7 @@
 #include "TestHarness.h"
 #include "world/Energy.h"
 #include "world/Environment.h"
-#include "producers/ProducerSystem.h"
+#include "environment/Cyanobacteria.h"
 #include "core/Random.h"
 
 using namespace world;
@@ -52,6 +52,21 @@ TEST("sub-epsilon dissipation is accounted, not silently dropped") {
     CHECK(ledger.audit(0.0));
 }
 
+TEST("consumePrey is zero-sum and kills the prey") {
+    core::EnergyState prey{0.0, 20.0, true};
+    core::EnergyState predator{0.0, 30.0, true};
+    EnergyLedger ledger;
+    ledger.injectInitial(prey, 1, 10.0);
+    const double moved = ledger.consumePrey(prey, 1, predator, 4.0,
+                                            EnergyReason::NucleusPrey,
+                                            EnergyReason::CyanoDeath);
+    CHECK_NEAR(moved, 4.0, 1e-12);
+    CHECK_NEAR(predator.energy, 4.0, 1e-12);
+    CHECK(!prey.alive);
+    CHECK_NEAR(prey.energy, 0.0, 1e-12);
+    CHECK(ledger.audit(predator.energy));
+}
+
 TEST("environment is a passive finite light field") {
     core::LightConfig light;
     Environment environment(core::Bounds::fromSize(100.0, 100.0), light);
@@ -60,26 +75,4 @@ TEST("environment is a passive finite light field") {
     CHECK(a >= 0.0);
     CHECK_NEAR(a, b, 0.0);
     CHECK(std::isfinite(environment.lightAt({-10.0, 1000.0}, 42)));
-}
-
-TEST("photo producer is the only primary injector") {
-    core::Bounds bounds = core::Bounds::fromSize(100.0, 100.0);
-    core::ProducerConfig config;
-    config.initial = 1;
-    config.initialEnergy = 20.0;
-    config.cap = 100;
-    config.photo = 2.0;
-    config.maint = 0.0;
-    config.repro = 1000.0;
-    core::LightConfig light;
-    Environment environment(bounds, light);
-    EnergyLedger ledger;
-    core::Random random(7);
-    producers::ProducerSystem system(bounds, config);
-    system.initialize(random, ledger, environment);
-    CHECK(system.aliveCount() == 1);
-    const double before = ledger.totalIn(EnergyReason::Photosynthesis);
-    system.tick(random, ledger, environment, 0);
-    CHECK(ledger.totalIn(EnergyReason::Photosynthesis) > before + 1e-9);
-    CHECK(ledger.audit(system.all()[0]->energy.energy));
 }

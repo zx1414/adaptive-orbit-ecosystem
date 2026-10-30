@@ -37,13 +37,29 @@ void ColonySystem::initialize(core::Random& random, world::EnergyLedger& ledger)
         colonies_.push_back(std::move(colony));
     }
 
-    // Give every nucleus a few starting balls, paid for out of its own energy.
+    // Give every nucleus a few starting balls. These are part of the initial endowment rather
+    // than a purchase, so a nucleus does not begin the run already starving.
     for (std::size_t c = 0; c < colonies_.size(); ++c) {
         const int wanted = static_cast<int>(std::max(0.0, config_.initialBallsPerNucleus));
         for (int b = 0; b < wanted; ++b) {
             const BallType type = b == 0 ? BallType::Resource
                                          : (b == 1 ? BallType::Scout : BallType::Resource);
-            if (deployBall(c, type, random, ledger) == npos) break;
+            const double angle = colonies_[c].nucleus.wanderAngle +
+                                 random.uniformReal(-0.5, 0.5);
+            Ball ball;
+            ball.id = nextBallId_++;
+            ball.type = type;
+            ball.ownerId = colonies_[c].nucleus.id;
+            ball.energy = core::EnergyState{0.0,
+                                            type == BallType::Resource ? kResourceBallCap : 1.0,
+                                            true};
+            const double distance = std::max(1.0, colonies_[c].nucleus.params.orbitRadius) * 0.6;
+            ball.pos = colonies_[c].nucleus.pos +
+                       core::Vec2(std::cos(angle), std::sin(angle)) * distance;
+            ball.pos.x = std::clamp(ball.pos.x, bounds_.minX, bounds_.maxX);
+            ball.pos.y = std::clamp(ball.pos.y, bounds_.minY, bounds_.maxY);
+            balls_.push_back(ball);
+            colonies_[c].balls.push_back(balls_.size() - 1);
         }
     }
     rebuildIndex();
@@ -159,6 +175,27 @@ double ColonySystem::colonyCap(const Nucleus& nucleus) const {
         break;
     }
     return cap;
+}
+
+double ColonySystem::storedEnergyFor(const Nucleus& nucleus) const {
+    double stored = 0.0;
+    for (const Colony& colony : colonies_) {
+        if (colony.nucleus.id != nucleus.id) continue;
+        for (std::size_t index : colony.balls) {
+            if (index >= balls_.size() || !balls_[index].alive()) continue;
+            if (balls_[index].type == BallType::Resource) stored += balls_[index].energy.energy;
+        }
+        break;
+    }
+    return stored;
+}
+
+double colonyCapFor(const ColonySystem& system, const Nucleus& nucleus) {
+    return system.colonyCap(nucleus);
+}
+
+double storedEnergyFor(const ColonySystem& system, const Nucleus& nucleus) {
+    return system.storedEnergyFor(nucleus);
 }
 
 double ColonySystem::ballEnergy() const {

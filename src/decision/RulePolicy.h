@@ -6,8 +6,8 @@ namespace decision {
 class RulePolicy final : public IPolicy {
 public:
     enum Gene : std::size_t {
-        RestBelow = 0, TurnGain, SpeedPreference,
-        CrowdAvoidance, HarvestBias, WanderBias, GeneCount
+        RestBelow = 0, SpeedPreference, HarvestBias,
+        WanderBias, StoreBias, RivalAvoid, GeneCount
     };
     RulePolicy();
     PolicySpec spec() const override;

@@ -56,6 +56,8 @@ public:
 
     // Capacity of a colony: native plus one contribution per owned Resource ball.
     double colonyCap(const Nucleus& nucleus) const;
+    // Energy currently held inside this nucleus's resource balls.
+    double storedEnergyFor(const Nucleus& nucleus) const;
     double ballEnergy() const;
     double nucleusEnergy() const;
 
@@ -88,5 +90,9 @@ private:
     std::size_t births_ = 0;
     std::size_t deaths_ = 0;
 };
+
+// Free-function forms so the perception layer can ask without owning a system reference.
+double colonyCapFor(const ColonySystem& system, const Nucleus& nucleus);
+double storedEnergyFor(const ColonySystem& system, const Nucleus& nucleus);
 
 } // namespace colony

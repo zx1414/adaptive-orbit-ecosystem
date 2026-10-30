@@ -1,4 +1,5 @@
 #pragma once
+#include "colony/ColonySystem.h"
 #include "sim/Simulation.h"
 #include <cstddef>
 #include <fstream>

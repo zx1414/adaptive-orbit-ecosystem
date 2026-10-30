@@ -1,22 +1,31 @@
 #include "app/StatsWriter.h"
-#include "decision/PolicyRegistry.h"
 #include <iomanip>
-#include <vector>
 
 namespace app {
+namespace {
+// Mean value of one heritable nucleus parameter across living nuclei.
+double meanParam(const sim::Simulation& world, double colony::NucleusParams::*member) {
+    double sum = 0.0;
+    std::size_t count = 0;
+    for (const auto& colony : world.colonies().colonies()) {
+        if (!colony.nucleus.alive()) continue;
+        sum += colony.nucleus.params.*member;
+        ++count;
+    }
+    return count > 0 ? sum / static_cast<double>(count) : 0.0;
+}
+} // namespace
+
 StatsWriter::StatsWriter(const std::string& path, const sim::Simulation& world) : path_(path) {
+    (void)world;  // the header is fixed; rows are written per tick
     out_.open(path);
     if (!out_) {
         error_ = "cannot open stats file: " + path_;
         return;
     }
-    const auto policy = decision::PolicyRegistry::create(world.config().policy.rule);
-    geneCount_ = policy ? policy->spec().genomeDim : world.meanGenome().size();
-    out_ << "tick,producers,agents,total_energy,injected,dissipated,transferred,"
-            "mean_producer_energy,mean_agent_energy,"
-            "producer_births,producer_deaths,agent_births,agent_deaths";
-    for (std::size_t i = 0; i < geneCount_; ++i) out_ << ",gene_" << i;
-    out_ << ",audit_ok\n";
+    out_ << "tick,cyanobacteria,nuclei,balls,total_energy,injected,dissipated,"
+            "transferred,mean_nucleus_energy,mean_orbit_radius,mean_affinity,"
+            "mean_max_speed,mean_spot_radius,audit_ok\n";
     out_.flush();
     if (!out_) {
         error_ = "failed while writing stats header: " + path_;
@@ -28,20 +37,24 @@ StatsWriter::StatsWriter(const std::string& path, const sim::Simulation& world) 
 bool StatsWriter::write(const sim::Simulation& world) {
     if (!ok_) return false;
     const auto& stats = world.view().stats;
-    out_ << std::setprecision(10) << stats.tick << ',' << stats.producers << ',' << stats.agents
-         << ',' << stats.totalEnergy << ',' << stats.injected << ',' << stats.dissipated
-         << ',' << stats.transferred << ',' << world.meanProducerEnergy()
-         << ',' << world.meanAgentEnergy() << ',' << world.producerSystem().births()
-         << ',' << world.producerSystem().deaths() << ',' << world.agentSystem().births()
-         << ',' << world.agentSystem().deaths();
-    const std::vector<double> genes = world.meanGenome();
-    for (std::size_t i = 0; i < geneCount_; ++i) {
-        out_ << ',' << (i < genes.size() ? genes[i] : 0.0);
+    double nucleusEnergy = 0.0;
+    std::size_t nuclei = 0;
+    for (const auto& colony : world.colonies().colonies()) {
+        if (!colony.nucleus.alive()) continue;
+        nucleusEnergy += colony.nucleus.energy.energy;
+        ++nuclei;
     }
-    out_ << ',' << (stats.auditOk ? 1 : 0) << '\n';
+    const double meanEnergy = nuclei > 0 ? nucleusEnergy / static_cast<double>(nuclei) : 0.0;
+    out_ << std::setprecision(10) << stats.tick << ',' << stats.cyanobacteria << ','
+         << stats.nuclei << ',' << stats.balls << ',' << stats.totalEnergy << ','
+         << stats.injected << ',' << stats.dissipated << ',' << stats.transferred << ','
+         << meanEnergy << ',' << meanParam(world, &colony::NucleusParams::orbitRadius) << ','
+         << meanParam(world, &colony::NucleusParams::affinity) << ','
+         << meanParam(world, &colony::NucleusParams::maxSpeed) << ','
+         << meanParam(world, &colony::NucleusParams::spotRadius) << ','
+         << (stats.auditOk ? 1 : 0) << '\n';
     out_.flush();
     if (!out_) {
-        // Never report success for a truncated CSV: the caller must exit with the I/O code.
         error_ = "failed while writing stats row: " + path_;
         ok_ = false;
         return false;

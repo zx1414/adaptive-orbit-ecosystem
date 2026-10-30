@@ -46,6 +46,12 @@ void appendBodies(std::string& out, const std::vector<Body>& bodies) {
         appendDouble(out, bodies[i].energy);
         out += ',';
         appendDouble(out, bodies[i].cap);
+        if (bodies[i].ownerId != 0 || bodies[i].type != 0) {
+            out += ',';
+            appendU64(out, bodies[i].ownerId);
+            out += ',';
+            appendU64(out, static_cast<std::uint64_t>(bodies[i].type));
+        }
         out += ']';
     }
     out += ']';
@@ -65,17 +71,23 @@ void Buffer::capture(const world::WorldView& view) {
     bounds_ = view.bounds;
     Frame frame;
     frame.tick = view.stats.tick;
-    frame.producers = view.stats.producers;
-    frame.agents = view.stats.agents;
+    frame.cyanobacteria = view.stats.cyanobacteria;
+    frame.nuclei = view.stats.nuclei;
+    frame.balls = view.stats.balls;
     frame.totalEnergy = view.stats.totalEnergy;
-    frame.producerBodies.reserve(view.producers.size());
-    for (const world::ProducerView& producer : view.producers) {
-        frame.producerBodies.push_back({producer.position.x, producer.position.y,
-                                        producer.energy, producer.cap});
+    frame.nodeBodies.reserve(view.cyanobacteria.size());
+    for (const world::CyanoView& node : view.cyanobacteria) {
+        frame.nodeBodies.push_back({node.position.x, node.position.y, node.energy, node.cap, 0, 0});
     }
-    frame.agentBodies.reserve(view.agents.size());
-    for (const world::AgentView& agent : view.agents) {
-        frame.agentBodies.push_back({agent.position.x, agent.position.y, agent.energy, agent.cap});
+    frame.nucleusBodies.reserve(view.nuclei.size());
+    for (const world::NucleusView& nucleus : view.nuclei) {
+        frame.nucleusBodies.push_back({nucleus.position.x, nucleus.position.y, nucleus.energy,
+                                       nucleus.cap, nucleus.id, 0});
+    }
+    frame.ballBodies.reserve(view.balls.size());
+    for (const world::BallView& ball : view.balls) {
+        frame.ballBodies.push_back({ball.position.x, ball.position.y, ball.energy, ball.cap,
+                                    ball.ownerId, ball.type});
     }
     frames_.push_back(std::move(frame));
 }
@@ -85,8 +97,6 @@ std::string Buffer::toJson(const std::string& name, const std::string& metaJson)
     json.reserve(frames_.size() * 4096 + 256);
     json += '{';
     if (!name.empty()) {
-        // Emit printable ASCII as-is; escape everything else as \u00xx so the
-        // string is always valid JSON regardless of its content.
         json += "\"name\":\"";
         for (unsigned char c : name) {
             if (c >= 0x20 && c < 0x7F && c != '"' && c != '\\') {
@@ -112,16 +122,20 @@ std::string Buffer::toJson(const std::string& name, const std::string& metaJson)
         const Frame& frame = frames_[i];
         json += "{\"tick\":";
         appendU64(json, frame.tick);
-        json += ",\"producers\":";
-        appendU64(json, static_cast<std::uint64_t>(frame.producers));
-        json += ",\"agents\":";
-        appendU64(json, static_cast<std::uint64_t>(frame.agents));
+        json += ",\"cyanobacteria\":";
+        appendU64(json, static_cast<std::uint64_t>(frame.cyanobacteria));
+        json += ",\"nuclei\":";
+        appendU64(json, static_cast<std::uint64_t>(frame.nuclei));
+        json += ",\"balls\":";
+        appendU64(json, static_cast<std::uint64_t>(frame.balls));
         json += ",\"totalEnergy\":";
         appendDouble(json, frame.totalEnergy);
-        json += ",\"p\":";
-        appendBodies(json, frame.producerBodies);
-        json += ",\"a\":";
-        appendBodies(json, frame.agentBodies);
+        json += ",\"c\":";
+        appendBodies(json, frame.nodeBodies);
+        json += ",\"n\":";
+        appendBodies(json, frame.nucleusBodies);
+        json += ",\"b\":";
+        appendBodies(json, frame.ballBodies);
         json += '}';
     }
     json += "]}";

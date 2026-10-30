@@ -5,6 +5,9 @@
 namespace app {
 struct CliOptions {
     core::SimConfig config{};
+    // The colony model needs these to be non-zero to simulate anything; the defaults live
+    // here rather than in SimConfig so the unit tests can build minimal worlds.
+    bool smallDefaults = false;
     bool render = true;
     int renderInterval = 500;
     bool energySummary = false;

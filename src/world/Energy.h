@@ -62,6 +62,10 @@ public:
     void sealInitial() { initialSealed_ = true; }
     bool initialSealed() const { return initialSealed_; }
     double transfer(core::EnergyState& from, core::EnergyState& to, double amount, EnergyReason reason);
+    // Predation: move up to `amount` from the prey into the predator, then kill the prey so any
+    // remainder is dissipated. Zero-sum, so the audit stays satisfied.
+    double consumePrey(core::EnergyState& prey, core::EntityId preyId, core::EnergyState& predator,
+                       double amount, EnergyReason gainReason, EnergyReason deathReason);
     double dissipate(core::EnergyState& state, core::EntityId id, double amount, EnergyReason reason);
     void kill(core::EnergyState& state, core::EntityId id, EnergyReason reason);
     const EnergyStats& stats() const { return stats_; }

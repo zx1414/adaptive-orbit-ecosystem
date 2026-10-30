@@ -19,7 +19,7 @@ Get-ChildItem -LiteralPath (Join-Path $root 'src') -Include '*.h','*.cpp' -Recur
   $path = $_.FullName; $n = 0
   Get-Content -LiteralPath $path | ForEach-Object { ++$n; if ($_ -match '^\s*#\s*include\s*[<"]\s*\.\.[\\/]') { $violations += "${path}:${n}: relative parent include is forbidden" } }
 }
-foreach ($layer in @('world', 'agents', 'producers', 'perception', 'behavior', 'environment', 'colony')) {
+foreach ($layer in @('world', 'perception', 'behavior', 'environment', 'colony')) {
   Get-ChildItem -LiteralPath (Join-Path $root ('src/' + $layer)) -Include '*.h','*.cpp' -Recurse -File | ForEach-Object {
     $path = $_.FullName; $n = 0
     Get-Content -LiteralPath $path | ForEach-Object { ++$n; if ($_ -match '^\s*#\s*include\s*[<"]\s*(?:sim|app)/') { $violations += "${path}:${n}: lower layer must not depend on sim/app" } }

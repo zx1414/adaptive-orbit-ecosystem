@@ -66,31 +66,16 @@ CliOptions parseCli(int argc, char** argv) {
             options.config.world.maxTicks = static_cast<core::Tick>(parseNonNegativeSize(i, argc, argv, "--ticks"));
             options.ticksProvided = true;
         }
-        else if (arg == "--producers") options.config.producer.initial = parseNonNegativeSize(i, argc, argv, "--producers");
-        else if (arg == "--agents") options.config.agent.initial = parseNonNegativeSize(i, argc, argv, "--agents");
         else if (arg == "--policy") options.config.policy.rule = nextValue(i, argc, argv, "--policy");
         else if (arg == "--render") options.render = true;
         else if (arg == "--no-render") options.render = false;
         else if (arg == "--render-interval") options.renderInterval = parsePositiveInt(i, argc, argv, "--render-interval");
-        else if (arg == "--photo") options.config.producer.photo = parseNonNegative(i, argc, argv, "--photo");
-        else if (arg == "--producer-maint") options.config.producer.maint = parseNonNegative(i, argc, argv, "--producer-maint");
-        else if (arg == "--producer-repro") options.config.producer.repro = parseNonNegative(i, argc, argv, "--producer-repro");
-        else if (arg == "--producer-max") options.config.producer.max = parseNonNegative(i, argc, argv, "--producer-max");
-        else if (arg == "--producer-crowding") options.config.producer.crowding = parseNonNegative(i, argc, argv, "--producer-crowding");
-        else if (arg == "--producer-radius") options.config.producer.interactionRadius = parseNonNegative(i, argc, argv, "--producer-radius");
-        else if (arg == "--producer-competition") options.config.producer.competition = parseNonNegative(i, argc, argv, "--producer-competition");
-        else if (arg == "--producer-density-repro") options.config.producer.densityRepro = parseNonNegative(i, argc, argv, "--producer-density-repro");
-        else if (arg == "--agent-metab") options.config.agent.metab = parseNonNegative(i, argc, argv, "--agent-metab");
-        else if (arg == "--agent-max-speed") options.config.agent.maxSpeed = parseNonNegative(i, argc, argv, "--agent-max-speed");
-        else if (arg == "--agent-move-k") options.config.agent.moveK = parseNonNegative(i, argc, argv, "--agent-move-k");
-        else if (arg == "--agent-harvest") options.config.agent.harvest = parseNonNegative(i, argc, argv, "--agent-harvest");
-        else if (arg == "--agent-reserve") options.config.agent.harvestReserve = parseNonNegative(i, argc, argv, "--agent-reserve");
-        else if (arg == "--agent-half-saturation") options.config.agent.harvestHalfSaturation = parseNonNegative(i, argc, argv, "--agent-half-saturation");
-        else if (arg == "--agent-density-repro") options.config.agent.densityRepro = parseNonNegative(i, argc, argv, "--agent-density-repro");
-        else if (arg == "--agent-density-radius") options.config.agent.densityRadius = parseNonNegative(i, argc, argv, "--agent-density-radius");
-        else if (arg == "--agent-repro") options.config.agent.repro = parseNonNegative(i, argc, argv, "--agent-repro");
-        else if (arg == "--agent-max") options.config.agent.max = parseNonNegative(i, argc, argv, "--agent-max");
-        else if (arg == "--agent-lifespan") options.config.agent.lifespan = static_cast<core::Tick>(parseNonNegativeSize(i, argc, argv, "--agent-lifespan"));
+        else if (arg == "--cyano") options.config.cyano.initial = parseNonNegativeSize(i, argc, argv, "--cyano");
+        else if (arg == "--nuclei") options.config.colony.initialNuclei = parseNonNegativeSize(i, argc, argv, "--nuclei");
+        else if (arg == "--balls") options.config.colony.initialBallsPerNucleus = parseNonNegative(i, argc, argv, "--balls");
+        else if (arg == "--nucleus-energy") options.config.colony.initialEnergy = parseNonNegative(i, argc, argv, "--nucleus-energy");
+        else if (arg == "--deploy-cost") options.config.colony.deployCost = parseNonNegative(i, argc, argv, "--deploy-cost");
+        else if (arg == "--detach-radius") options.config.colony.detachRadius = parseNonNegative(i, argc, argv, "--detach-radius");
         else if (arg == "--sense-radius") options.config.policy.senseRadius = parseNonNegative(i, argc, argv, "--sense-radius");
         else if (arg == "--mutation") options.config.policy.mutation = parseNonNegative(i, argc, argv, "--mutation");
         else if (arg == "--energy-summary") options.energySummary = true;
@@ -109,14 +94,9 @@ CliOptions parseCli(int argc, char** argv) {
     }
     if (!options.loadPath.empty()) {
         static const char* const configFlags[] = {
-            "--width", "--height", "--seed", "--producers", "--agents", "--policy",
-            "--photo", "--producer-maint", "--producer-repro", "--producer-max",
-            "--producer-crowding", "--producer-radius", "--producer-competition",
-            "--producer-density-repro", "--agent-metab", "--agent-max-speed",
-            "--agent-move-k", "--agent-harvest", "--agent-reserve",
-            "--agent-half-saturation", "--agent-repro", "--agent-max",
-            "--agent-density-repro", "--agent-density-radius", "--agent-lifespan",
-            "--sense-radius", "--mutation"
+            "--width", "--height", "--seed", "--policy",
+            "--cyano", "--nuclei", "--balls", "--nucleus-energy",
+            "--deploy-cost", "--detach-radius", "--sense-radius", "--mutation"
         };
         for (int i = 1; i < argc; ++i) {
             const std::string arg = argv[i];
@@ -157,16 +137,14 @@ CliOptions parseCli(int argc, char** argv) {
     }
     return options;
 }
+
 std::string usage() {
-    return "EcoCore M4\n"
+    return "EcoCore M5 (colony model)\n"
            "  --width <n> --height <n> --seed <n> --ticks <n>\n"
-           "  --producers <n> --agents <n> --policy rule|stub\n"
+           "  --cyano <n> --nuclei <n> --balls <n> --nucleus-energy <n>\n"
+           "  --deploy-cost <n> --detach-radius <n> --policy rule|stub\n"
+           "  --sense-radius <n> --mutation <n>\n"
            "  --render | --no-render --render-interval <n>\n"
-           "  --photo --producer-maint --producer-repro --producer-max\n"
-           "  --producer-crowding --producer-radius --producer-competition --producer-density-repro\n"
-           "  --agent-metab --agent-max-speed --agent-move-k --agent-harvest --agent-reserve --agent-half-saturation\n"
-           "  --agent-repro --agent-max --agent-lifespan --agent-density-repro --agent-density-radius\n"
-           "  --sense-radius --mutation\n"
            "  --energy-summary --stats <path> --stats-interval <n>\n"
            "  --save <path> --load <path>\n"
            "  --html <path> --html-interval <n> --trace-json <path> --trace-json-interval <n>\n"

@@ -8,7 +8,7 @@
 
 #include <vector>
 
-namespace sim { class SnapshotStore; }
+namespace sim { class SnapshotStore; class Simulation; }
 
 namespace environment {
 
@@ -55,6 +55,10 @@ public:
     // Zero-allocation radius query; out is cleared and filled with living nodes.
     void querySamples(core::Vec2 center, double radius, std::vector<CyanoSample>& out) const;
     const CyanoNode* find(core::EntityId id) const;
+    // Predation: transfer up to `amount` from the node into the predator, then kill the node.
+    // Zero-sum, so the per-tick audit balances. Returns the energy actually moved.
+    double harvest(core::EntityId id, double amount, core::EnergyState& predator,
+                   world::EnergyLedger& ledger);
     // Marks the node dead and returns the energy a predator should receive. The node stays in
     // the vector until removeDead(), so ids held by callers stay valid for the rest of the tick.
     double consume(core::EntityId id, world::EnergyLedger& ledger);
@@ -63,6 +67,7 @@ public:
 
 private:
     friend class sim::SnapshotStore;
+    friend class sim::Simulation;
     CyanoConfig config_;
     core::Bounds bounds_;
     std::vector<CyanoNode> nodes_;

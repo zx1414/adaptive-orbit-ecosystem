@@ -19,11 +19,20 @@ void ConsoleRenderer::render(const world::WorldView& view, std::ostream& out) co
         y = std::clamp(y, 0.0, static_cast<double>(rows_ - 1));
         return static_cast<std::size_t>(static_cast<int>(y) * columns_ + static_cast<int>(x));
     };
-    for (const auto& producer : view.producers) {
-        grid[cell(producer.position)] = producer.cap > 0.0 && producer.energy / producer.cap > 0.5 ? 'P' : 'p';
+    // Environment: cyanobacteria are the producers.
+    for (const auto& node : view.cyanobacteria) {
+        grid[cell(node.position)] =
+            node.cap > 0.0 && node.energy / node.cap > 0.5 ? 'P' : 'p';
     }
-    for (const auto& agent : view.agents) {
-        grid[cell(agent.position)] = agent.cap > 0.0 && agent.energy / agent.cap > 0.5 ? 'A' : 'a';
+    // Organ balls are drawn as small dots so the orbit reads as a ring around each nucleus.
+    for (const auto& ball : view.balls) {
+        const std::size_t index = cell(ball.position);
+        if (grid[index] == '.' || grid[index] == 'p') grid[index] = ',';
+    }
+    // Consumers: nuclei.
+    for (const auto& nucleus : view.nuclei) {
+        grid[cell(nucleus.position)] =
+            nucleus.cap > 0.0 && nucleus.energy / nucleus.cap > 0.5 ? 'N' : 'n';
     }
     out << "\x1b[2J\x1b[H";
     for (int y = 0; y < rows_; ++y) {
@@ -31,9 +40,10 @@ void ConsoleRenderer::render(const world::WorldView& view, std::ostream& out) co
         out << '\n';
     }
     const auto& stats = view.stats;
-    out << "tick=" << stats.tick << " producers=" << stats.producers
-        << " agents=" << stats.agents << " energy=" << stats.totalEnergy
-        << " injected=" << stats.injected << " dissipated=" << stats.dissipated
+    out << "tick=" << stats.tick << " cyano=" << stats.cyanobacteria
+        << " nuclei=" << stats.nuclei << " balls=" << stats.balls
+        << " energy=" << stats.totalEnergy << " injected=" << stats.injected
+        << " dissipated=" << stats.dissipated
         << " audit=" << (stats.auditOk ? "ok" : "FAIL") << '\n';
 }
 } // namespace app

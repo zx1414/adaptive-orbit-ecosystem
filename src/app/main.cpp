@@ -158,8 +158,9 @@ int main(int argc, char** argv) {
         const auto& stats = world.view().stats;
         std::cout << std::setprecision(10)
                   << "done tick=" << stats.tick
-                  << " producers=" << stats.producers
-                  << " agents=" << stats.agents
+                  << " cyanobacteria=" << stats.cyanobacteria
+                  << " nuclei=" << stats.nuclei
+                  << " balls=" << stats.balls
                   << " total_energy=" << stats.totalEnergy
                   << " injected=" << stats.injected
                   << " dissipated=" << stats.dissipated

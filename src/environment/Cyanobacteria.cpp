@@ -137,6 +137,15 @@ const CyanoNode* Cyanobacteria::find(core::EntityId id) const {
     return id < byId_.size() ? byId_[static_cast<std::size_t>(id)] : nullptr;
 }
 
+double Cyanobacteria::harvest(core::EntityId id, double amount, core::EnergyState& predator,
+                              world::EnergyLedger& ledger) {
+    const auto it = std::find_if(nodes_.begin(), nodes_.end(),
+                                 [id](const CyanoNode& node) { return node.id == id; });
+    if (it == nodes_.end() || !it->alive()) return 0.0;
+    return ledger.consumePrey(it->energy, it->id, predator, std::max(0.0, amount),
+                              world::EnergyReason::NucleusPrey, world::EnergyReason::CyanoDeath);
+}
+
 double Cyanobacteria::consume(core::EntityId id, world::EnergyLedger& ledger) {
     const auto it = std::find_if(nodes_.begin(), nodes_.end(),
                                  [id](const CyanoNode& node) { return node.id == id; });

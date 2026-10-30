@@ -70,6 +70,16 @@ double EnergyLedger::transfer(core::EnergyState& from, core::EnergyState& to, do
     stats_.transferred += actual;
     return actual;
 }
+double EnergyLedger::consumePrey(core::EnergyState& prey, core::EntityId preyId,
+                                 core::EnergyState& predator, double amount,
+                                 EnergyReason gainReason, EnergyReason deathReason) {
+    if (!prey.alive || !predator.alive) return 0.0;
+    // A predator with no headroom still kills the prey, but gains nothing.
+    const double moved = transfer(prey, predator, amount, gainReason);
+    kill(prey, preyId, deathReason);
+    return moved;
+}
+
 double EnergyLedger::dissipate(core::EnergyState& state, core::EntityId, double amount, EnergyReason reason) {
     if (!validAmount(amount) || !state.alive || !std::isfinite(state.energy)) return 0.0;
     const double actual = std::min(amount, std::max(0.0, state.energy));

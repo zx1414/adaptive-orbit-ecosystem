@@ -30,6 +30,7 @@ add_library(eco_core STATIC
   src/producers/ProducerSystem.cpp
   src/agents/Agent.cpp
   src/agents/AgentSystem.cpp
+  src/perception/ColonySensors.cpp
   src/perception/Sensors.cpp
   src/behavior/Behavior.cpp
 )

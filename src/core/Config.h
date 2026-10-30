@@ -26,45 +26,7 @@ struct LightConfig {
     double verticalGradient = 0.2;
 };
 
-struct ProducerConfig {
-    std::size_t initial = 30;
-    std::size_t cap = 100;
-    double initialEnergy = 30.0;
-    double photo = 2.0;
-    double maint = 0.005;
-    double repro = 70.0;
-    double share = 35.0;
-    double max = 300.0;
-    double radius = 10.0;
-    // Local shading: photosynthesis is divided by (1 + crowding * neighbors).
-    // 0 keeps the unconstrained M1 behavior.
-    double crowding = 0.0;
-    double interactionRadius = 80.0;
-    double competition = 0.0;      // local light competition coefficient; 0 disables
-    double densityRepro = 0.0;     // extra reproduction threshold per local producer neighbour
-};
 
-struct AgentConfig {
-    std::size_t initial = 12;
-    std::size_t cap = 100;
-    double initialEnergy = 30.0;
-    double metab = 0.02;
-    double maxSpeed = 60.0;
-    double moveK = 0.0002;
-    double harvest = 0.5;
-    double harvestReserve = 0.0; // prey energy left untouched by a harvest
-    double harvestHalfSaturation = 0.0; // 0 keeps linear harvest
-    double densityRepro = 0.0;          // extra reproduction threshold per local agent neighbour
-    double densityRadius = 200.0;       // radius used for local agent density
-    double radius = 30.0;
-    double repro = 80.0;
-    double cost = 10.0;
-    double child = 30.0;
-    double max = 200.0;
-    core::Tick lifespan = 0; // 0 disables aging
-    double damping = 0.98;
-    double avoidanceRadius = 60.0;
-};
 
 struct PolicyConfig {
     std::string rule = "rule";
@@ -77,7 +39,7 @@ struct PolicyConfig {
 // Cyanobacteria (environment producer) parameters. Declared in core so SimConfig does not
 // depend on the environment layer; environment::Cyanobacteria consumes it.
 struct CyanoConfig {
-    std::size_t initial = 0;
+    std::size_t initial = 400;
     std::size_t maxNodes = 4000;
     double initialEnergy = 10.0;
     double cap = 40.0;
@@ -93,9 +55,9 @@ struct CyanoConfig {
 // Colony (nucleus + organ balls) parameters. Declared in core so SimConfig stays free of a
 // dependency on the colony layer.
 struct ColonyConfig {
-    std::size_t initialNuclei = 0;
+    std::size_t initialNuclei = 12;
     std::size_t maxNuclei = 200;
-    double initialEnergy = 40.0;
+    double initialEnergy = 60.0;
     double initialBallsPerNucleus = 3.0;
     // Deploying a ball costs energy from the nucleus; recycling returns a fraction of the
     // ball's stored energy.
@@ -107,6 +69,9 @@ struct ColonyConfig {
     double adoptRadius = 120.0;
     double metabolism = 0.01;
     double moveCostK = 0.0002;
+    double preyRadius = 30.0;
+    // Global cap on balls so a runaway deploy loop cannot exhaust memory.
+    std::size_t maxBalls = 4000;
 };
 
 struct SimConfig {
@@ -114,8 +79,6 @@ struct SimConfig {
     LightConfig light{};
     CyanoConfig cyano{};
     ColonyConfig colony{};
-    ProducerConfig producer{};
-    AgentConfig agent{};
     PolicyConfig policy{};
 };
 

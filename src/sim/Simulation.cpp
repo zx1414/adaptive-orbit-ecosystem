@@ -1,11 +1,14 @@
 #include "sim/Simulation.h"
+
+#include "behavior/ColonyBehavior.h"
+#include "colony/Orbit.h"
 #include "core/Math.h"
+#include "decision/PolicyRegistry.h"
+#include "perception/ColonySensors.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstring>
-#include <limits>
-#include <vector>
 
 namespace sim {
 namespace {
@@ -32,7 +35,6 @@ std::uint64_t hashString(std::uint64_t hash, const std::string& value) {
     hash = hashBytes(hash, &size, sizeof(size));
     return hashBytes(hash, value.data(), value.size());
 }
-// Every field below is restored from a snapshot, so every field must feed the hash.
 void hashConfig(std::uint64_t& hash, const core::SimConfig& config) {
     hash = hashDouble(hash, config.world.width);
     hash = hashDouble(hash, config.world.height);
@@ -40,7 +42,6 @@ void hashConfig(std::uint64_t& hash, const core::SimConfig& config) {
     hash = hashBytes(hash, &seed, sizeof(seed));
     const std::uint64_t maxTicks = config.world.maxTicks;
     hash = hashBytes(hash, &maxTicks, sizeof(maxTicks));
-
     hash = hashDouble(hash, config.light.base);
     hash = hashDouble(hash, config.light.amplitude);
     const std::uint64_t period = config.light.period;
@@ -48,79 +49,44 @@ void hashConfig(std::uint64_t& hash, const core::SimConfig& config) {
     hash = hashDouble(hash, config.light.phase);
     hash = hashDouble(hash, config.light.halfSaturation);
     hash = hashDouble(hash, config.light.verticalGradient);
-
-    const std::uint64_t producerInitial = config.producer.initial;
-    const std::uint64_t producerCap = config.producer.cap;
-    hash = hashBytes(hash, &producerInitial, sizeof(producerInitial));
-    hash = hashBytes(hash, &producerCap, sizeof(producerCap));
-    hash = hashDouble(hash, config.producer.initialEnergy);
-    hash = hashDouble(hash, config.producer.photo);
-    hash = hashDouble(hash, config.producer.maint);
-    hash = hashDouble(hash, config.producer.repro);
-    hash = hashDouble(hash, config.producer.share);
-    hash = hashDouble(hash, config.producer.max);
-    hash = hashDouble(hash, config.producer.radius);
-    hash = hashDouble(hash, config.producer.crowding);
-    hash = hashDouble(hash, config.producer.interactionRadius);
-    hash = hashDouble(hash, config.producer.competition);
-    hash = hashDouble(hash, config.producer.densityRepro);
-
-    const std::uint64_t agentInitial = config.agent.initial;
-    const std::uint64_t agentCap = config.agent.cap;
-    hash = hashBytes(hash, &agentInitial, sizeof(agentInitial));
-    hash = hashBytes(hash, &agentCap, sizeof(agentCap));
-    hash = hashDouble(hash, config.agent.initialEnergy);
-    hash = hashDouble(hash, config.agent.metab);
-    hash = hashDouble(hash, config.agent.maxSpeed);
-    hash = hashDouble(hash, config.agent.moveK);
-    hash = hashDouble(hash, config.agent.harvest);
-    hash = hashDouble(hash, config.agent.harvestReserve);
-    hash = hashDouble(hash, config.agent.harvestHalfSaturation);
-    hash = hashDouble(hash, config.agent.densityRepro);
-    hash = hashDouble(hash, config.agent.densityRadius);
-    hash = hashDouble(hash, config.agent.radius);
-    hash = hashDouble(hash, config.agent.repro);
-    hash = hashDouble(hash, config.agent.cost);
-    hash = hashDouble(hash, config.agent.child);
-    hash = hashDouble(hash, config.agent.max);
-    const std::uint64_t lifespan = config.agent.lifespan;
-    hash = hashBytes(hash, &lifespan, sizeof(lifespan));
-    hash = hashDouble(hash, config.agent.damping);
-    hash = hashDouble(hash, config.agent.avoidanceRadius);
-
+    const std::uint64_t cyanoInitial = config.cyano.initial;
+    hash = hashBytes(hash, &cyanoInitial, sizeof(cyanoInitial));
+    hash = hashDouble(hash, config.cyano.cap);
+    hash = hashDouble(hash, config.cyano.photoRate);
+    hash = hashDouble(hash, config.cyano.lightHalfSaturation);
+    hash = hashDouble(hash, config.cyano.metabolism);
+    hash = hashDouble(hash, config.cyano.reproThreshold);
+    hash = hashDouble(hash, config.cyano.reproProbability);
+    const std::uint64_t initialNuclei = config.colony.initialNuclei;
+    hash = hashBytes(hash, &initialNuclei, sizeof(initialNuclei));
+    hash = hashDouble(hash, config.colony.initialEnergy);
+    hash = hashDouble(hash, config.colony.deployCost);
+    hash = hashDouble(hash, config.colony.recycleReturn);
+    hash = hashDouble(hash, config.colony.metabolism);
+    hash = hashDouble(hash, config.colony.preyRadius);
     hash = hashString(hash, config.policy.rule);
-    hash = hashDouble(hash, config.policy.mutation);
-    hash = hashDouble(hash, config.policy.senseRadius);
-    const std::uint64_t slots = config.policy.slots;
-    hash = hashBytes(hash, &slots, sizeof(slots));
-    hash = hashDouble(hash, config.policy.damping);
 }
 } // namespace
-Simulation::Simulation(const core::SimConfig& config) : Simulation(LoadTag{}, config) {
-    initialize();
-}
+
+Simulation::Simulation(const core::SimConfig& config) : Simulation(LoadTag{}, config) { initialize(); }
 
 Simulation::Simulation(LoadTag, const core::SimConfig& config)
     : config_(normalizedConfig(config)),
       environment_(config_.world.bounds(), config_.light),
       cyanobacteria_(config_.world.bounds(), config_.cyano),
-      random_(config_.world.seed),
-      producers_(config_.world.bounds(), config_.producer),
-      agents_(config_.world.bounds(), config_.agent, config_.policy) {}
+      colonies_(config_.world.bounds(), config_.colony),
+      random_(config_.world.seed) {}
 
 void Simulation::initialize() {
     ledger_.reset();
     cyanobacteria_.initialize(random_, ledger_);
-    producers_.initialize(random_, ledger_, environment_);
-    agents_.initialize(random_, ledger_);
+    colonies_.initialize(random_, ledger_);
     ledger_.sealInitial();
     tick_ = 0;
     finished_ = false;
     finishReason_.clear();
     auditOk_ = true;
     updateView();
-    // A zero-budget run must not step at all: honor maxTicks before the first step so the
-    // initial state and every exported artefact describe tick 0.
     if (config_.world.maxTicks == 0) {
         finished_ = true;
         finishReason_ = "达到最大 tick";
@@ -130,23 +96,44 @@ void Simulation::initialize() {
 
 void Simulation::step() {
     if (finished_) return;
-    // Environment layer first: cyanobacteria are the only primary energy source.
+
+    // 1. Environment layer: the only primary energy source.
     cyanobacteria_.tick(random_, ledger_, environment_, tick_);
-    producers_.tick(random_, ledger_, environment_, tick_);
-    agents_.tick(*this, *this, random_, ledger_);
-    producers_.removeDead();
-    agents_.removeDead();
-    producers_.rebuildIndex();
-    agents_.rebuildIndex();
+
+    // 2. Perception and decision per nucleus, then behaviour. Fixed iteration order.
+    auto policy = decision::PolicyRegistry::create(config_.policy.rule);
+    for (std::size_t i = 0; i < colonies_.colonies().size(); ++i) {
+        colony::Nucleus& nucleus = colonies_.colonies()[i].nucleus;
+        if (!nucleus.alive()) continue;
+        if (!policy) break;
+        const decision::Observation observation = agentsim::buildColonyObservation(
+            colonies_.colonies()[i], colonies_, cyanobacteria_, environment_.bounds(), tick_,
+            config_.light, random_);
+        const decision::Action action = policy->decide(observation);
+        agentsim::executeColonyAction(colonies_, i, action, cyanobacteria_, ledger_, random_,
+                                      config_);
+    }
+
+    // 3. Orbital integration for every owned ball.
+    colonies_.integrateBalls(ledger_);
+
+    // 4. Ownership, adoption, upkeep, reproduction, cleanup.
+    colonies_.updateOwnership();
+    agentsim::adoptFreeBalls(colonies_);
+    agentsim::applyColonyMetabolism(colonies_, ledger_, config_);
+    agentsim::reproduceColonies(colonies_, ledger_, random_, config_);
+    colonies_.removeDead(ledger_);
+    colonies_.rebuildIndex();
+
     ++tick_;
     const double stored = totalEnergy();
     auditOk_ = ledger_.audit(stored, 1e-9 * std::max(1.0, ledger_.stats().injected));
     if (!auditOk_) {
         finished_ = true;
         finishReason_ = "能量审计失败";
-    } else if (agents_.aliveCount() == 0) {
+    } else if (colonies_.aliveNuclei() == 0) {
         finished_ = true;
-        finishReason_ = "所有 Agent 已死亡";
+        finishReason_ = "所有核已死亡";
     } else if (tick_ >= config_.world.maxTicks) {
         finished_ = true;
         finishReason_ = "达到最大 tick";
@@ -154,83 +141,8 @@ void Simulation::step() {
     updateView();
 }
 
-double Simulation::lightAt(core::Vec2 position) const { return environment_.lightAt(position, tick_); }
-
-void Simulation::queryProducers(core::Vec2 center, double radius,
-                                std::vector<world::ProducerSample>& out) const {
-    producers_.querySamples(center, radius, out);
-}
-
-void Simulation::queryAgents(core::Vec2 center, double radius,
-                             std::vector<world::AgentSample>& out) const {
-    agents_.querySamples(center, radius, out);
-}
-
-double Simulation::harvest(core::EntityId producerId, double amount, double reserve,
-                           core::EnergyState& to) {
-    producers::Producer* producer = producers_.find(producerId);
-    if (!producer || !producer->alive()) return 0.0;
-    const double available = std::max(0.0, producer->energy.energy - std::max(0.0, reserve));
-    const double requested = std::min(std::max(0.0, amount), available);
-    if (requested <= 0.0) return 0.0;
-    const double moved = ledger_.transfer(producer->energy, to, requested,
-                                          world::EnergyReason::AgentHarvest);
-    if (producer->energy.energy <= 1e-12) {
-        ledger_.kill(producer->energy, producer->id, world::EnergyReason::ProducerDeath);
-    }
-    return moved;
-}
-
 double Simulation::totalEnergy() const {
-    double total = 0.0;
-    for (const auto& producer : producers_.all()) if (producer && producer->alive()) total += producer->energy.energy;
-    for (const auto& agent : agents_.agents()) if (agent.alive()) total += agent.energy().energy;
-    total += cyanobacteria_.totalEnergy();
-    return total;
-}
-
-double Simulation::meanProducerEnergy() const {
-    double total = 0.0;
-    std::size_t count = 0;
-    for (const auto& producer : producers_.all()) {
-        if (!producer || !producer->alive()) continue;
-        total += producer->energy.energy;
-        ++count;
-    }
-    return count > 0 ? total / static_cast<double>(count) : 0.0;
-}
-
-double Simulation::meanAgentEnergy() const {
-    double total = 0.0;
-    std::size_t count = 0;
-    for (const auto& agent : agents_.agents()) {
-        if (!agent.alive()) continue;
-        total += agent.energy().energy;
-        ++count;
-    }
-    return count > 0 ? total / static_cast<double>(count) : 0.0;
-}
-
-std::vector<double> Simulation::meanGenome() const {
-    std::vector<double> sums;
-    std::vector<std::size_t> counts;
-    for (const auto& agent : agents_.agents()) {
-        if (!agent.alive()) continue;
-        const std::vector<float> genome = agent.policy().genome();
-        if (sums.size() < genome.size()) {
-            sums.resize(genome.size(), 0.0);
-            counts.resize(genome.size(), 0);
-        }
-        for (std::size_t i = 0; i < genome.size(); ++i) {
-            if (!std::isfinite(genome[i])) continue;
-            sums[i] += genome[i];
-            ++counts[i];
-        }
-    }
-    for (std::size_t i = 0; i < sums.size(); ++i) {
-        if (counts[i] > 0) sums[i] /= static_cast<double>(counts[i]);
-    }
-    return sums;
+    return cyanobacteria_.totalEnergy() + colonies_.nucleusEnergy() + colonies_.ballEnergy();
 }
 
 std::uint64_t Simulation::stateHash() const {
@@ -241,66 +153,46 @@ std::uint64_t Simulation::stateHash() const {
     hash = hashBytes(hash, &rng.increment, sizeof(rng.increment));
     hash = hashDouble(hash, rng.cachedNormal);
     hash = hashBytes(hash, &rng.hasCachedNormal, sizeof(rng.hasCachedNormal));
-    // The hash must cover every input that can change a resumed run, not just the entities:
-    // two configurations that diverge after a reload must not share a state hash.
     hashConfig(hash, config_);
-    for (const auto& producer : producers_.all()) {
-        if (!producer || !producer->alive()) continue;
-        hash = hashBytes(hash, &producer->id, sizeof(producer->id));
-        const std::uint8_t kind = static_cast<std::uint8_t>(producer->kind());
-        hash = hashBytes(hash, &kind, sizeof(kind));
-        hash = hashDouble(hash, producer->pos.x);
-        hash = hashDouble(hash, producer->pos.y);
-        hash = hashDouble(hash, producer->energy.energy);
-        hash = hashDouble(hash, producer->energy.cap);
+    for (const auto& node : cyanobacteria_.all()) {
+        if (!node.alive()) continue;
+        hash = hashBytes(hash, &node.id, sizeof(node.id));
+        hash = hashDouble(hash, node.pos.x);
+        hash = hashDouble(hash, node.pos.y);
+        hash = hashDouble(hash, node.energy.energy);
     }
-    for (const auto& agent : agents_.agents()) {
-        if (!agent.alive()) continue;
-        const core::EntityId id = agent.id();
-        hash = hashBytes(hash, &id, sizeof(id));
-        hash = hashDouble(hash, agent.position().x);
-        hash = hashDouble(hash, agent.position().y);
-        hash = hashDouble(hash, agent.velocity().x);
-        hash = hashDouble(hash, agent.velocity().y);
-        hash = hashDouble(hash, agent.energy().energy);
-        hash = hashDouble(hash, agent.energy().cap);
-        const core::Tick age = agent.age();
-        hash = hashBytes(hash, &age, sizeof(age));
-        const decision::PolicySpec spec = agent.policy().spec();
-        hash = hashString(hash, spec.id);
-        hash = hashBytes(hash, &spec.observationVersion, sizeof(spec.observationVersion));
-        hash = hashBytes(hash, &spec.actionVersion, sizeof(spec.actionVersion));
-        hash = hashBytes(hash, &spec.observationDim, sizeof(spec.observationDim));
-        hash = hashBytes(hash, &spec.genomeDim, sizeof(spec.genomeDim));
-        const auto genome = agent.policy().genome();
-        for (float value : genome) { const double d = value; hash = hashDouble(hash, d); }
-        // Opaque policy state is part of the saved snapshot, so it must be part of the hash;
-        // otherwise a stateful policy could reload differently while hashes still agree.
-        std::vector<unsigned char> state;
-        agent.policy().serializeState(state);
-        const std::uint64_t stateSize = static_cast<std::uint64_t>(state.size());
-        hash = hashBytes(hash, &stateSize, sizeof(stateSize));
-        if (!state.empty()) hash = hashBytes(hash, state.data(), state.size());
+    for (const auto& colony : colonies_.colonies()) {
+        if (!colony.nucleus.alive()) continue;
+        const auto& n = colony.nucleus;
+        hash = hashBytes(hash, &n.id, sizeof(n.id));
+        hash = hashDouble(hash, n.pos.x);
+        hash = hashDouble(hash, n.pos.y);
+        hash = hashDouble(hash, n.vel.x);
+        hash = hashDouble(hash, n.vel.y);
+        hash = hashDouble(hash, n.energy.energy);
+        hash = hashDouble(hash, n.params.orbitRadius);
+        hash = hashDouble(hash, n.params.affinity);
+        hash = hashDouble(hash, n.params.maxSpeed);
+        hash = hashDouble(hash, n.params.energyThreshold);
+        hash = hashDouble(hash, n.params.mutationRate);
+        hash = hashDouble(hash, n.params.spotRadius);
     }
-    const std::size_t producerBirths = producers_.births();
-    const std::size_t producerDeaths = producers_.deaths();
-    const std::size_t agentBirths = agents_.births();
-    const std::size_t agentDeaths = agents_.deaths();
-    hash = hashBytes(hash, &producerBirths, sizeof(producerBirths));
-    hash = hashBytes(hash, &producerDeaths, sizeof(producerDeaths));
-    hash = hashBytes(hash, &agentBirths, sizeof(agentBirths));
-    hash = hashBytes(hash, &agentDeaths, sizeof(agentDeaths));
-    const core::EntityId producerNext = producers_.nextId();
-    const core::EntityId agentNext = agents_.nextId();
-    hash = hashBytes(hash, &producerNext, sizeof(producerNext));
-    hash = hashBytes(hash, &agentNext, sizeof(agentNext));
+    for (const auto& ball : colonies_.balls()) {
+        if (!ball.alive()) continue;
+        hash = hashBytes(hash, &ball.id, sizeof(ball.id));
+        hash = hashBytes(hash, &ball.ownerId, sizeof(ball.ownerId));
+        const std::uint8_t type = static_cast<std::uint8_t>(ball.type);
+        hash = hashBytes(hash, &type, sizeof(type));
+        hash = hashDouble(hash, ball.pos.x);
+        hash = hashDouble(hash, ball.pos.y);
+        hash = hashDouble(hash, ball.energy.energy);
+    }
     hash = hashDouble(hash, ledger_.stats().injected);
     hash = hashDouble(hash, ledger_.stats().dissipated);
     hash = hashDouble(hash, ledger_.stats().transferred);
     for (std::size_t i = 0; i < world::kEnergyReasonCount; ++i) {
-        const auto& totals = ledger_.stats().reasons[i];
-        hash = hashDouble(hash, totals.in);
-        hash = hashDouble(hash, totals.out);
+        hash = hashDouble(hash, ledger_.stats().reasons[i].in);
+        hash = hashDouble(hash, ledger_.stats().reasons[i].out);
     }
     hash = hashDouble(hash, totalEnergy());
     return hash;
@@ -308,23 +200,39 @@ std::uint64_t Simulation::stateHash() const {
 
 void Simulation::updateView() {
     view_.bounds = environment_.bounds();
-    view_.producers.clear();
-    view_.agents.clear();
-    view_.producers.reserve(producers_.size());
-    view_.agents.reserve(agents_.size());
-    for (const auto& producer : producers_.all()) {
-        if (!producer || !producer->alive()) continue;
-        view_.producers.push_back({producer->id, producer->pos, producer->energy.energy,
-                                   producer->energy.cap});
+    view_.cyanobacteria.clear();
+    view_.nuclei.clear();
+    view_.balls.clear();
+    for (const auto& node : cyanobacteria_.all()) {
+        if (!node.alive()) continue;
+        view_.cyanobacteria.push_back({node.id, node.pos, node.energy.energy, node.energy.cap});
     }
-    for (const auto& agent : agents_.agents()) {
-        if (!agent.alive()) continue;
-        view_.agents.push_back({agent.id(), agent.position(), agent.energy().energy,
-                                agent.energy().cap, agent.policy().spec().id});
+    for (const auto& colony : colonies_.colonies()) {
+        if (!colony.nucleus.alive()) continue;
+        world::NucleusView nucleus;
+        nucleus.id = colony.nucleus.id;
+        nucleus.position = colony.nucleus.pos;
+        nucleus.velocity = colony.nucleus.vel;
+        nucleus.energy = colony.nucleus.energy.energy;
+        nucleus.cap = colony.nucleus.energy.cap;
+        nucleus.orbitRadius = colony.nucleus.params.orbitRadius;
+        view_.nuclei.push_back(nucleus);
+    }
+    for (const auto& ball : colonies_.balls()) {
+        if (!ball.alive()) continue;
+        world::BallView view;
+        view.id = ball.id;
+        view.ownerId = ball.ownerId;
+        view.type = static_cast<std::uint8_t>(ball.type);
+        view.position = ball.pos;
+        view.energy = ball.energy.energy;
+        view.cap = ball.energy.cap;
+        view_.balls.push_back(view);
     }
     view_.stats.tick = tick_;
-    view_.stats.producers = producers_.aliveCount();
-    view_.stats.agents = agents_.aliveCount();
+    view_.stats.cyanobacteria = cyanobacteria_.aliveCount();
+    view_.stats.nuclei = colonies_.aliveNuclei();
+    view_.stats.balls = colonies_.aliveBalls();
     view_.stats.totalEnergy = totalEnergy();
     view_.stats.injected = ledger_.stats().injected;
     view_.stats.dissipated = ledger_.stats().dissipated;
@@ -333,4 +241,5 @@ void Simulation::updateView() {
     view_.stats.finished = finished_;
     view_.stats.finishReason = finishReason_;
 }
+
 } // namespace sim
