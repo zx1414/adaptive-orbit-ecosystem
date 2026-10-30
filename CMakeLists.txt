@@ -16,6 +16,8 @@ add_library(eco_core STATIC
   src/decision/PolicyRegistry.cpp
   src/decision/RulePolicy.cpp
   src/decision/StubPolicy.cpp
+  src/colony/Colony.cpp
+  src/colony/Orbit.cpp
   src/environment/Cyanobacteria.cpp
   src/world/Energy.cpp
   src/world/Environment.cpp
@@ -52,6 +54,7 @@ target_link_libraries(simulator PRIVATE eco_core)
 add_executable(unit_tests
   tests/unit/main.cpp
   tests/unit/test_energy.cpp
+  tests/unit/test_colony.cpp
   tests/unit/test_environment.cpp
   tests/unit/test_policy.cpp
   tests/unit/test_world.cpp
