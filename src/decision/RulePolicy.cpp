@@ -1,103 +1,103 @@
+﻿// agentsim - decision/RulePolicy.cpp
+// 打分机制（对传感器里 3 个食物候选逐个算分，取最高）：
+//   proximity = s[6+i]            归一化接近度 1-dist/R，越近分越高 —— 吃到食物的期望收益。
+//   alignment = 候选方向 · 当前速度方向（归一化后点积，[-1,1]）
+//                               顺路候选分高、逆路候选分低 —— 减少急转与折返的能量浪费；
+//                               速度近零（刚起步/被阻尼停住）时取 0，即对齐项失效。
+//   urgency   = 1 - clamp(能量代理量)。传感器没有能量维，用 s[12]（速度大小归一化）
+//                               做代理：跑得越慢代理能量越低 -> 越紧急 -> 越愿意牺牲对齐直奔食物。
+//   温度失真（GOAL）：s[16] ∈ [0,1] 为所在点温度失真度。失真越大，感知读数越不可信，
+//   故对 proximity 权重乘以信任因子 (1 - 0.5*s[16])（最多打 5 折），降低"看见什么信什么"
+//   的程度；alignment/urgency 是自身状态项，不依赖读数质量，不打折。
+//   score = wP*(1-0.5*s[16])*proximity + wA*alignment + wU*urgency
+// 全部候选为空（s[6..8] 全 0）时输出 {0,0}，原地等待。
+//
+// R2 新维消费：s[18..20] 携带最近邻核信息（距离/方向），s[21..23] 是能量与可施力
+// 球通道。本策略【不消费】targets（不点名施力），也【不做】mod 调制——贪手机会
+// 主义者没有合作性行为。唯一的 R2 行为是"拥挤让速"：邻居贴近时降低 sprint 意愿，
+// 减少与同类争抢同一目标；s[19]==0 && s[20]==0 是感知层"无邻居"哨兵，此通道静默时
+// 输出与旧版逐位一致（回归安全，既有单测守护）。
+// 纯确定性算术，绝不使用任何 RNG（红队检查项）。
 #include "decision/RulePolicy.h"
-#include "core/Math.h"
-#include <algorithm>
-#include <cmath>
 
-namespace decision {
-namespace {
-float finiteOr(float value, float fallback) { return std::isfinite(value) ? value : fallback; }
-} // namespace
+namespace agentsim {
 
-RulePolicy::RulePolicy() {
-    genes_ = {{0.22f, 0.70f, 0.55f, 0.30f, 0.45f, 0.50f}};
-}
-PolicySpec RulePolicy::spec() const {
-    return {"rule", kObservationVersion, Observation::kDim, 2,
-            static_cast<std::uint32_t>(GeneCount)};
-}
-void RulePolicy::setGene(std::size_t index, float value) {
-    if (index < genes_.size()) genes_[index] = std::clamp(finiteOr(value, 0.0f), 0.0f, 1.0f);
-}
-std::unique_ptr<IPolicy> RulePolicy::clone() const {
-    auto copy = std::make_unique<RulePolicy>();
-    copy->genes_ = genes_;
-    return copy;
-}
-std::vector<float> RulePolicy::genome() const { return {genes_.begin(), genes_.end()}; }
-void RulePolicy::setGenome(const float* data, std::size_t size) {
-    if (!data) return;
-    for (std::size_t i = 0; i < genes_.size() && i < size; ++i) setGene(i, data[i]);
-}
-void RulePolicy::mutate(core::Random& random, float rate) {
-    const float safeRate = std::clamp(finiteOr(rate, 0.0f), 0.0f, 1.0f);
-    for (float& value : genes_) {
-        const float delta = static_cast<float>(random.normal(0.0, safeRate));
-        value = std::clamp(value + delta, 0.0f, 1.0f);
+RulePolicy::RulePolicy(double wProximity, double wAlignment, double wUrgency)
+    : wP_(wProximity), wA_(wAlignment), wU_(wUrgency) {}
+
+ActionVector RulePolicy::decide(const SensorVector& s, const TargetList& /*targets*/) {
+    ActionVector a;
+
+    // 三个候选是否有效：s[6..8] 任一 > 0 表示该槽位有真实食物。
+    bool any = false;
+    for (int i = 0; i < 3; ++i) {
+        if (s[6 + i] > 0.0) { any = true; break; }
     }
-}
-
-Action RulePolicy::decide(const Observation& observation) {
-    Action action;
-    if (observation.version != kObservationVersion) return action;
-
-    const float energyRatio = std::clamp(finiteOr(observation[obs::EnergyRatio], 0.0f), 0.0f, 1.0f);
-    const float preyX = observation[obs::Prey0];
-    const float preyY = observation[obs::Prey0 + 1];
-    const float preyDistance = observation[obs::Prey0 + 2];
-    const bool hasPrey = std::isfinite(preyDistance) && preyDistance >= 0.0f;
-    const float rivalX = observation[obs::Rival0];
-    const float rivalY = observation[obs::Rival0 + 1];
-    const float rivalDistance = observation[obs::Rival0 + 2];
-    const bool hasRival = std::isfinite(rivalDistance) && rivalDistance >= 0.0f;
-    const float resourceBalls =
-        std::clamp(finiteOr(observation[obs::ResourceBalls], 0.0f), 0.0f, 1.0f);
-
-    // Eating a reachable prey always beats resting: otherwise a starving nucleus with food in
-    // reach would conserve itself to death. The threshold is normalized by spotRadius, matching
-    // the unit the observation reports, and the behaviour layer converts it back with the same
-    // factor, so the two layers cannot disagree about "close enough".
-    const float harvestThreshold = std::clamp(0.02f + genes_[HarvestBias] * 0.20f, 0.02f, 0.35f);
-    if (hasPrey && preyDistance <= harvestThreshold) {
-        action.kind = Action::Kind::Harvest;
-        action.dirX = preyX;
-        action.dirY = preyY;
-        action.magnitude = 1.0f;
-        return action;
+    if (!any) {
+        return a; // 全 0：原地等待
     }
 
-    // Hungry with nothing in reach: hunt rather than idle, since resting cannot gain energy.
-    if (energyRatio < genes_[RestBelow] && !hasPrey) {
-        action.kind = Action::Kind::Rest;
-        action.magnitude = 0.0f;
-        return action;
+    // 紧迫度：传感器无能量维，用 s[12]（速度大小归一化，[0,1)）做能量代理。
+    // clamp 到 [0,1] 防御异常输入；越慢 -> 越紧急。
+    double energyProxy = s[12];
+    if (energyProxy < 0.0) energyProxy = 0.0;
+    if (energyProxy > 1.0) energyProxy = 1.0;
+    const double urgency = 1.0 - energyProxy;
+
+    // 当前航向：s[10..11] = vel/(1+speed)，模长恰为 s[12]，
+    // 故 s[12] > 0 时除以它即得单位航向；s[12] 近零时对齐项整体失效（取 0）。
+    const double hx = (s[12] > 1e-9) ? s[10] / s[12] : 0.0;
+    const double hy = (s[12] > 1e-9) ? s[11] / s[12] : 0.0;
+
+    double bestScore = 0.0;
+    double bestX = 0.0;
+    double bestY = 0.0;
+    bool first = true;
+
+    for (int i = 0; i < 3; ++i) {
+        if (s[6 + i] <= 0.0) continue; // 空槽位跳过
+        const double dx = s[2 * i + 0];      // 候选方向（已是单位向量）
+        const double dy = s[2 * i + 1];
+        const double proximity = s[6 + i];
+        // 候选方向与航向直接点积；无航向时对齐项取 0。
+        const double alignment = (s[12] > 1e-9) ? (dx * hx + dy * hy) : 0.0;
+        // GOAL：温度失真大 -> 降低对当前感知的信任（只消费 s[16] 标量，不碰环境层）。
+        // 防御性 clamp：契约保证 s[16] ∈ [0,1]，异常输入也不产生负权重。
+        double d = s[16];
+        if (d < 0.0) d = 0.0;
+        if (d > 1.0) d = 1.0;
+        const double trust = 1.0 - 0.5 * d;
+        const double score = wP_ * trust * proximity + wA_ * alignment + wU_ * urgency;
+        if (first || score > bestScore) {
+            first = false;
+            bestScore = score;
+            bestX = dx;
+            bestY = dy;
+        }
     }
 
-    // Invest in storage when carrying surplus with nowhere to put it.
-    if (energyRatio > 0.6f && resourceBalls < genes_[StoreBias] * 4.0f && !hasPrey) {
-        action.kind = Action::Kind::DeployBall;
-        action.magnitude = 1.0f;
-        return action;
-    }
+    a.dirX = bestX;
+    a.dirY = bestY;
+    // 冲刺意愿与紧迫度挂钩：越紧急越冲。
+    a.boost = urgency;
 
-    core::Vec2 direction{};
-    if (hasPrey) {
-        direction = core::Vec2(preyX, preyY);
-    } else {
-        const double angle = static_cast<double>(genes_[WanderBias]) * 6.28318530717958647692;
-        direction = {std::cos(angle), std::sin(angle)};
+    // R2 拥挤让速：邻居贴近（s[18] 归一化距离小）时压低 sprint 意愿。
+    // 归一化因子 0.5 + 0.5*s[18] ∈ [0.5,1]：完全贴脸 -> 半速，视野外 -> 无影响。
+    // 哨兵先行：s[19]==0 && s[20]==0 表示感知层判定无邻居，通道静默不打折。
+    // NaN 防御：s[18] 非正（含 NaN）按完全拥挤处理（保守让速，不传播 NaN）。
+    if (s[19] != 0.0 || s[20] != 0.0) {
+        double sr = s[18];
+        if (!(sr > 0.0)) sr = 0.0;
+        if (sr > 1.0) sr = 1.0;
+        a.boost *= 0.5 + 0.5 * sr;
     }
-
-    core::Vec2 normalized = core::Math::unit(direction);
-    if (hasRival && rivalDistance < 0.12f) {
-        const core::Vec2 away = core::Math::unit(core::Vec2(-rivalX, -rivalY));
-        normalized += away * static_cast<double>(genes_[RivalAvoid] * (1.0f - rivalDistance / 0.12f));
-    }
-    normalized = core::Math::unit(normalized);
-    action.kind = Action::Kind::Move;
-    action.dirX = static_cast<float>(normalized.x);
-    action.dirY = static_cast<float>(normalized.y);
-    action.magnitude = std::clamp(genes_[SpeedPreference], 0.0f, 1.0f);
-    return action;
+    return a;
 }
 
-} // namespace decision
+// Stub：两参接口下依然是"绝对不作为"。默认保守（forceSlot=-1、mod 全 0）由
+// ActionVector 默认成员给出，构造临时对象即契约。
+ActionVector StubPolicy::decide(const SensorVector& /*sensors*/, const TargetList& /*targets*/) {
+    return {};
+}
+
+} // namespace agentsim

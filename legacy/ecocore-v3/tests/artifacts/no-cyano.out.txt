@@ -1,0 +1,1 @@
+done tick=2571 cyanobacteria=0 nuclei=0 balls=36 total_energy=0 injected=360 dissipated=360 transferred=0 audit=ok policy=rule reason=所有核已死亡

@@ -1,0 +1,1 @@
+done tick=10 cyanobacteria=368 nuclei=12 balls=36 total_energy=4280.638221 injected=4411.24296 dissipated=130.6047394 transferred=236.4859048 audit=ok policy=rule reason=达到最大 tick

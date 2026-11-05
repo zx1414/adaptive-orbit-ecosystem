@@ -1,23 +1,54 @@
-param([ValidateSet('Debug', 'Release')][string]$Configuration = 'Release')
-$ErrorActionPreference = 'Stop'
-$root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-Set-Location -LiteralPath $root
-New-Item -ItemType Directory -Force -Path 'build/obj','build/test-obj' | Out-Null
-$vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
-if (-not (Test-Path -LiteralPath $vswhere)) { throw 'Visual Studio Installer not found.' }
-$vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
-if (-not $vs) { throw 'MSVC x64 toolchain not found.' }
-$vcvars = Join-Path $vs 'VC/Auxiliary/Build/vcvars64.bat'
-if (-not (Test-Path -LiteralPath $vcvars)) { throw 'vcvars64.bat not found.' }
-$sources = Get-ChildItem -LiteralPath 'src' -Filter '*.cpp' -Recurse | Where-Object { $_.FullName -notlike '*\app\*' } | ForEach-Object { $_.FullName.Substring($root.Length + 1) }
-$appSources = Get-ChildItem -LiteralPath 'src/app' -Filter '*.cpp' | ForEach-Object { $_.FullName.Substring($root.Length + 1) }
-$testSources = Get-ChildItem -LiteralPath 'tests/unit' -Filter '*.cpp' | ForEach-Object { $_.FullName.Substring($root.Length + 1) }
-if ($sources.Count -eq 0 -or $appSources.Count -eq 0) { throw 'src sources are incomplete.' }
-$flags = @('/std:c++17','/EHsc','/W4','/WX','/permissive-','/utf-8','/nologo','/fp:precise')
-if ($Configuration -eq 'Debug') { $flags += @('/Od','/Zi','/RTC1') } else { $flags += @('/O2','/DNDEBUG') }
-@($flags) + @('/Isrc','/I.','/Febuild\simulator.exe','/Fobuild\obj\') + $sources + $appSources | Set-Content -LiteralPath 'build/simulator.rsp' -Encoding ascii
-@($flags) + @('/Isrc','/I.','/Febuild\unit_tests.exe','/Fobuild\test-obj\') + $sources + $testSources | Set-Content -LiteralPath 'build/unit_tests.rsp' -Encoding ascii
-$cmd = 'call "' + $vcvars + '" >nul && cl @build\simulator.rsp && cl @build\unit_tests.rsp'
-& cmd.exe /d /s /c $cmd
-if ($LASTEXITCODE -ne 0) { throw "Build failed: $LASTEXITCODE" }
-Write-Host 'Built build/simulator.exe and build/unit_tests.exe.'
+# agentsim - tools/build.ps1 : build agentsim.exe (+ unit_tests.exe if tests exist).
+$ErrorActionPreference = "Stop"
+$root = Split-Path -Parent $PSScriptRoot
+Set-Location $root
+
+$vcvars = "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat"
+if (-not (Test-Path $vcvars)) { Write-Error "vcvars64.bat not found"; exit 1 }
+Write-Host "vcvars: $vcvars"
+
+New-Item -ItemType Directory -Force -Path "$root\build" | Out-Null
+
+$cpps = Get-ChildItem -Path "$root\src" -Recurse -Filter *.cpp |
+    ForEach-Object { $_.FullName.Substring($root.Length + 1) }
+$libCpps = $cpps | Where-Object { $_ -notmatch "^src\\app\\" }
+if (-not $cpps) { Write-Error "no .cpp under src"; exit 1 }
+
+$flagList = @("/nologo","/std:c++17","/W4","/WX","/EHsc","/permissive-","/utf-8","/I","src","/DAGENTSIM_HAS_GENOME=1")
+$clArgs = $flagList -join " "
+Write-Host "flags: $clArgs"
+
+$rspMain = Join-Path $root "build\\sources.rsp"
+$exeMain = Join-Path $root "build\\agentsim.exe"
+$objDir  = Join-Path $root "build\\"
+$cpps | Set-Content -Path $rspMain -Encoding ascii
+
+$cmd = "call `"$vcvars`" >nul && cl $clArgs `"@$rspMain`" /Fe:`"$exeMain`" /Fo:`"$objDir`""
+Write-Host "cl agentsim.exe ..."
+cmd /c $cmd
+if ($LASTEXITCODE -ne 0) { Write-Error "cl failed for agentsim.exe (exit $LASTEXITCODE)"; exit $LASTEXITCODE }
+
+if (Test-Path "$root\tests\unit") {
+    $testCpps = Get-ChildItem -Path "$root\tests\unit" -Filter *.cpp |
+        ForEach-Object { $_.FullName.Substring($root.Length + 1) }
+    if ($testCpps.Count -gt 0) {
+        $rspTest = Join-Path $root "build\\tests.rsp"
+        $exeTest = Join-Path $root "build\\unit_tests.exe"
+        ($testCpps + $libCpps) | Set-Content -Path $rspTest -Encoding ascii
+        $cmd2 = "call `"$vcvars`" >nul && cl $clArgs `"@$rspTest`" /Fe:`"$exeTest`" /Fo:`"$objDir`""
+        Write-Host "cl unit_tests.exe ..."
+        cmd /c $cmd2
+        if ($LASTEXITCODE -ne 0) { Write-Error "cl failed for unit_tests.exe"; exit $LASTEXITCODE }
+    }
+}
+
+# R10: no-console launcher (WinMain shell; separate subsystem, never joins sources.rsp)
+$launcherSrc = Join-Path $root "src\app\Launcher.cpp"
+if (Test-Path $launcherSrc) {
+    New-Item -ItemType Directory -Force -Path "$root\build\obj_launcher" | Out-Null
+    $cmdL = "call `"$vcvars`" >nul && cl /nologo /std:c++17 /W4 /WX /EHsc /permissive- /utf-8 /Fe:`"$root\build\agentsimw.exe`" /Fo:`"$root\build\obj_launcher\launcher.obj`" `"$launcherSrc`" /link /SUBSYSTEM:WINDOWS"
+    cmd /c $cmdL
+    if ($LASTEXITCODE -ne 0) { Write-Error "cl failed for agentsimw.exe"; exit $LASTEXITCODE }
+}
+Write-Host "build OK"
+exit 0

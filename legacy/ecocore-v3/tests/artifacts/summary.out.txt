@@ -1,0 +1,10 @@
+done tick=200 cyanobacteria=59 nuclei=10 balls=51 total_energy=1580.964409 injected=4916.749183 dissipated=3335.784774 transferred=1659.771433 audit=ok policy=rule reason=达到最大 tick
+energy summary:
+  INITIAL_ENDOWMENT in=4360 out=0
+  PHOTOSYNTHESIS in=556.749183 out=0
+  CYANO_METABOLISM in=0 out=206.38
+  CYANO_DEATH in=0 out=1997.623733
+  BALL_CHARGE in=0 out=180
+  NUCLEUS_METABOLISM in=0 out=21.56
+  NUCLEUS_MOVE in=0 out=930.2210407
+  NUCLEUS_PREY in=1659.771433 out=1659.771433

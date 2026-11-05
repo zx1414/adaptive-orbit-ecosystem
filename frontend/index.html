@@ -1,118 +1,288 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>EcoScope · EcoCore v3 可视化</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='13' fill='none' stroke='%2348dc80' stroke-width='2.5'/%3E%3Ccircle cx='22' cy='11' r='4' fill='%23ffa656'/%3E%3C/svg%3E">
+<title>Agentsim · 自适应环绕核生态模拟</title>
 <link rel="stylesheet" href="assets/styles.css">
-<script src="js/demo-data.js"></script>
-<script src="js/trace-parser.js"></script>
-<script src="js/daylight.js"></script>
-<script src="js/state.js"></script>
-<script src="js/charts.js"></script>
-<script src="js/renderer.js"></script>
 </head>
 <body>
+<!--BUILD_STAMP-->
 <div class="aurora" aria-hidden="true"><i></i><i></i><i></i></div>
 
-<header class="topbar">
-  <div class="brand">
-    <svg class="logo" viewBox="0 0 32 32" aria-hidden="true">
-      <defs><linearGradient id="lg" x1="0" y1="0" x2="1" y2="1">
-        <stop offset="0" stop-color="#48dc80"/><stop offset="1" stop-color="#ffa656"/>
-      </linearGradient></defs>
-      <circle cx="16" cy="16" r="12.5" fill="none" stroke="url(#lg)" stroke-width="2"/>
-      <circle cx="21.5" cy="10.5" r="3.6" fill="#ffa656"/>
-      <circle cx="11" cy="20" r="2.4" fill="#48dc80"/>
-    </svg>
-    <h1>EcoScope</h1>
-    <span class="badge">EcoCore v3</span>
-    <span class="badge ghost" id="trace-name">未加载</span>
+<header class="topbar glass">
+  <div class="brand" id="brandHome" role="button" tabindex="0" title="回到菜单页">
+    <span class="logo-dot"></span>
+    <div class="brand-text">
+      <h1>Agentsim <em>自适应环绕核生态模拟</em></h1>
+      <p class="chips mono" id="metaChips">正在探测本地服务…</p>
+    </div>
   </div>
-  <div class="actions">
-    <button class="btn" id="btn-open" type="button">打开轨迹…</button>
-    <button class="btn primary" id="btn-demo" type="button">内置示例</button>
-    <input type="file" id="file-input" accept=".html,.json" hidden>
+  <nav class="navbtns" id="navBtns" aria-label="页面导航">
+    <button type="button" class="navbtn active" data-page="menu">菜单</button>
+    <button type="button" class="navbtn" data-page="run">运行</button>
+    <button type="button" class="navbtn" data-page="params">参数</button>
+    <button type="button" class="navbtn" data-page="saves">存档</button>
+  </nav>
+  <div class="topbar-actions">
+    <input type="file" id="fileInput" accept=".json,application/json" hidden>
+    <button class="btn" id="loadBtn" type="button" title="载入轨迹 JSON 文件（V3 契约，兼容 V2）">📂 载入轨迹</button>
   </div>
 </header>
 
-<main class="app">
-  <section class="stage glass" id="stage">
-    <canvas id="world"></canvas>
-    <div class="stage-hud">
-      <span class="chip" id="hud-tick">tick —</span>
-      <span class="chip" id="hud-frame">frame —</span>
-      <span class="chip" id="hud-fps">fps —</span>
-      <span class="chip" id="hud-day">day —</span>
+<!-- ═══════════════ 菜单页（R6-D：两卡 · demo 降级为离线兜底小链接）═══════════════ -->
+<main class="page active" id="page-menu">
+  <div class="offline-banner mono hidden" id="offlineBanner">⚠ 未检测到本地服务——运行
+    <code>build\agentsim.exe --serve 8080</code> 后刷新；或用<button type="button" class="demo-link" id="menuDemoLink">离线演示</button>兜底。
+  </div>
+  <section class="menu-hero">
+    <div class="menu-box glass">
+      <h1 class="menu-title">自适应环绕核<span>生态模拟</span></h1>
+      <p class="menu-sub">实时模拟 · 存档同文件夹管理 · 检查点进度条回放 · 能量审计实时可见</p>
+      <p class="chips mono" id="menuChips">正在探测本地服务…</p>
+
+      <div class="menu-cards">
+        <section class="menu-card glass" id="cardLive">
+          <h2>① 实时开新局</h2>
+          <div class="field-grid">
+            <label class="field"><span>Seed</span>
+              <input type="text" id="menuSeed" class="mono" value="42" inputmode="numeric" placeholder="任意整数">
+            </label>
+            <label class="field"><span>初始核数</span>
+              <input type="number" id="menuNuclei" class="mono" value="12" min="1" max="24" step="1">
+            </label>
+            <label class="field"><span>初始蓝细菌节点数</span>
+              <input type="number" id="menuCyano" class="mono" value="48" min="4" max="120" step="1">
+            </label>
+            <label class="field"><span>总帧数（仅离线兜底用）</span>
+              <input type="number" id="menuFrames" class="mono" value="300" min="20" max="600" step="10">
+            </label>
+            <label class="field"><span>帧率上限（0=不限帧）</span>
+              <input type="number" id="menuFps" class="mono" value="60" min="0" max="240" step="5">
+            </label>
+            <label class="field"><span>决策策略</span>
+              <select id="menuPolicy">
+                <option value="rule">规则（默认保守）</option>
+                <option value="thermal">热感知</option>
+                <option value="hysteresis">迟滞</option>
+                <option value="foragebank">觅食储蓄</option>
+                <option value="bandit">多臂老虎机</option>
+                <option value="riskaverse">风险规避</option>
+                <option value="perceptron">感知机</option>
+              </select>
+            </label>
+            <label class="field field-check"><span>自动存档</span>
+              <input type="checkbox" id="menuAutosave" checked>
+            </label>
+          </div>
+          <div class="menu-btns">
+            <button class="btn-hero" id="menuStart" type="button">▶ 开始模拟</button>
+            <button class="btn-ghost btn-mini" id="menuParams" type="button">⚙ 参数预设</button>
+          </div>
+          <p class="menu-note mono">勾选自动存档：开局即存 <b>auto-&lt;seed&gt;-&lt;时间戳&gt;</b>；总帧数到 200 后自动打检查点，进度条可回放。</p>
+        </section>
+        <section class="menu-card glass" id="cardSaves">
+          <h2>② 载入存档</h2>
+          <p class="menu-note mono">存档统一在 <b>saves\</b> 文件夹：行内重命名 · 删除 · 分析（抽 20 个检查点出四曲线）· 从存档帧继续。</p>
+          <div class="menu-btns">
+            <button class="btn-hero" id="menuLoad" type="button">🗂 存档管理</button>
+          </div>
+          <p class="menu-note mono">有存档（攒够检查点）即可在运行页拖进度条回放任意帧。</p>
+        </section>
+      </div>
+
+      <p class="menu-note mono">提示：滚轮缩放 · 拖拽平移 · 悬停核查看 24 个基因组参数 · 点按核可跟随 ·
+        空格播放/暂停 · ←/→ 单步 · R 复位视角 · F 影院模式 · H 折叠状态栏</p>
     </div>
-    <div class="empty-state" id="empty-state">
-      <div class="empty-mark">EcoScope</div>
-      <p>把模拟器输出的 trace <b>.html</b> / <b>.json</b> 拖进窗口，<br>或点击右上角「内置示例」观看真实模拟回放。</p>
-      <p class="hint">绿点 = 生产者 · 橙点 = Agent · 亮度 = 能量占比 · 背景随昼夜周期变化</p>
-    </div>
-    <div class="dropzone" id="dropzone">松开以载入轨迹</div>
   </section>
-
-  <aside class="panel" id="panel">
-    <section class="card glass">
-      <h2>回放</h2>
-      <div class="transport">
-        <button class="btn icon" id="btn-step-back" title="上一帧 (←)">⏮</button>
-        <button class="btn primary icon big" id="btn-play" title="播放/暂停 (空格)">▶</button>
-        <button class="btn icon" id="btn-step-fwd" title="下一帧 (→)">⏭</button>
-        <select id="speed" class="select" title="播放速度">
-          <option value="0.5">0.5×</option>
-          <option value="1" selected>1×</option>
-          <option value="2">2×</option>
-          <option value="4">4×</option>
-          <option value="8">8×</option>
-        </select>
-        <label class="toggle"><input type="checkbox" id="opt-loop" checked><span>循环</span></label>
-      </div>
-      <input type="range" id="timeline" class="timeline" min="0" max="0" value="0" step="1">
-      <div class="time-row"><span id="time-now">—</span><span id="time-total">—</span></div>
-    </section>
-
-    <section class="card glass">
-      <h2>实时指标</h2>
-      <div class="stats">
-        <div class="stat"><b data-stat="producers">—</b><span>生产者</span></div>
-        <div class="stat"><b data-stat="agents">—</b><span>Agent</span></div>
-        <div class="stat"><b data-stat="energy">—</b><span>总能量</span></div>
-        <div class="stat"><b data-stat="daylight">—</b><span>日照强度</span></div>
-      </div>
-    </section>
-
-    <section class="card glass">
-      <h2>种群</h2>
-      <canvas id="chart-pop" height="120"></canvas>
-    </section>
-    <section class="card glass">
-      <h2>总能量</h2>
-      <canvas id="chart-energy" height="120"></canvas>
-    </section>
-
-    <section class="card glass">
-      <h2>渲染</h2>
-      <div class="opt-row"><label>辉光</label><input type="range" id="opt-bloom" min="0" max="1" step="0.05" value="0.7"><b id="val-bloom">0.70</b></div>
-      <div class="opt-row"><label>拖尾</label><input type="range" id="opt-trails" min="0" max="10" step="1" value="5"><b id="val-trails">5</b></div>
-      <div class="opt-row"><label>体型</label><input type="range" id="opt-scale" min="0.5" max="2" step="0.1" value="1"><b id="val-scale">1.0</b></div>
-      <div class="opt-row"><label>昼夜背景</label><input type="checkbox" id="opt-daynight" checked><b></b></div>
-      <div class="opt-row">
-        <button class="btn small" id="btn-reset-view" type="button">重置视角 (R)</button>
-        <button class="btn small" id="btn-cinema" type="button">影院模式 (F)</button>
-      </div>
-    </section>
-  </aside>
 </main>
 
-<footer class="foot">
-  <span>空格 播放/暂停 · ←/→ 单帧 · Home/End 首尾 · 滚轮缩放 · 拖拽平移 · F 影院模式</span>
-  <span class="dim">frontend/ 独立展示层 · 只读 trace 契约 · 零依赖</span>
-</footer>
+<!-- ═══════════════ 运行页 ═══════════════ -->
+<main class="page" id="page-run">
+  <div class="runwrap">
+    <div class="runmain">
+      <section class="stage glass" id="stageWrap">
+        <canvas id="stage"></canvas>
+        <div class="hud mono" id="hud">等待轨迹…</div>
+        <div class="legend mono">
+          <span><i class="sw nuc"></i>核（色相=血统）</span>
+          <span><i class="sw ball-res"></i>资源球</span>
+          <span><i class="sw ball-scout"></i>侦察球</span>
+          <span><i class="sw ball-shield"></i>护盾球</span>
+          <span><i class="sw ball-free"></i>自由球</span>
+          <span><i class="sw cyano"></i>蓝细菌（=食物）</span>
+          <span><i class="sw link"></i>能量连线</span>
+          <span><i class="sw force"></i>施力脉冲</span>
+        </div>
+        <div class="viewhint mono">滚轮缩放 · 拖拽平移 · 悬停核看基因 · R 复位 · F 影院 · H 折叠状态栏</div>
+        <div class="dropcover" id="dropCover"><div>松开以载入轨迹 JSON（schemaVersion 3，兼容 2）</div></div>
+        <div class="tip glass" id="tip"></div>
+        <div class="replay-badge mono hidden" id="replayBadge"></div>
+        <div class="analysis-panel glass" id="analysisPanel">
+          <div class="analysis-head">
+            <h3>📈 存档分析 <span class="chips mono" id="analysisMeta">—</span></h3>
+            <div class="analysis-tools"><span class="mono" id="analysisProgress"></span>
+              <button class="btn btn-mini" id="btnAnalysisClose" type="button">✕ 关闭</button></div>
+          </div>
+          <div class="analysis-grid">
+            <div class="chartbox"><canvas id="chartAnPop"></canvas><div class="chart-cap mono"><i class="dot" style="background:#5ad1ff"></i>核<i class="dot" style="background:#48dc80"></i>蓝细菌</div></div>
+            <div class="chartbox"><canvas id="chartAnCyano"></canvas><div class="chart-cap mono"><i class="dot" style="background:#48dc80"></i>蓝细菌能量</div></div>
+            <div class="chartbox"><canvas id="chartAnEnergy"></canvas><div class="chart-cap mono"><i class="dot" style="background:#ffa656"></i>总能量</div></div>
+            <div class="chartbox"><canvas id="chartAnHue"></canvas><div class="chart-cap mono"><i class="dot" style="background:#c792ff"></i>hue 圆标准差（谱系多样性）</div></div>
+          </div>
+          <div id="criteriaCard" class="criteria-card"></div>
+        </div>
+      </section>
 
-<div class="toast" id="toast" role="status"></div>
+      <aside class="status glass" id="statusBar">
+        <div class="status-head">
+          <h2>实时状态</h2>
+          <button class="btn btn-mini" id="btnStatus" type="button" title="折叠状态栏 (H)">⇥</button>
+        </div>
+        <div class="metrics" id="metrics">—</div>
+        <h2 class="gap-top">曲线</h2>
+        <div class="chartbox">
+          <canvas id="chartPop"></canvas>
+          <div class="chart-cap mono"><i class="dot" style="background:#5ad1ff"></i>核<i class="dot" style="background:#48dc80"></i>蓝细菌</div>
+        </div>
+        <div class="chartbox">
+          <canvas id="chartCyano"></canvas>
+          <div class="chart-cap mono"><i class="dot" style="background:#48dc80"></i>蓝细菌能量</div>
+        </div>
+        <div class="chartbox">
+          <canvas id="chartEnergy"></canvas>
+          <div class="chart-cap mono"><i class="dot" style="background:#ffa656"></i>总能量</div>
+        </div>
+        <div class="chartbox">
+          <canvas id="chartAudit"></canvas>
+          <div class="chart-cap mono"><i class="dot" style="background:#ff6b81"></i>|注入−耗散−存量| 应恒≈0</div>
+        </div>
+        <div class="chartbox chartbox-tall">
+          <canvas id="chartScatter"></canvas>
+          <div class="chart-cap mono"><i class="dot" style="background:#c792ff"></i>基因散点：X=maxSpeed · Y=energyThreshold · 点=核 · 颜色=血统 hue（悬停看 24 基因）</div>
+        </div>
+        <div class="chartbox">
+          <canvas id="chartHue"></canvas>
+          <div class="chart-cap mono"><i class="dot" style="background:#c792ff"></i>谱系多样性（hue 圆标准差，>30° 即分化）<i class="dot" style="background:#48dc80"></i>蓝细菌色相多样性</div>
+        </div>
+        <label class="lgtoggle" title="昼夜天空循环（相位 = tick / 200）">
+          <input type="checkbox" id="dayNightToggle" checked>昼夜天空
+        </label>
+        <ul class="keys">
+          <li><kbd>空格</kbd> 播放/暂停　<kbd>←</kbd><kbd>→</kbd> 单步（Shift ×10）</li>
+          <li><kbd>R</kbd> 复位视角　<kbd>F</kbd> 影院　<kbd>H</kbd> 折叠本栏</li>
+          <li><kbd>L</kbd> 循环　<kbd>Esc</kbd> 返回/退出</li>
+        </ul>
+      </aside>
+    </div>
+
+    <!-- 时间轴 + 播放控制（R6-D：进度条 = 检查点回放，刻度画 checkpoints）-->
+    <div class="tl-row glass">
+      <div class="transport">
+        <button class="btn" id="btnFirst" type="button" title="首帧 (Home)">⏮</button>
+        <button class="btn" id="btnPrev" type="button" title="上一帧 (←)">◂</button>
+        <button class="btn btn-play" id="btnPlay" type="button" title="播放/暂停 (空格)">▶</button>
+        <button class="btn" id="btnNext" type="button" title="下一帧 (→)">▸</button>
+        <button class="btn" id="btnLast" type="button" title="末帧 (End)">⏭</button>
+      </div>
+      <div class="tl-wrap" id="tlWrap">
+        <input type="range" id="timeline" min="0" max="0" value="0" step="1" aria-label="时间轴（可拖动回放检查点）">
+        <div class="tl-ticks mono" id="tlTicks" aria-hidden="true"></div>
+      </div>
+      <div class="tl-labels mono"><span id="tlCur">t 0</span><span id="tlMax">/ 0</span></div>
+      <span class="tl-hint mono hidden" id="tlHint"></span>
+      <div class="seg" id="speedSeg" role="group" aria-label="播放速度">
+        <button type="button" data-v="0.5">0.5×</button>
+        <button type="button" data-v="1" class="active">1×</button>
+        <button type="button" data-v="2">2×</button>
+        <button type="button" data-v="4">4×</button>
+        <button type="button" data-v="8">8×</button>
+      </div>
+      <button class="btn btn-toggle active" id="btnLoop" type="button" title="循环播放 (L)">⟲ 循环</button>
+      <button class="btn" id="btnStops" type="button" title="全部停止">⏹ 停止</button>
+      <button class="btn btn-mini" id="btnAnalyze" type="button" title="暂停并抽 20 个检查点采样出图（核/蓝细菌/能量/hue 多样性）">📈 分析</button>
+    </div>
+
+    <!-- 底部环境调控条 -->
+    <div class="toolbar glass" id="envToolbar">
+      <div class="env-axes" id="envAxes"><!-- 四轴五档由 main.js 生成 --></div>
+      <div class="env-events">
+        <span class="ev-title mono">事件卡</span>
+        <button class="evbtn" id="btnWinter" type="button" title="光照骤降 · 代谢上升">❄ 寒冬</button>
+        <button class="evbtn" id="btnBloom" type="button" title="光合倍增 · 蓝细菌爆发">🌱 藻华</button>
+        <button class="evbtn" id="btnHarvest" type="button" title="立即注入一批能量">🌾 收获</button>
+        <button class="evbtn" id="btnPlague" type="button" title="蓝细菌批量凋亡">☠ 瘟疫</button>
+      </div>
+      <div class="envside">
+        <button class="btn btn-mini" id="btnPresetStable" type="button" title="四轴回中性">⚖ 稳定态</button>
+        <button class="btn btn-mini" id="btnPresetFrenzy" type="button" title="光足压低：疯长">🔥 疯长态</button>
+        <button class="btn btn-mini" id="btnPresetBarren" type="button" title="光灭压高：荒芜">🪨 荒芜态</button>
+        <button class="btn btn-mini" id="btnCyanoToggle" type="button" title="蓝细菌子系统开关（免费）">🧪 蓝细菌：开</button>
+        <button class="btn btn-mini" id="btnToggleDrawer" type="button" title="展开细调抽屉">⌃ 细调</button>
+        <button class="btn btn-mini" id="btnRunParams" type="button" title="打开参数页">⚙ 参数</button>
+        <button class="btn btn-mini" id="btnNewSave" type="button" title="POST /save 存为快照（saves\ 文件夹可见）">⬤ 存为快照</button>
+        <button class="btn btn-mini" id="btnStopRun" type="button" title="暂停并写断点">⏸ 存断点</button>
+        <button class="btn btn-mini" id="btnResetRun" type="button" title="同一 seed 重放">↺ 复位</button>
+      </div>
+      <div class="drawer glass" id="drawer">
+        <div class="drawer-inner">
+          <h3>细调抽屉</h3>
+          <p class="mono env-desc" id="envDesc">—</p>
+          <p class="mono env-hint" id="envHint">—</p>
+          <p class="mono">全部调控 <b>免费、无限、立即生效</b>，不限次数。
+             数值级细调（≈40 键）请进 <b>⚙ 参数</b> 页；本抽屉展示当前四轴档位与干预计数。</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<!-- ═══════════════ 参数页 ═══════════════ -->
+<main class="page" id="page-params">
+  <section class="param-wrap glass">
+    <div class="param-head">
+      <h2>参数预设 <span class="chips mono">演示 schema · 范围校验 · 改动立即标黄</span></h2>
+      <div class="param-tools">
+        <input type="search" id="paramSearch" class="mono" placeholder="筛选参数键…" aria-label="搜索参数">
+        <button class="btn" id="btnParamReset" type="button" disabled>↺ 恢复默认</button>
+        <button class="btn" id="btnParamDefaults" type="button" title="真实后端接 POST /save-config">💾 保存为默认</button>
+        <button class="btn" id="btnParamBack" type="button">← 返回</button>
+      </div>
+    </div>
+    <div class="param-body" id="paramBody"><!-- 分组滑杆由 main.js 生成 --></div>
+  </section>
+</main>
+
+<!-- ═══════════════ 存档管理页（R6-D：后端 /saves · saves\ 同文件夹）═══════════════ -->
+<main class="page" id="page-saves">
+  <section class="param-wrap glass">
+    <div class="param-head">
+      <h2>存档管理 <span class="chips mono">saves\ 同文件夹 · 行内重命名 / 删除 / 分析 · 载入从存档帧继续</span></h2>
+      <div class="param-tools">
+        <input type="search" id="savesSearch" class="mono" placeholder="按名称筛选…" aria-label="搜索存档">
+        <button class="btn" id="btnSavesRefresh" type="button" title="重新读取 GET /saves">↻ 刷新</button>
+        <button class="btn" id="btnSavesBack" type="button">← 返回菜单</button>
+      </div>
+    </div>
+    <div class="saves-grid" id="savesGrid"><!-- 存档卡片由 main.js 生成 --></div>
+  </section>
+</main>
+
+<div class="toast mono" id="toast" role="status"></div>
+
+<script src="js/utils.js"></script>
+<script src="js/demo-data.js"></script>
+<script src="js/trace-parser.js"></script>
+<script src="js/charts.js"></script>
+<script src="js/renderer.js"></script>
+<script src="js/trace-io.js"></script>
+<script src="js/live-client.js"></script>
 <script src="js/main.js"></script>
+<script>
+/* 点开即玩：菜单页就绪后由用户点击「开始模拟」；boot 幂等，node 冒烟环境下安全跳过 */
+if (typeof window !== 'undefined' && window.Main && document.getElementById('stage')) {
+  window.Main.boot();
+}
+</script>
 </body>
 </html>

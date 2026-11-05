@@ -1,153 +1,293 @@
+﻿// agentsim - app/Cli.cpp : command line parsing (deterministic, no RNG).
+// R1-B：--food / --regrow / --no-regrow 已删除（Food 实体不存在）；新增
+// --cyano-nodes / --cyano-max-nodes / --sun-base / --sun-amplitude。
 #include "app/Cli.h"
-#include "decision/PolicyRegistry.h"
+#include <cerrno>
 #include <cmath>
+#include <cstdint>
 #include <cstdlib>
 #include <limits>
-#include <stdexcept>
 #include <string>
 
-namespace app {
+namespace agentsim {
 namespace {
-std::string nextValue(int& index, int argc, char** argv, const char* name) {
-    if (index + 1 >= argc) throw std::runtime_error(std::string("missing value for ") + name);
-    return argv[++index];
+
+// F1: unified numeric parsing guards - errno==ERANGE, non-finite values and
+// leading '-' are all rejected (strtoull("-1") wraps to ULLONG_MAX, which once
+// made --ticks -1 hang main forever; ERANGE once fed reserve() 68GB).
+constexpr std::uint64_t kMaxNuclei = 10000;
+constexpr int kMaxCyano = 100000; // R1-B：--cyano-* 上限（防 reserve 爆炸）
+
+bool parseDouble(const char* s, double& v) {
+    if (s == nullptr || *s == '\0') return false;
+    if (s[0] == '-') return false; // width/height etc. never accept negatives
+    errno = 0;
+    char* end = nullptr;
+    const double d = std::strtod(s, &end);
+    if (end == s || *end != '\0') return false;
+    if (errno == ERANGE) return false;
+    if (!std::isfinite(d)) return false; // nan / inf rejected
+    v = d;
+    return true;
 }
-// Rejects trailing garbage: std::stod("1junk") parses 1 and silently ignores the rest.
-double parseNonNegative(int& index, int argc, char** argv, const char* name) {
-    const std::string text = nextValue(index, argc, argv, name);
-    if (text.empty() || text[0] == '-') throw std::runtime_error(std::string(name) + " must be non-negative");
-    std::size_t consumed = 0;
-    const double value = std::stod(text, &consumed);
-    if (consumed != text.size()) throw std::runtime_error(std::string(name) + " is not a number");
-    if (!std::isfinite(value)) throw std::runtime_error(std::string(name) + " must be finite");
-    return value;
+
+bool parseU64(const char* s, std::uint64_t& v) {
+    if (s == nullptr || *s == '\0') return false;
+    if (s[0] == '-') return false;
+    errno = 0;
+    char* end = nullptr;
+    const unsigned long long u = std::strtoull(s, &end, 10);
+    if (end == s || *end != '\0') return false;
+    if (errno == ERANGE) return false;
+    v = static_cast<std::uint64_t>(u);
+    return true;
 }
-std::size_t parseNonNegativeSize(int& index, int argc, char** argv, const char* name) {
-    const std::string text = nextValue(index, argc, argv, name);
-    const std::size_t first = text.find_first_not_of(" \t");
-    if (first == std::string::npos || text[first] == '-') {
-        throw std::runtime_error(std::string(name) + " must be non-negative");
-    }
-    std::size_t consumed = 0;
-    const unsigned long long value = std::stoull(text, &consumed);
-    if (consumed != text.size()) throw std::runtime_error(std::string(name) + " is not an integer");
-    if (value > static_cast<unsigned long long>(std::numeric_limits<std::size_t>::max())) {
-        throw std::runtime_error(std::string(name) + " is out of range");
-    }
-    return static_cast<std::size_t>(value);
+
+bool parseInt(const char* s, int& v, bool allowNegative) {
+    if (s == nullptr || *s == '\0') return false;
+    if (!allowNegative && s[0] == '-') return false;
+    errno = 0;
+    char* end = nullptr;
+    const long n = std::strtol(s, &end, 10);
+    if (end == s || *end != '\0') return false;
+    if (errno == ERANGE) return false;
+    if (n < static_cast<long>(std::numeric_limits<int>::min()) ||
+        n > static_cast<long>(std::numeric_limits<int>::max())) return false;
+    v = static_cast<int>(n);
+    return true;
 }
-// Intervals are strict positive integers; -1/0/junk must be parameter errors (exit 2).
-int parsePositiveInt(int& index, int argc, char** argv, const char* name) {
-    const std::string text = nextValue(index, argc, argv, name);
-    const std::size_t first = text.find_first_not_of(" \t");
-    if (first == std::string::npos || text[first] == '-') {
-        throw std::runtime_error(std::string(name) + " must be a positive integer");
-    }
-    std::size_t consumed = 0;
-    const long long value = std::stoll(text, &consumed);
-    if (consumed != text.size()) throw std::runtime_error(std::string(name) + " is not an integer");
-    if (value <= 0 || value > std::numeric_limits<int>::max()) {
-        throw std::runtime_error(std::string(name) + " must be a positive integer");
-    }
-    return static_cast<int>(value);
-}
+
 } // namespace
 
-CliOptions parseCli(int argc, char** argv) {
-    CliOptions options;
+bool parseCli(int argc, char** argv, CliOptions& out, std::string& err) {
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
-        if (arg == "--help") { options.help = true; }
-        else if (arg == "--version") { options.version = true; }
-        else if (arg == "--width") options.config.world.width = parseNonNegative(i, argc, argv, "--width");
-        else if (arg == "--height") options.config.world.height = parseNonNegative(i, argc, argv, "--height");
-        else if (arg == "--seed") options.config.world.seed = static_cast<std::uint64_t>(parseNonNegativeSize(i, argc, argv, "--seed"));
-        else if (arg == "--ticks") {
-            options.config.world.maxTicks = static_cast<core::Tick>(parseNonNegativeSize(i, argc, argv, "--ticks"));
-            options.ticksProvided = true;
+        if (arg == "--help") { out.help = true; return true; }
+        if (arg == "--version") { out.version = true; return true; }
+        if (arg == "--audit") { out.audit = true; continue; }
+        if (arg == "--render") { out.render = true; continue; }
+        if (arg == "--no-render") { out.render = false; continue; }
+        if (arg == "--width" || arg == "--height") {
+            if (i + 1 >= argc) { err = "missing value for " + arg; return false; }
+            const char* val = argv[++i];
+            double d = 0.0;
+            if (!parseDouble(val, d) || d <= 0.0) { err = "invalid value for " + arg + ": " + val; return false; }
+            if (arg == "--width") out.config.world.width = d; else out.config.world.height = d;
+            continue;
         }
-        else if (arg == "--policy") options.config.policy.rule = nextValue(i, argc, argv, "--policy");
-        else if (arg == "--render") options.render = true;
-        else if (arg == "--no-render") options.render = false;
-        else if (arg == "--render-interval") options.renderInterval = parsePositiveInt(i, argc, argv, "--render-interval");
-        else if (arg == "--cyano") options.config.cyano.initial = parseNonNegativeSize(i, argc, argv, "--cyano");
-        else if (arg == "--nuclei") options.config.colony.initialNuclei = parseNonNegativeSize(i, argc, argv, "--nuclei");
-        else if (arg == "--balls") options.config.colony.initialBallsPerNucleus = parseNonNegative(i, argc, argv, "--balls");
-        else if (arg == "--nucleus-energy") options.config.colony.initialEnergy = parseNonNegative(i, argc, argv, "--nucleus-energy");
-        else if (arg == "--deploy-cost") options.config.colony.deployCost = parseNonNegative(i, argc, argv, "--deploy-cost");
-        else if (arg == "--detach-radius") options.config.colony.detachRadius = parseNonNegative(i, argc, argv, "--detach-radius");
-        else if (arg == "--sense-radius") options.config.policy.senseRadius = parseNonNegative(i, argc, argv, "--sense-radius");
-        else if (arg == "--mutation") options.config.policy.mutation = parseNonNegative(i, argc, argv, "--mutation");
-        else if (arg == "--energy-summary") options.energySummary = true;
-        else if (arg == "--audit") { /* auditing is mandatory */ }
-        else if (arg == "--bench") options.bench = true;
-        else if (arg == "--save") options.savePath = nextValue(i, argc, argv, "--save");
-        else if (arg == "--load") options.loadPath = nextValue(i, argc, argv, "--load");
-        else if (arg == "--html") options.htmlPath = nextValue(i, argc, argv, "--html");
-        else if (arg == "--html-interval") options.htmlInterval = parsePositiveInt(i, argc, argv, "--html-interval");
-        else if (arg == "--trace-json") options.traceJsonPath = nextValue(i, argc, argv, "--trace-json");
-        else if (arg == "--trace-json-interval") options.traceJsonInterval = parsePositiveInt(i, argc, argv, "--trace-json-interval");
-        else if (arg == "--state-hash") options.stateHashPath = nextValue(i, argc, argv, "--state-hash");
-        else if (arg == "--stats") options.statsPath = nextValue(i, argc, argv, "--stats");
-        else if (arg == "--stats-interval") options.statsInterval = parsePositiveInt(i, argc, argv, "--stats-interval");
-        else throw std::runtime_error("unknown argument: " + arg);
+        if (arg == "--ticks" || arg == "--seed") {
+            if (i + 1 >= argc) { err = "missing value for " + arg; return false; }
+            const char* val = argv[++i];
+            std::uint64_t u = 0;
+            if (!parseU64(val, u)) { err = "invalid value for " + arg + ": " + val; return false; }
+            if (arg == "--ticks") out.config.world.maxTicks = u; else out.config.world.seed = u;
+            continue;
+        }
+        if (arg == "--nuclei") {
+            if (i + 1 >= argc) { err = "missing value for --nuclei"; return false; }
+            const char* val = argv[++i];
+            int n = 0;
+            if (!parseInt(val, n, false) || n < 0) { err = "invalid value for --nuclei: " + std::string(val); return false; }
+            if (n > static_cast<int>(kMaxNuclei)) { // ERANGE overflow guard upstream, cap here
+                err = "invalid value for --nuclei: " + std::string(val) +
+                      " (max " + std::to_string(kMaxNuclei) + ")";
+                return false;
+            }
+            out.nuclei = n;
+            out.config.colony.nuclei = static_cast<std::size_t>(n);
+            continue;
+        }
+        // R1-B：蓝细菌库存（初始节点数 / 上限）。改值必须真生效（check.ps1 探针）。
+        if (arg == "--world-width" || arg == "--world-height") {
+        if (i + 1 >= argc) { err = std::string("missing value for ") + arg; return false; }
+        const char* val = argv[++i];
+        double d = 0;
+        if (!parseDouble(val, d) || d < 32.0 || d > 100000.0) {
+            err = std::string("invalid value for ") + arg + ": " + std::string(val); return false;
+        }
+        if (arg == "--world-width") out.config.world.width = d;
+        else out.config.world.height = d;
+        continue;
     }
-    if (!options.loadPath.empty()) {
-        static const char* const configFlags[] = {
-            "--width", "--height", "--seed", "--policy",
-            "--cyano", "--nuclei", "--balls", "--nucleus-energy",
-            "--deploy-cost", "--detach-radius", "--sense-radius", "--mutation"
-        };
-        for (int i = 1; i < argc; ++i) {
-            const std::string arg = argv[i];
-            for (const char* flag : configFlags) {
-                if (arg == flag) {
-                    throw std::runtime_error("--load cannot be combined with simulation config overrides: " + arg);
+    if (arg == "--cyano-nodes" || arg == "--cyano-max-nodes") {
+            if (i + 1 >= argc) { err = "missing value for " + arg; return false; }
+            const char* val = argv[++i];
+            int n = 0;
+            if (!parseInt(val, n, false) || n < 0) { err = "invalid value for " + arg + ": " + val; return false; }
+            if (n > kMaxCyano) {
+                err = "invalid value for " + arg + ": " + std::string(val) +
+                      " (max " + std::to_string(kMaxCyano) + ")";
+                return false;
+            }
+            if (arg == "--cyano-nodes") {
+                out.config.cyanoNodeCount = static_cast<std::size_t>(n);
+            } else {
+                out.config.cyanoMaxNodes = static_cast<std::size_t>(n);
+            }
+            continue;
+        }
+        // R1-B：阳光参数化（SunConfig）。--sun-base 改基线、--sun-amplitude 改
+        // 昼夜幅度——直接改变每帧 sunLevel，进而改变光合入账与生态轨迹。
+        if (arg == "--sun-base" || arg == "--sun-amplitude") {
+            if (i + 1 >= argc) { err = "missing value for " + arg; return false; }
+            const char* val = argv[++i];
+            double d = 0.0;
+            if (!parseDouble(val, d)) { err = "invalid value for " + arg + ": " + val; return false; }
+            if (arg == "--sun-base") {
+                out.config.sun.baseLevel = d;
+            } else {
+                out.config.sun.dayAmplitude = d;
+            }
+            continue;
+        }
+        if (arg == "--policy") {
+            if (i + 1 >= argc) { err = "missing value for --policy"; return false; }
+            const std::string val = argv[++i];
+            if (val != "rule" && val != "stub" && val != "perceptron" && val != "thermal" &&
+                val != "hysteresis" && val != "foragebank" && val != "bandit" &&
+                val != "riskaverse") {
+                err = "invalid --policy: " + val +
+                      " (expected rule|stub|perceptron|thermal|hysteresis|foragebank|bandit|riskaverse)";
+                return false;
+            }
+            out.policy = val;
+            out.config.policy.name = val; // F2: consumed by Simulation composition root
+            if (val == "perceptron") {
+                out.config.policy.usePerceptron = true; // composition root assembles PerceptronPolicy
+            }
+            if (val == "thermal") {
+                out.config.policy.useThermal = true; // composition root assembles ThermalPolicy
+            }
+            out.config.policy.mutation = (val == "rule") ? 0.05 : 0.0;
+            continue;
+        }
+        if (arg == "--perceptron-seed" || arg == "--perceptron-scale") {
+            if (i + 1 >= argc) { err = "missing value for " + arg; return false; }
+            const char* val = argv[++i];
+            if (arg == "--perceptron-seed") {
+                std::uint64_t u = 0;
+                if (!parseU64(val, u)) { err = "invalid value for " + arg + ": " + val; return false; }
+                out.config.policy.perceptronSeed = u;
+            } else {
+                double d = 0.0;
+                if (!parseDouble(val, d)) { err = "invalid value for " + arg + ": " + val; return false; }
+                out.config.policy.perceptronScale = d;
+            }
+            continue;
+        }
+        if (arg == "--thermal-pref" || arg == "--thermal-w-thermal" ||
+            arg == "--thermal-w-caution") {
+            if (i + 1 >= argc) { err = "missing value for " + arg; return false; }
+            const char* val = argv[++i];
+            double d = 0.0;
+            if (!parseDouble(val, d)) { err = "invalid value for " + arg + ": " + val; return false; }
+            // R4-P1：权重直接写进 config（CliOptions 的 mirror 字段曾无人读取，导致死参数）。
+            if (arg == "--thermal-pref") {
+                out.config.policy.thermalPreferredTemp = d;
+            } else if (arg == "--thermal-w-thermal") {
+                out.config.policy.thermalWThermal = d;
+            } else {
+                out.config.policy.thermalWCaution = d;
+            }
+            continue;
+        }
+        if (arg == "--terrain-obstacles" || arg == "--terrain-waters" ||
+            arg == "--terrain-thermal") {
+            if (i + 1 >= argc) { err = "missing value for " + arg; return false; }
+            const char* val = argv[++i];
+            int n = 0;
+            if (!parseInt(val, n, false) || n < 0) { err = "invalid value for " + arg + ": " + val; return false; }
+            if (arg == "--terrain-obstacles") {
+                out.config.terrain.obstacleCount = static_cast<std::size_t>(n);
+            } else if (arg == "--terrain-waters") {
+                out.config.terrain.waterCount = static_cast<std::size_t>(n);
+            } else {
+                out.config.terrain.thermalZoneCount = static_cast<std::size_t>(n);
+            }
+            continue;
+        }
+        if (arg == "--agent-mode") {
+            // F2: mode 0 (orbital paradigm) is NOT implemented; refuse loudly at
+            // parse time instead of silently ignoring the flag.
+            if (i + 1 >= argc) { err = "missing value for --agent-mode"; return false; }
+            const char* val = argv[++i];
+            if (!parseInt(val, out.agentMode, false)) {
+                err = "invalid value for --agent-mode: " + std::string(val);
+                return false;
+            }
+            if (out.agentMode == 0) {
+                err = "unsupported --agent-mode 0: orbital paradigm not implemented yet "
+                      "(only 1 = autonomous is available)";
+                return false;
+            }
+            if (out.agentMode != 1) {
+                err = "invalid value for --agent-mode: " + std::string(val) + " (expected 1)";
+                return false;
+            }
+            out.config.agent.agentMode = out.agentMode;
+            continue;
+        }
+        if (arg == "--trace") {
+            // Required value: a path must follow; a leading '-' starts another
+            // option, so it is never consumed as a path.
+            if (i + 1 >= argc || argv[i + 1][0] == '-') {
+                err = "missing value for --trace";
+                return false;
+            }
+            // 纯数字 token 不作路径（红队 R7 报 P2）：`--trace 2 --trace-interval 2`
+            // 原本会把 "2" 当文件名、把用户想表达的两个数字误解反，还在 cwd 里
+            // 留下一个名为 "2" 的文件。这里显式拒绝，给出明确错误。
+            {
+                const std::string candidate = argv[i + 1];
+                bool allDigits = !candidate.empty();
+                for (const char ch : candidate) {
+                    if (ch < '0' || ch > '9') { allDigits = false; break; }
+                }
+                if (allDigits) {
+                    err = "invalid path for --trace: \"" + candidate +
+                          "\" is a plain number, not a file path "
+                          "(did you mean --trace-interval " + candidate + "?)";
+                    return false;
                 }
             }
+            out.trace = true;
+            out.tracePath = argv[++i];
+            continue;
         }
-    }
-    // Every output path truncates its target; pointing two flags at one file would silently
-    // destroy the earlier output, so reject that at parse time.
-    {
-        const std::string* paths[] = {&options.statsPath, &options.savePath, &options.htmlPath,
-                                      &options.traceJsonPath, &options.stateHashPath};
-        for (std::size_t i = 0; i < std::size(paths); ++i) {
-            if (paths[i]->empty()) continue;
-            for (std::size_t j = i + 1; j < std::size(paths); ++j) {
-                if (paths[j]->empty()) continue;
-                if (*paths[i] == *paths[j]) {
-                    throw std::runtime_error("output paths must be distinct: " + *paths[i]);
-                }
+        if (arg == "--trace-genome") { out.traceGenome = true; continue; }
+        if (arg == "--trace-interval") {
+            if (i + 1 >= argc) { err = "missing value for --trace-interval"; return false; }
+            const char* val = argv[++i];
+            if (!parseInt(val, out.traceInterval, false) || out.traceInterval <= 0) {
+                err = "invalid value for --trace-interval: " + std::string(val);
+                return false;
             }
+            continue;
         }
+        if (arg == "--stats") {
+            // Optional value: "--stats <path>" or bare "--stats" (main.cpp then
+            // falls back to build/stats.csv). A following '-' begins another
+            // option, so it is never consumed as a path.
+            out.stats = true;
+            if (i + 1 < argc && argv[i + 1][0] != '-') {
+                out.statsPath = argv[++i];
+            }
+            continue;
+        }
+        if (arg == "--stats-interval") {
+            if (i + 1 >= argc) { err = "missing value for --stats-interval"; return false; }
+            const char* val = argv[++i];
+            if (!parseInt(val, out.statsInterval, false) || out.statsInterval <= 0) {
+                err = "invalid value for --stats-interval: " + std::string(val);
+                return false;
+            }
+            continue;
+        }
+        if (arg.rfind("--", 0) == 0) { err = "unknown option: " + arg; return false; }
+        err = "unexpected positional argument: " + arg;
+        return false;
     }
-    if (!std::isfinite(options.config.world.width) || options.config.world.width <= 0.0 ||
-        !std::isfinite(options.config.world.height) || options.config.world.height <= 0.0) {
-        throw std::runtime_error("world dimensions must be positive and finite");
-    }
-    if (!decision::PolicyRegistry::create(options.config.policy.rule)) {
-        throw std::runtime_error("unknown policy: " + options.config.policy.rule);
-    }
-    if (options.statsInterval <= 0) throw std::runtime_error("--stats-interval must be positive");
-    if (options.htmlInterval <= 0) throw std::runtime_error("--html-interval must be positive");
-    if (options.traceJsonInterval <= 0) throw std::runtime_error("--trace-json-interval must be positive");
-    if (!std::isfinite(options.config.policy.senseRadius) || options.config.policy.senseRadius <= 0.0) {
-        throw std::runtime_error("--sense-radius must be positive and finite");
-    }
-    return options;
+    return true;
 }
 
-std::string usage() {
-    return "EcoCore M5 (colony model)\n"
-           "  --width <n> --height <n> --seed <n> --ticks <n>\n"
-           "  --cyano <n> --nuclei <n> --balls <n> --nucleus-energy <n>\n"
-           "  --deploy-cost <n> --detach-radius <n> --policy rule|stub\n"
-           "  --sense-radius <n> --mutation <n>\n"
-           "  --render | --no-render --render-interval <n>\n"
-           "  --energy-summary --stats <path> --stats-interval <n>\n"
-           "  --save <path> --load <path>\n"
-           "  --html <path> --html-interval <n> --trace-json <path> --trace-json-interval <n>\n"
-           "  --state-hash <path> --bench --audit --help --version\n";
-}
-} // namespace app
+} // namespace agentsim

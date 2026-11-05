@@ -1,0 +1,11 @@
+# agentsim 材质包调色板（行式 key = r,g,b）
+# mode = type_color 按类型固定着色（护盾/资源/侦察）；mode 缺省 = owner_hue 归属色相
+# 解析语义照旧版 v2.3.1（web/app.js parseColors）：空行/# 注释跳过，首个 = 分键值，
+# 颜色键按逗号分段取前 3 段整数并归一化为 "r,g,b"，不合法行整行丢弃。
+mode = type_color
+background = 10, 14, 26
+ball_shield = 255, 207, 94
+ball_worker = 69, 224, 216
+ball_scout = 183, 139, 255
+free_ball = 200, 200, 210
+nucleus = 255, 255, 255

@@ -1,29 +1,43 @@
+# ── agentsim 1.0.0 ──────────────────────────────────────────────
+# Build artifacts (never commit)
 build/
 build-cmake/
 out/
 *.obj
-*.exe
-*.dll
 *.pdb
 *.ilk
-*.csv
+*.exp
+*.lib
+*.rsp
 *.log
+*.tmp
+
+# Local user data / runtime outputs
+saves/
 *.bin
 *.state
 *.hash
 *.snap
-*.rsp
 *.trace
+*.csv
 *.profraw
+tests/artifacts/
+frontend/build/
+
+# Editor / OS
 .vs/
 .vscode/
 .idea/
 .DS_Store
 Thumbs.db
-# legacy/ is retired: the full v2.3.1 tree lives in the legacy-v2.3.1 tag.
-# Keep the rule so an accidental restore stays out of version control.
-legacy/
-tests/artifacts/
 
-# frontend local artifacts (traces, screenshots, edge profile)
-frontend/build/
+# Dead merge leftovers
+*.mergebak
+
+# ── Published binaries: TRACKED ON PURPOSE ──
+# release/ contains the Windows build shipped with each tagged version.
+# Do not blanket-ignore *.exe; only keep build/ exes out above.
+!release/agentsim.exe
+!release/agentsimw.exe
+
+# legacy/ IS tracked (reference-only old EcoCore v3 source, see legacy/README.md)
