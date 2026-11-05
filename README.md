@@ -10,6 +10,8 @@
 
 <sub>▲ 实际运行界面。大圆=核（颜色=血统 hue）· 小点+绿线=蓝细菌与其能量网络 · 小形状=小球器官 · 右侧=实时状态与生态曲线 · 底部=四轴调控 + 事件卡</sub>
 
+**[⬇ 下载 v3.0.0（Windows x64 免安装，567KB）](https://github.com/zx1414/adaptive-orbit-ecosystem/releases/download/v3.0.0/agentsim-3.0.0-win64.zip)** — 解压后双击 `agentsimw.exe` 即玩
+
 ---
 
 ## 状态与链接
@@ -22,6 +24,7 @@
 | **测试** | 395 单测 / 20873 断言 / 0 失败 · 8 道门禁 |
 | **依赖** | 零第三方库（C++17 标准库 + Win32）；前端原生 JS |
 | **仓库** | https://github.com/zx1414/adaptive-orbit-ecosystem |
+| **下载** | [GitHub Releases](https://github.com/zx1414/adaptive-orbit-ecosystem/releases/tag/v3.0.0) — 免安装 zip |
 
 ---
 
