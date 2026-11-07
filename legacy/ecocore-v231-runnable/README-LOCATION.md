@@ -10,5 +10,5 @@
 - `resourcepacks/`、`CMakeLists.txt`、`custom_nuclei.txt`、`mods.list.example`
 
 **状态：冻结 / 只读参考。不参与本仓库任何构建。**
-旧版基线在 git 历史的 tag `v1.0.0` ~ `v2.3.1`、`legacy-v2.3.1` 里，可直接 git show <tag>:<path> 查看。
+旧 Release 的 zip 与 tag 已于 2026-11-07 清理，本目录即旧版 v2.3.1 的权威存档。
 新版（四层管线 agentsim）见仓库根 README.md。

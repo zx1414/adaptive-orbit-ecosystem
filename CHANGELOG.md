@@ -1,15 +1,15 @@
 # Changelog
 
 本文件记录 **agentsim**（仓库根 `src/` 现行版）的发布历史。
-旧版 EcoCore v3 的历史 tag（`v1.0.0`～`v2.3.1`、`legacy-v2.3.1`）属于**另一个代码线**，
-其源码已冻结移入 [`legacy/ecocore-v3/`](legacy/ecocore-v3/)，不参与本版本线。
+旧版 EcoCore 代码线属于**另一个代码线**，
+其源码已冻结移入 [`legacy/ecocore-v3/`](legacy/ecocore-v3/) 与 [`legacy/ecocore-v231-runnable/`](legacy/ecocore-v231-runnable/)，不参与本版本线。
 
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) + 语义化版本。
 
 ## [v3.0.0] — 2026-11-05（首个开源发布）
 
-> **版本号说明**：仓库历史里已有 `v1.0.0`～`v2.3.1` 共 8 个 tag，均属旧 EcoCore 代码线。
-> 为避免与旧 tag 重名造成 `git checkout` 歧义，agentsim 首发版本取 **v3.0.0**
+> **版本号说明**：旧 EcoCore 代码线曾发布 `v1.0.0`～`v2.3.1`（这些旧 tag 与旧 Release 已清理，
+> 源码保留在 [`legacy/`](legacy/)）。为避免与旧 tag 重名造成 `git checkout` 歧义，agentsim 首发版本取 **v3.0.0**
 > （延续旧版谱系的下一个主版本），`VERSION` 文件与 `--version` 输出同步为 `3.0.0`。
 
 ### 新增（开源发布 / 版本控制）
@@ -50,5 +50,7 @@
 
 ## 旧代码线（归档，仅供参考）
 
-- `legacy-v2.3.1` / `v2.3.1` … `v1.0.0`：EcoCore v3 重构过程（静止生产者 + 独立
-  Agent 模型），其源码现位于 `legacy/ecocore-v3/`。该线已冻结，不再维护。
+- EcoCore v3 重构过程（静止生产者 + 独立 Agent 模型）：源码位于
+  [`legacy/ecocore-v3/`](legacy/ecocore-v3/)，v2.3.1 完整可运行副本位于
+  [`legacy/ecocore-v231-runnable/`](legacy/ecocore-v231-runnable/)。
+  该线已冻结，不再维护；旧 tag 与旧 Release 已于 2026-11-07 清理。

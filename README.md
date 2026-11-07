@@ -4282,8 +4282,8 @@ adaptive-orbit-ecosystem/
 
 - **单一真源**：[`VERSION`](VERSION) 文件 + 二进制 `--version` 输出，两者必须一致
 - 语义化版本：`MAJOR.MINOR.PATCH`
-- 历史 tag `v1.0.0`～`v2.3.1` 属于**旧 EcoCore 代码线**（源码在 `legacy/`）；
-  agentsim 首发取 **v3.0.0**（延续谱系的下一个主版本），避免与旧 tag 重名导致 `git checkout` 歧义
+- 旧版 EcoCore 代码线的源码冻结在 [`legacy/`](legacy/)（不参与构建）；
+  agentsim 延续谱系取 **v3.0.0** 作为首发主版本
 
 ### 重新生成发布包
 

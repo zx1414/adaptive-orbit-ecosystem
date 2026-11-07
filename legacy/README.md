@@ -1,7 +1,7 @@
 # legacy/ — 旧版源码（仅供参考，不再维护）
 
 本目录存放 **EcoCore v3 / v2.3.1 时代**的旧版源码与文档，即本项目
-`zx1414/adaptive-orbit-ecosystem` 仓库在 v1.0.0 之前的全部受版本控制内容。
+`zx1414/adaptive-orbit-ecosystem` 仓库重构（agentsim）之前的全部内容。
 
 ## 状态：冻结 / 只读参考
 
@@ -10,8 +10,8 @@
 - **不再维护**：旧版生态模型（静止生产者 + 独立 Agent 追食物）已被 v1.0.0 的
   四层管线（环境 → 感知 → 决策 → 行为 → 账本）取代；旧版平衡的
   `docs/BALANCE.md` 等文档数值已作废，仅作历史脉络保留。
-- **旧版基线仍在 git 历史里**：tag `v1.0.0` ~ `v2.3.1`、`legacy-v2.3.1`
-  指向合并前的提交，可直接 `git show <tag>:<path>` 查看。
+- **旧版基线**：v2.3.1 完整可运行副本在 [`ecocore-v231-runnable/`](ecocore-v231-runnable/)；
+  旧 Release 的 zip 已随旧 tag 一并清理（2026-11-07），以本目录为准。
 
 ## 目录
 
