@@ -4216,6 +4216,7 @@ adaptive-orbit-ecosystem/
 ├── tools/                   build.ps1 / check.ps1 / gate.bat / rebuild.bat
 │                            package.ps1 / analyze.mjs / sweep / evolve
 ├── docs/                    规格 / 契约 / ADR / 实验 / 日志（45 篇）
+│   ├── model/               数理模型四部曲（README 数理模型章的独立全文）
 │   └── images/              README 用的界面截图
 ├── resourcepacks/           材质包示例（classic_flat）
 │
@@ -4227,8 +4228,10 @@ adaptive-orbit-ecosystem/
 │
 ├── legacy/                  ★ 旧版源码（冻结，仅供参考，不参与构建）
 │   ├── README.md                为什么在这、能不能用
-│   └── ecocore-v3/              旧 EcoCore v3 完整源码树
+│   ├── ecocore-v3/              旧 EcoCore v3 完整源码树
+│   └── ecocore-v231-runnable/   旧 v2.3.1 完整可运行副本（mods/web/配置）
 │
+├── HANDOVER.md              ★ 交付说明（下一轮工作从这里开始）
 ├── LICENSE                  MIT
 ├── VERSION                  3.0.0（版本号单一真源）
 ├── CHANGELOG.md             版本历史与已知问题
@@ -4257,6 +4260,7 @@ adaptive-orbit-ecosystem/
 | --- | --- |
 | [docs/TRACE-CONTRACT.md](docs/TRACE-CONTRACT.md) | 轨迹 JSON v3 契约（冻结） |
 | [docs/PARAM-MAPPING.md](docs/PARAM-MAPPING.md) | 113 个实时调控键 → Config 字段映射 |
+| [HANDOVER.md](HANDOVER.md) | ★ 交付说明：下一轮工作从哪里开始（命令速查 + 不变量） |
 | [docs/model/01-environment.md](docs/model/01-environment.md) | 环境层与感知层（README 数理模型一的独立全文） |
 | [docs/model/02-agent.md](docs/model/02-agent.md) | 个体与行为（README 数理模型二） |
 | [docs/model/03-decision.md](docs/model/03-decision.md) | 决策层 8 策略（README 数理模型三） |
