@@ -358,7 +358,7 @@ score     = wProximity*proximity*trustFood + wThermal*thermal*trustStay
 
 | 任务 | 对应成功标准 | 证据 | 验证方式 |
 | --- | --- | --- | --- |
-| T01b S16 每候选独立噪声 | S6, S16 | `tests/unit/test_sensors.cpp`: sense_noise_is_per_candidate / sense_zero_speed_no_rng_consumption / sense_deterministic_same_seed；**反证实验**：换回旧实现该测试 FAIL（红队 R7 与主代理各自独立复现） | `build\unit_tests.exe`；反证见 docs/WORKFLOW.md §4.4 |
+| T01b S16 每候选独立噪声 | S6, S16 | `tests/unit/test_sensors.cpp`: sense_noise_is_per_candidate / sense_zero_speed_no_rng_consumption / sense_deterministic_same_seed；**反证实验**：换回旧实现该测试 FAIL（红队 R7 与主代理各自独立复现） | `build\unit_tests.exe`；反证见 docs/archive/WORKFLOW.md §4.4 |
 | T03b S17 侦察球感知 + 接线 | S17 | effectiveSenseRadius(0)=¼盲区、(3)=×2、(1000)=4×上限；**接线证据**：Simulation::step 数 `type==Scout` 传入 sense；**生态证据**：trace 球 type 集合含 1（Scout），修复前只有 0 | `build\unit_tests.exe`；`agentsim.exe --trace` + node 解析 types |
 | T03c S18 球作仓库 | S18 | colony_cap_* 7 条；**生产证据**：3000 tick trace 中核 cap 取值 {200,260,320} = nativeCap + Resource 球数×60 | `build\unit_tests.exe` + trace 扫描 |
 | T09 S19/S20 球物理化 | S19, S20 | detach_preserves_energy / detach_zero_ledger_impact / adopt_zero_sum 等 8 条；**生产证据**：自由球帧 1223（修复前 0）、最大真实环距 134.9 > 阈值 120 | `build\unit_tests.exe` + trace 扫描 |

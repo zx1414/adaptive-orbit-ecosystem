@@ -39,7 +39,7 @@
 | **想接前端 / 写工具** | [HTTP API 全表](#http-api-全表实时模式) + [`/state` 二进制布局](#state-二进制快照布局v2) + [TRACE-CONTRACT](docs/TRACE-CONTRACT.md) |
 | **想核对每个数字怎么算出来的** | [数理模型](#数理模型与实现细节完整规格) — 四部分：环境 / 个体 / 决策 / 基础设施 |
 | **想知道"生态学上成不成立"** | [生态判据](#生态判据它到底健康吗) + [GOAL-ECOLOGY](docs/GOAL-ECOLOGY.md) + [实验报告](docs/experiments/) |
-| **想接手维护** | [CHANGELOG](CHANGELOG.md) → [docs/LOG.md](docs/LOG.md) → [docs/PLAYBOOK.md](docs/PLAYBOOK.md) |
+| **想接手维护** | [HANDOVER](HANDOVER.md) → [CHANGELOG](CHANGELOG.md) → [docs/LOG.md](docs/LOG.md) |
 
 ---
 
@@ -4215,8 +4215,9 @@ adaptive-orbit-ecosystem/
 ├── tests/unit/              395 条单测（30 个测试文件）
 ├── tools/                   build.ps1 / check.ps1 / gate.bat / rebuild.bat
 │                            package.ps1 / analyze.mjs / sweep / evolve
-├── docs/                    规格 / 契约 / ADR / 实验 / 日志（45 篇）
-│   ├── model/               数理模型四部曲（README 数理模型章的独立全文）
+├── docs/                    规格 / 契约 / ADR / 实验 / 日志
+│   ├── archive/             旧版过程文档（冻结，仅供参考）
+│   ├── model/               数理模型四部曲（README 数理章独立全文）
 │   └── images/              README 用的界面截图
 ├── resourcepacks/           材质包示例（classic_flat）
 │
@@ -4275,7 +4276,7 @@ adaptive-orbit-ecosystem/
 | [docs/experiments/](docs/experiments/) | 八策略对比 / 感知机进化 / 趋温策略实验数据 |
 | [docs/reviews/](docs/reviews/) | 红队对抗审查报告 |
 | [docs/accept/ACC-R11-acceptance.md](docs/accept/ACC-R11-acceptance.md) | R11 验收报告（四项问题定位 + 原版对比） |
-| [docs/PLAYBOOK.md](docs/PLAYBOOK.md) | 多代理流水线工作法（可复用提示词手册） |
+| [docs/archive/](docs/archive/) | 旧版过程文档（多代理工作法 / 夜班记录 / 迁移对齐清单）— 冻结，仅供参考 |
 | [CHANGELOG.md](CHANGELOG.md) | 版本历史与已知问题 |
 
 ---
