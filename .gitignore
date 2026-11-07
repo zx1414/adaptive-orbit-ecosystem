@@ -40,6 +40,8 @@ Thumbs.db
 !release/agentsim.exe
 !release/agentsimw.exe
 
+.zcode_auto/
+
 # legacy/ IS tracked (reference-only old EcoCore v3 source, see legacy/README.md)
 
 # ── accidental scan/cache artifacts (never commit) ──

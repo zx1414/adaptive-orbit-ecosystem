@@ -1,0 +1,26 @@
+build/
+*.o
+*.exe
+balls_*.csv
+nuclei_*.csv
+survivors.csv
+trend.csv
+trend_summary.csv
+output/
+__pycache__/
+saves/
+mods.list
+packs.list
+release/
+
+# 本地 agent 工作目录 / 临时产物（不入库）
+_agent/
+buildobj_*/
+*_probe*
+*.bak-*
+docs/_recon/
+
+# v2.2.0 测试产物（截图/日志/临时 CSV 不入库，保留 tests/baseline 的配置与哈希清单）
+tests/artifacts/
+tests/baseline/run_*/
+cyano_*.csv

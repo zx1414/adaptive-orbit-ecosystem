@@ -1,0 +1,77 @@
+# ============================================================
+# 推荐平衡配置（Blue-Green Mod · 由 Lead 实测标定）
+#
+# 用途：在「核-小球」生态里加入蓝细菌生产者后，让系统长期稳定在
+#       动态平衡（核数不归零、不爆炸），而不是退化成"核全灭"或"能量爆表"。
+#
+# 用法：把本文件内容追加/覆盖到 exe 同目录的 env_config.txt，
+#       或命令行 --env env_config_balanced.txt。
+#
+# 标定依据（Lead 实测，12000 帧 × 多 seed）：
+#   ball_loss_cost = 5.0（原默认） → 核在 ~300-1000 帧内崩塌到 1 个
+#     根因：BALL_LOSS 单向销毁 >> ABSORB 收入（实测比值 1.97×）。
+#          这是**原有模拟的固有现象**，不是蓝细菌模组引入的。
+#   ball_loss_cost = 0.2            → 12000 帧后稳定在 ~1000 核 / 1000 球
+#                                     （seed 42 / 7 / 123 全部稳定）
+#
+# 另外实测：开启蓝细菌**改善**了生存 —— 同为 20 核起步，
+#   关闭蓝细菌剩 1 核，开启后剩 3 核；BALL_LOSS/ABSORB 比值从 1.97× 降到 1.17×。
+# ============================================================
+
+# ---- 世界与运行 ----
+seed = 42
+width = 2000
+height = 2000
+balls = 1000
+nuclei = 20
+frames = 100000
+
+# ---- 平衡关键旋钮：失球惩罚 ----
+# 这是让生态稳定的**最重要**一个参数。原默认 5.0 会导致核单向破产。
+ball_loss_cost = 0.2
+
+# ---- 蓝细菌生产者 ----
+# 初始节点 0 = 关闭（退化为原核-小球模拟，与基线逐字节一致）
+# 建议 1000~3000 节点观察菌落扩张
+cyano_nodes = 1500
+cyano_colonies = 8
+cyano_initial_energy = 10.0
+cyano_link_distance = 80.0
+cyano_max_links = 6
+cyano_link_check_interval = 4
+cyano_photosynthesis_rate = 0.03
+cyano_light_half_saturation = 0.5
+cyano_metabolism_rate = 0.005
+cyano_transfer_rate = 0.05
+cyano_transfer_deadband = 0.05
+cyano_ball_spawn_cost = 8.0
+cyano_ball_spawn_probability = 0.002
+cyano_reproduction_cost = 20.0
+cyano_reproduction_probability = 0.001
+cyano_min_node_separation = 15.0
+
+# ---- 核捕食蓝细菌 ----
+# cyano_preference_init 是**遗传初始化范围**，默认 0.0, 1.0（含"完全不吃"的个体）。
+# 若要确保观察到捕食行为，收紧下限。
+cyano_preference_init = 0.3, 1.0
+cyano_predation_radius = 80.0
+# 转化率模式：0=常数 1=速度×加速度反比(默认，体现机动性↔消化效率取舍) 2=幂律 3=仅加速度
+cyano_conversion_mode = 1
+
+# ---- 阳光（昼夜 + 垂直梯度 + 局部扰动）----
+sun_base_level = 1.0
+sun_day_amplitude = 0.7
+sun_day_period_frames = 1200.0
+sun_vertical_gradient = 0.3
+sun_noise_amplitude = 0.1
+
+# ---- 核的颜色（材质）----
+# 核颜色固定 + 子核小幅变异由 World::hueRng_ 独立随机流保证，无需开关。
+# cyano_hue_jitter 控制「繁殖产生的核有少量颜色变异」的幅度（度，环绕 0..360）。
+cyano_hue_jitter = 8.0
+
+# ---- 性能提示（非必需）----
+# grid_cell_size 默认 60。实测调到 150 可带来约 1.6× 帧率提升，
+# 但会改变球-球交互的遍历顺序 → 模拟结果不再与历史结果逐位一致。
+# 追求速度再调，追求可复现请保持 60。
+grid_cell_size = 60
