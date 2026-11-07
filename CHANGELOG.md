@@ -8,8 +8,9 @@
 
 ## [v3.0.0] — 2026-11-05（首个开源发布）
 
-> **版本号说明**：旧 EcoCore 代码线曾发布 `v1.0.0`～`v2.3.1`（这些旧 tag 与旧 Release 已清理，
-> 源码保留在 [`legacy/`](legacy/)）。为避免与旧 tag 重名造成 `git checkout` 歧义，agentsim 首发版本取 **v3.0.0**
+> **版本号说明**：旧 EcoCore 代码线曾发布 `v1.0.0`～`v2.3.1`（旧 tag 与各版源码包已恢复到
+> [Releases](https://github.com/zx1414/adaptive-orbit-ecosystem/releases)，旧源码保留在 [`legacy/`](legacy/)）。
+> 为避免与旧 tag 重名造成 `git checkout` 歧义，agentsim 首发版本取 **v3.0.0**
 > （延续旧版谱系的下一个主版本），`VERSION` 文件与 `--version` 输出同步为 `3.0.0`。
 
 ### 新增（开源发布 / 版本控制）
@@ -53,4 +54,4 @@
 - EcoCore v3 重构过程（静止生产者 + 独立 Agent 模型）：源码位于
   [`legacy/ecocore-v3/`](legacy/ecocore-v3/)，v2.3.1 完整可运行副本位于
   [`legacy/ecocore-v231-runnable/`](legacy/ecocore-v231-runnable/)。
-  该线已冻结，不再维护；旧 tag 与旧 Release 已于 2026-11-07 清理。
+  该线已冻结，不再维护；各历史版本的源码包见 [Releases](https://github.com/zx1414/adaptive-orbit-ecosystem/releases)。

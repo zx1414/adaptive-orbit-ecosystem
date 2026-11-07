@@ -11,7 +11,7 @@
   四层管线（环境 → 感知 → 决策 → 行为 → 账本）取代；旧版平衡的
   `docs/BALANCE.md` 等文档数值已作废，仅作历史脉络保留。
 - **旧版基线**：v2.3.1 完整可运行副本在 [`ecocore-v231-runnable/`](ecocore-v231-runnable/)；
-  旧 Release 的 zip 已随旧 tag 一并清理（2026-11-07），以本目录为准。
+  各历史版本的源码包见仓库 [Releases](https://github.com/zx1414/adaptive-orbit-ecosystem/releases)。
 
 ## 目录
 

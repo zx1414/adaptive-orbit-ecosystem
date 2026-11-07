@@ -4282,8 +4282,8 @@ adaptive-orbit-ecosystem/
 
 - **单一真源**：[`VERSION`](VERSION) 文件 + 二进制 `--version` 输出，两者必须一致
 - 语义化版本：`MAJOR.MINOR.PATCH`
-- 旧版 EcoCore 代码线的源码冻结在 [`legacy/`](legacy/)（不参与构建）；
-  agentsim 延续谱系取 **v3.0.0** 作为首发主版本
+- 旧版 EcoCore 代码线的源码冻结在 [`legacy/`](legacy/)（不参与构建），历史版本源码包见
+  [Releases](https://github.com/zx1414/adaptive-orbit-ecosystem/releases)；agentsim 延续谱系取 **v3.0.0** 作为首发主版本
 
 ### 重新生成发布包
 
