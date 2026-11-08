@@ -20,9 +20,9 @@
 | --- | --- |
 | **版本** | [`3.0.0`](VERSION) — 首个开源发布 |
 | **许可证** | [MIT](LICENSE) — 可商用、可修改、可闭源分发 |
-| **平台** | Windows 10 / 11 x64 |
-| **测试** | 395 单测 / 20873 断言 / 0 失败 · 8 道门禁 |
-| **依赖** | 零第三方库（C++17 标准库 + Win32）；前端原生 JS |
+| **平台** | Windows 10 / 11 x64 · 任意 C++17 工具链（不绑定 Visual Studio） |
+| **测试** | 395 单测 / 20873 断言 · 静态门禁防解耦退化 |
+| **依赖** | C++17 标准库 + Win32（无第三方库，拷走源码即可自行构建）；前端原生 JS |
 | **仓库** | https://github.com/zx1414/adaptive-orbit-ecosystem |
 | **下载** | [GitHub Releases](https://github.com/zx1414/adaptive-orbit-ecosystem/releases/tag/v3.0.0) — 免安装 zip |
 
@@ -376,7 +376,7 @@ node tools\analyze.mjs build\t.json
        └──────────────────────────────────────────────── ┌──────────────┐
                                                           │    账本       │
                                                           │   Ledger     │
-                                                          │  零和恒等式   │
+                                                          │  统一能量记账 │
                                                           └──────────────┘
 ```
 
