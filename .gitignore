@@ -48,3 +48,6 @@ Thumbs.db
 .dsh_scan/
 %SystemDrive%/
 *.db
+
+# ── release zips: rebuilt by tools/package.ps1, distributed via GitHub Releases ──
+agentsim-*-win64*.zip

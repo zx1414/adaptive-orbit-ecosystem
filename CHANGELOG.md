@@ -18,7 +18,7 @@
 - **完整数理规格**：README 新增「数理模型与实现细节」一章（约 3600 行），覆盖环境 / 个体 / 决策 / 基础设施四层——全部公式、常数、钳制条件均带 `文件:行号` 引用；同步拆分为 `docs/model/` 四份独立全文
 - **完全开源**：MIT LICENSE、重写 README、CHANGELOG、CONTRIBUTING、VERSION 单一真源、`.gitignore` 规范化
 - **旧版归档**：旧 EcoCore v3 源码 `git mv` 进 `legacy/ecocore-v3/`，附 legacy/README.md 明确标注「冻结/只读参考/不参与构建」
-- **发布包**：`release/` 纳入版本控制（双 exe / 单文件前端 / 材质包 / README.txt），另附 `tools/package.ps1` 一键重新打包
+- **发布包**：`release/` 纳入版本控制（双 exe / 单文件前端 / 材质包 / README.txt），`tools/package.ps1` 一键重新打包（zip 产物走 GitHub Releases，不入 git）
 - **便携构建**：新增 `tools/rebuild.bat` / `tools/gate.bat`（基于 `%~dp0` 相对定位，取代绝对路径硬编码）
 
 ### 现行版能力（R11 交付，2026-11-02）

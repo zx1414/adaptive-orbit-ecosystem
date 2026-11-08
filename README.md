@@ -4238,6 +4238,9 @@ adaptive-orbit-ecosystem/
 ├── CHANGELOG.md             版本历史与已知问题
 ├── CONTRIBUTING.md          贡献指南与五条铁律
 └── README.md                本文件
+
+> 仓库里**没有**打包好的 zip：Windows 包只从 [GitHub Releases](https://github.com/zx1414/adaptive-orbit-ecosystem/releases/tag/v3.0.0) 下载，
+> 或自己跑 `tools/package.ps1 -Zip` 生成（产物不入 git）。
 ```
 
 ---
