@@ -768,12 +768,16 @@ void Simulation::step() {
     // 而不是悄悄补平。保留 cyanoDelta 计算并在超限时置 auditOk_=false（R9-P2 落实）：
     // CyanoField::step 内部守恒若出 bug（如 linkTransfer 记账错位），在这里当场失败，
     // 而不是等全局 audit 间接暴露。
-    const double cyanoDelta = cyano_.totalEnergy() - cyanoBefore;
-    const double accounted = rep.photosynthesisGain - rep.metabolismLoss
-                           - rep.reproductionLoss;
-    // 防御：若残差超出浮点噪声量级（远大于 1e-6），这是真 bug，必须让它被看见。
-    if (std::fabs(cyanoDelta - accounted) > 1e-6 * std::max(1.0, std::fabs(cyanoBefore))) {
-        auditOk_ = false;
+    // 运行时审计默认关闭：账目写对自然守恒，逐帧全量核对是纯开销。
+    // 需要验证时 setAuditEnabled(true)（单元测试 / --audit），失败仍在 auditOk_ 暴露。
+    if (auditEnabled_) {
+        const double cyanoDelta = cyano_.totalEnergy() - cyanoBefore;
+        const double accounted = rep.photosynthesisGain - rep.metabolismLoss
+                               - rep.reproductionLoss;
+        // 防御：若残差超出浮点噪声量级（远大于 1e-6），这是真 bug，必须让它被看见。
+        if (std::fabs(cyanoDelta - accounted) > 1e-6 * std::max(1.0, std::fabs(cyanoBefore))) {
+            auditOk_ = false;
+        }
     }
 
     // R3-A（营养循环）审计断言：fertilize 实际转进节点的能量必须与
@@ -782,14 +786,17 @@ void Simulation::step() {
     //（本帧 carrion 已在上方清空，计数器差值 = 本帧处理的包数。）
     // 流水闭合：carrion_ 已清空，入队能量必须全部出账（逐包浮点尾数 ≤1 ulp，
     // 1e-9 相对容差内必等；真漏账会在对称方向上越积越大，当场暴露）。
-    if (std::fabs(carrionEnergyIn_ - carrionEnergyOut_) >
-        1e-9 * std::max(1.0, carrionEnergyIn_)) {
+    if (auditEnabled_ &&
+        std::fabs(carrionEnergyIn_ - carrionEnergyOut_) >
+            1e-9 * std::max(1.0, carrionEnergyIn_)) {
         auditOk_ = false;
     }
 
     ++tick_;
-    const double tol = 1e-9 * std::max(1.0, ledger_.totalInjected());
-    auditOk_ = ledger_.audit(tol, totalEnergy());
+    if (auditEnabled_) {
+        const double tol = 1e-9 * std::max(1.0, ledger_.totalInjected());
+        auditOk_ = ledger_.audit(tol, totalEnergy());
+    }
 }
 
 

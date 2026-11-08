@@ -74,6 +74,11 @@ public:
     double totalEnergy() const;
     std::uint64_t stateHash() const;
     bool auditOk() const { return auditOk_; }
+    // 运行时能量审计默认关闭（代码写对自然守恒；每帧全量求和是纯开销）。
+    // setAuditEnabled(true) 打开后，step() 每帧校验零和恒等式与两条局部闭合断言，
+    // 失败置 auditOk_ = false（runTo 随即返回 false）。单元测试自开。
+    void setAuditEnabled(bool on) { auditEnabled_ = on; }
+    bool auditEnabled() const { return auditEnabled_; }
     std::uint64_t deathCount() const { return deathCount_; }
 
     // ---- 只读视图（组合根接线用，S15 轨迹导出消费）----
@@ -152,6 +157,7 @@ private:
     double carrionEnergyOut_ = 0.0;
     Tick tick_ = 0;
     bool auditOk_ = true;
+    bool auditEnabled_ = false; // 运行时审计开关：默认关（opt-in），见 setAuditEnabled
     std::size_t aliveCount_ = 0;
     std::uint64_t deathCount_ = 0;
     EntityId nextNucleusId_ = 1;

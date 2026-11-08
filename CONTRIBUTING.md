@@ -1,20 +1,26 @@
 # 贡献指南
 
-感谢你愿意改进 agentsim！本项目把「可审计、确定性、零回归」看得很重，请遵守以下约定。
+感谢你愿意改进 agentsim！本项目的核心价值：**高度解耦、mod 友好、机制清晰、拷贝源码后能自主构建**。
+确定性同样重要——同 seed 双跑逐字节一致是做生态实验的前提。请遵守以下约定。
 
 ## 环境
 
-- Windows 10/11 + Visual Studio 2022（MSVC v143，含 C++ 桌面开发）
+- Windows 10/11 + **任意 C++17 编译器**：MSVC（VS2022）、MinGW-w64（GCC ≥ 9）、Clang 均可——项目不绑定特定工具链
 - Node.js 18+（仅前端 `smoke.mjs` / `bundle.mjs` / `analyze.mjs` 需要）
-- PowerShell 5.1+（构建脚本）
+- PowerShell 5.1+（构建脚本；也可直接调用编译器，脚本只是便捷入口）
 
-## 铁律（门禁静态检查，违反直接 FAIL）
+## 设计铁律（门禁静态检查，违反直接 FAIL）
 
-1. **四层单向依赖**：`src/decision` 不得 include `environment/`、`sim/`、`ledger/`；`src/perception` 不得 include `decision/`。
+1. **四层单向依赖**：`src/decision` 不得 include `environment/`、`sim/`、`ledger/`；`src/perception` 不得 include `decision/`。层级解耦是 mod 化的前提。
 2. **行为层是唯一写点**：除 `src/behavior/` 外，任何 `src/` 文件不得给核/球实体状态赋值（出生引导两行有历史豁免，见 `tools/check.ps1`）。
-3. **确定性**：全 `src/` 禁用 `rand()` / `<random>` / `random_device`；`src/decision` 禁用 RNG（构造期感知机初值有窄豁免）。随机数一律走 `core/PCG32.h`。
-4. **零警告**：MSVC `/W4 /WX /permissive- /utf-8`，全绿才合并。
+3. **确定性**：全 `src/` 禁用 `rand()` /`<random>` /`random_device`；`src/decision` 禁用 RNG（构造期感知机初值有窄豁免）。随机数一律走 `core/PCG32.h`。
+4. **零警告**：`/W4 /WX /permissive- /utf-8`（GCC/Clang 用 `-Wall -Wextra -Werror` 同级），全绿才合并。
 5. **参数必须活**：新增 CLI / Config 参数必须能被 `tools/check.ps1` 的死参数探针观察到输出变化。
+
+## 能量账本约定
+
+- 任何能量流动（注入 / 耗散 / 转移）必须走 `AgentLedger`，带原因记账。**代码写对，守恒自然成立**——不要指望运行时检查兜底。
+- 运行时逐帧对账默认关闭（`--audit` 才开）。给运行路径加常驻的全量校验是反模式：那是把 CPU 烧在重复证明写对了的代码上。
 
 ## 流程
 
@@ -23,7 +29,7 @@
 git clone https://github.com/zx1414/adaptive-orbit-ecosystem.git
 cd adaptive-orbit-ecosystem
 
-# 1) 构建
+# 1) 构建（tools/build.ps1 会自动探测 MSVC；用其他工具链时直接调你的编译器，源码零第三方依赖）
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\build.ps1
 
 # 2) 改代码 + 补单测（tests/unit/，自研框架，TEST() 宏）
@@ -39,6 +45,9 @@ node frontend\tools\smoke.mjs
 build\agentsim.exe --no-render --ticks 2000 --seed 42
 ```
 
+> 已知环境问题：完整单测套件在个别机器/路径上可能在 genome 段后挂起（同一份源码在其他路径 395 测全绿）。
+> 遇到时先换路径/按文件拆测定位，不要急着改代码。
+
 ## 提交规范
 
 - 提交信息用英文祈使句：`fix(cyano): ...` / `feat(frontend): ...` / `docs: ...`
@@ -47,7 +56,7 @@ build\agentsim.exe --no-render --ticks 2000 --seed 42
 
 ## 报告问题
 
-请附：操作系统/VS 版本、复现命令、`build\gate_out.txt` 或 `--audit` 输出、seed 与 ticks。确定性问题的报告请务必给出完整命令行。
+请附：操作系统/编译器与版本、复现命令、`build\gate_out.txt` 或 `--audit` 输出、seed 与 ticks。确定性问题的报告请务必给出完整命令行。
 
 ## 许可
 

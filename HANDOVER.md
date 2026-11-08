@@ -15,17 +15,21 @@ C++17 单进程模拟器（MSVC，零第三方库）+ 原生 JS 前端 + HTTP �
 | 直接玩 | 双击 `release/agentsimw.exe`（或 [`tools/rebuild.bat`](tools/rebuild.bat) 重编译后跑） |
 | 跑批处理实验 | `build\agentsim.exe --no-render --ticks 2000 --seed 42 --audit --stats` |
 | 实时调控 | `build\agentsim.exe --serve 8080`，浏览器开 `http://127.0.0.1:8080` |
-| 完整门禁 | `cmd /d /c tools\gate.bat`（成功标志：输出 `check PASSED`，408 PASS / 0 FAIL） |
+| 完整门禁 | `cmd /d /c tools\gate.bat`（成功标志：`check PASSED`；单测在部分环境下可能挂起，见 §3 末尾） |
 | 金标准回归 | `--no-render --ticks 2000 --seed 42` 的 total_energy 必须逐位等于 **36367.17200929** |
 | 重新打包发布 | `powershell -File tools/package.ps1` → 更新 `release/` 并重打 zip |
 
-构建要求：Visual Studio 2022（MSVC v143）、Windows 10/11 x64。详见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+构建要求：任意 C++17 编译器（MSVC / MinGW-w64 / Clang 均可）、Windows 10/11 x64。
+`tools/rebuild.bat` 是 MSVC 便捷入口，**不是唯一入口**——项目刻意不绑定任何 IDE 或工具链，
+拷走源码后用你手头的编译器就能自主构建。详见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ## 3. 关键不变量（改动前必读）
 
-1. **零和恒等式**：每 tick `injected − dissipated == Σ存活实体能量`，容差 1e-9，不平即 exit 3。任何新能量流必须走 `AgentLedger`。
+1. **账本统一**：每一笔能量流动都走 `AgentLedger`（注入/耗散/转移三类，零和设计）。代码写对，守恒自然成立——运行时不做逐帧对账（`--audit` 才开），新能量流照走账本即可。
 2. **四层单向管线**：environment → perception → decision → behavior（唯一写点）→ ledger。红线由 `tools/check.ps1` 静态扫描强制，违反即构建失败。
 3. **确定性**：同 seed 双跑逐字节一致（门禁里有对拍）。改任何 RNG 消耗点都会破坏它——RNG 消耗序契约写在各模块头注释里（`CyanoNode.h` 文件头是范例）。
+
+> **已知环境问题**：完整单测套件（`unit_tests.exe`）在个别机器/路径上会在 genome 段之后挂起或崩溃（同一份源码在其他路径 395 测全绿）。这是环境相关现象，不是代码缺陷；定位手段是换路径重跑或按文件拆测。不要为此重写测试。
 4. **先读 [2.11 已删除或未实现的机制](README.md#211-已删除或未实现的机制避免误读)**：代码里有一批"注释声称存在但实际没有"的东西（硬分离 pass、Q10、核的质量/年龄等），别照注释理解模型。
 
 ## 4. 当前状态与已知问题

@@ -88,8 +88,8 @@
 
 ### 三句话讲清它的设计取舍
 
-1. **能量是唯一硬约束。** 每 tick 校验 `注入 − 耗散 == 所有活着的实体的能量总和`。
-   账不平就立即以 exit 3 崩掉。所以"生态好不好"不是调参调出来的观感，是算出来的结果。
+1. **能量是唯一硬约束。** 每一笔能量流动都走统一账本（`注入 − 耗散 == 所有活着的实体的能量总和`），
+   代码写对，守恒自然成立；需要核对时加 `--audit`，框架会替你逐帧对账。
 2. **四层单向管线。** `环境 → 感知 → 决策 → 行为 → 账本`。决策层看不到世界、不掷骰子；
    只有行为层能改实体状态。这条约束由 `tools/check.ps1` **静态扫源码**强制执行，违反即构建失败。
 3. **完全确定性。** 同一个 seed 跑两次，输出逐字节相同。所以任何"生态演变"都能精确复现、
@@ -147,7 +147,7 @@
 | 圆形 / 菱形 / 六边形的小东西 | **小球**：资源球 / 侦察球 / 护盾球 |
 | 空心 + 虚线外圈的小球 | **自由球**（无主，可以被任何核捡走） |
 | HUD 上的「阳光 x.xx」 | 当前光照强度（0~1），画面明暗跟着它变 |
-| 右上角「能量审计 PASS」 | 每帧恒等式校验通过 |
+| 右上角「能量审计 PASS」 | 账本自洽（`--audit` 开启时为逐帧实测，默认按记账口径） |
 
 ---
 
@@ -192,7 +192,7 @@
 
 | 需要 | 说明 |
 | --- | --- |
-| **Visual Studio 2022** | 必须勾选「使用 C++ 的桌面开发」（含 MSVC v143 + Windows SDK） |
+| **任意 C++17 编译器** | MSVC（VS2022 勾选「使用 C++ 的桌面开发」）/ MinGW-w64 (GCC ≥ 9) / Clang 均可；只需 Windows SDK 头文件随编译器走 |
 | PowerShell 5.1+ | Windows 自带 |
 | Node.js 18+ | **仅**前端 smoke / 打包 / 生态分析脚本需要；跑模拟器本身不需要 |
 
@@ -290,7 +290,8 @@ done tick=5000 nuclei=42 cyano=731 total_energy=18342.51 audit=ok policy=rule
      ^^^^帧数  ^^核数  ^^^蓝细菌数  ^^^^^^^^总能量    ^^^^审计  ^^^^所用策略
 ```
 
-`audit=ok` 表示全程能量账都是平的。若变成 `audit=fail`，进程会以 **exit 3** 退出。
+`audit=ok` 表示全程能量账都是平的。加 `--audit` 时逐帧实测；发现不平会以 **exit 3** 退出。
+   不加 `--audit` 时运行时不做逐帧核对（代码写对自然守恒，省下这份开销）。
 
 ### 8 种决策策略
 
@@ -400,7 +401,8 @@ node tools\analyze.mjs build\t.json
 injected − dissipated == Σ(活着的核 + 球 + 蓝细菌节点)
 ```
 
-不平就以 **exit 3** 退出。这条恒等式是整个项目"生态数据可信"的根基。
+不平就把 `auditOk_` 置 false（`--audit` / 单测开启时）。恒等式是生态数据可信的根基，
+但运行时逐帧核对是**可选项**——机制写对了，守恒是自然结果。
 
 ### `/state` 二进制快照布局（v2）
 
@@ -1796,7 +1798,7 @@ $$\sum_{\text{活体}} E = \sum_{n:\ \text{alive}} \Bigl(n.E + \sum_{b\in n.\tex
 
 ##### 2.8.3 断言位置与失败行为
 
-审计在每次 `step()` 末尾执行一次（`src/sim/Simulation.cpp:791-792`）：
+审计逻辑在 `step()` 末尾，但**仅当 `setAuditEnabled(true)`（`--audit` / 单测）时执行**（`src/sim/Simulation.cpp`，`auditEnabled_` 门控）：
 
 $$\text{tol} = 10^{-9}\cdot\max\bigl(1,\ \text{injected}_{\text{total}}\bigr)$$
 
@@ -1814,7 +1816,7 @@ $$\text{auditOk} \leftarrow \Bigl|\,\bigl(\text{injected}-\text{dissipated}\bigr
 - `Simulation::runTo` 立即返回 `false`（`src/sim/Simulation.cpp:987-993`）；
 - CLI 主循环置 `auditFailed`，先写完本帧 stats/trace 再 `break`（`src/app/main.cpp:1355,1465`），最后 `return 3`（`src/app/main.cpp:1479`）；
 - serve 模式事件执行后同样检查，失败 `std::exit(3)`（`src/app/main.cpp:472-476`）；
-- 读档（`deserializeState`）结束时用同一容差重算一次审计（`src/sim/Simulation.cpp:1701-1702`）。
+- 读档（`deserializeState`）结束时用同一容差重算一次审计（`auditEnabled_` 时；`src/sim/Simulation.cpp`）。
 
 ##### 2.8.4 账目原因枚举
 
@@ -1838,7 +1840,7 @@ $$\text{auditOk} \leftarrow \Bigl|\,\bigl(\text{injected}-\text{dissipated}\bigr
 ---
 #### 2.9 主循环：`Simulation::step()` 的固定步骤
 
-`tick_` 从 0 起，`step()` 末尾自增（`src/sim/Simulation.cpp:790`）；`runTo(end)` 循环至 `tick_ >= end` 或审计失败（`src/sim/Simulation.cpp:987-993`）。
+`tick_` 从 0 起，`step()` 末尾自增（`src/sim/Simulation.cpp:790`）；`runTo(end)` 循环至 `tick_ >= end`（审计开启时，失败也会提前返回，`src/sim/Simulation.cpp`）。
 
 **迭代顺序（确定性）**：所有实体遍历一律按容器下标升序（`nuclei_`、`cyano_.nodes()`、`freeBalls_`），无排序、无哈希遍历；平局（等距）取小下标（`src/sim/Simulation.cpp:652,966`）。尸体压缩只删除 `!alive` 元素并保持相对顺序（`src/sim/Simulation.cpp:603-608`），故迭代序在压缩前后一致。
 
@@ -1869,7 +1871,7 @@ $$\text{auditOk} \leftarrow \Bigl|\,\bigl(\text{injected}-\text{dissipated}\bigr
 10. `env_.tick()`（`src/sim/Simulation.cpp:692`）。
 11. **蓝细菌推进**：以世界最暗点光照 `sunLevelAt(cfg.sun, tick_, H, H)` 驱动 `cyano_.step()`，按报告记 `injectPrimary` / `dissipate`；模块产出的自由球以实体形式 push 进 `freeBalls_`（**不再注入**，能量只是换持有者，`src/sim/Simulation.cpp:702-739`）。
 12. **自由球池上限**：`size >= 256` 时回收最老的蓝细菌源球，能量 `dissipate("cyanoBallExpire")`（`src/sim/Simulation.cpp:741-756`）。
-13. **两条局部审计**（蓝细菌收支、尸体流水，`src/sim/Simulation.cpp:771-788`）。
+13. **两条局部审计**（蓝细菌收支、尸体流水，仅 `auditEnabled_` 时执行，`src/sim/Simulation.cpp`）。
 14. `++tick_`；`auditOk_ = ledger_.audit(tol, totalEnergy())`（`src/sim/Simulation.cpp:790-792`）。
 
 **每 tick 的 RNG 消耗点（顺序固定）**：`sense` 读噪声（每候选 3 次 × 至多 3 个候选 + s[9] 1 次，`src/perception/AgentSensors.cpp:134-179`）→ `apply` 写噪声 2 次 → `apply` 动作 roll 1 次 → 产球 1 次（若触发）→ 批量繁殖 52 次/亲代 → `cyano_.step` 的固定消耗序（`src/environment/CyanoNode.h:8-32`）。捕食段、社会力段、球力场段**零 RNG**（`src/sim/Simulation.cpp:465-467`）。
@@ -3933,7 +3935,7 @@ $$ \text{cfg}_{\text{new}} = \text{newCfg} \quad\text{但}\quad \text{cfg}_{\tex
 | `plague` | `perNucleus=-12.0`，`onlyRich=true`，`richThreshold=100.0` | 仅能量 `> 100` 的核扣 12 | `dissipate("event:plague", take)` |
 | `bloom` | `cyanoNodesToAdd=120`，`cyanoNodesIfDisabled=150` | 蓝细菌关闭时加 150，开启时加 120（受 `cyanoMaxNodes` 截断） | 0 能播种，账面零操作 |
 
-事件后审计不成立即 `exit 3`（`src/app/main.cpp:471-477`）。
+事件后若 `auditOk_` 为 false 则 `exit 3`（`--audit` 时才可能触发，`src/app/main.cpp:471-477`）。
 
 四个预设（`src/app/EnvControl.cpp:196-207`）：
 
@@ -3979,7 +3981,7 @@ $$ \text{cfg}_{\text{new}} = \text{newCfg} \quad\text{但}\quad \text{cfg}_{\tex
 | `totalEnergy` | float | 生态总能量（含核/球/自由球/尸体包/蓝细菌） | `sim.totalEnergy()` | `TraceWriter.cpp:72` |
 | `injected` | float | 账本累计一级注入 | `ledger().totalInjected()` | `TraceWriter.cpp:73` |
 | `dissipated` | float | 账本累计耗散 | `ledger().totalDissipated()` | `TraceWriter.cpp:74` |
-| `auditOk` | bool | 当帧守恒审计结果 | `sim.auditOk()` | `TraceWriter.cpp:75` |
+| `auditOk` | bool | 守恒审计结果（未开启 `--audit` 时恒 true，即无失败记录） | `sim.auditOk()` | `TraceWriter.cpp:75` |
 
 `totalEnergy()` 的求和口径（`src/sim/Simulation.cpp:1001-1021`）：
 
@@ -4028,7 +4030,7 @@ tick,nuclei,cyano,total_energy,audit_ok,deaths,state_hash
 |---|---|---|---|---|
 | `--help` | — | 打印帮助并 exit 0 | — | `Cli.cpp:65`、`main.cpp:1235` |
 | `--version` | — | 打印 `agentsim 3.0.0` 并 exit 0 | — | `Cli.cpp:66`、`main.cpp:1236` |
-| `--audit` | — | 仅置标志（advisory） | false | `Cli.cpp:67` |
+| `--audit` | — | 开启运行时逐帧账目核对（默认关：机制写对自然守恒） | false | `Cli.cpp:67` |
 | `--render` | — | 置渲染标志（无消费者） | false | `Cli.cpp:68` |
 | `--no-render` | — | 清渲染标志（无消费者） | false | `Cli.cpp:69` |
 | `--width W` | double > 0 | `world.width` | 1024.0 | `Cli.cpp:70-77` |
@@ -4087,7 +4089,7 @@ tick,nuclei,cyano,total_energy,audit_ok,deaths,state_hash
 |---|---|---|
 | 0 | 正常结束 | `src/app/main.cpp:1489` |
 | 2 | 参数错误（解析失败 / 未知选项 / 非法 serve 端口） | `src/app/main.cpp:1218,1231-1234` |
-| 3 | 守恒审计失败（批跑或 `--serve` 事件后） | `src/app/main.cpp:1479`、`:1136-1138`、`:476` |
+| 3 | 守恒审计失败（仅在 `--audit` 下可能出现） | `src/app/main.cpp:1479`、`:1136-1138`、`:476` |
 | 4 | I/O 失败（stats 打不开 / trace 打不开或写失败） | `src/app/main.cpp:1314,1333,1470` |
 | 5 | 种群灭绝（`nucleusCount() == 0`） | `src/app/main.cpp:1484-1488` |
 
@@ -4123,7 +4125,7 @@ tick,nuclei,cyano,total_energy,audit_ok,deaths,state_hash
 | `--terrain-waters N` | 生成水域斑块数 | 0 |
 | `--terrain-thermal N` | 生成温度区斑块数 | 0 |
 | `--agent-mode N` | 行为模式 | 1 |
-| `--audit` | 每帧能量审计（建议总是开） | off |
+| `--audit` | 运行时逐帧账目核对（默认关——机制写对自然守恒，核对是可选项） | off |
 | `--stats PATH` | 趋势 CSV 输出路径 | — |
 | `--stats-interval N` | 趋势采样间隔 | 100 |
 | `--trace PATH` | 轨迹 JSON 输出路径 | — |

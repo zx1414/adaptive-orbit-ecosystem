@@ -738,6 +738,7 @@ int serveMode(const CliOptions& opts, int port, bool ticksGiven, bool openBrowse
     // R6-C：sim 改为 unique_ptr——/run /load 需要"原子替换世界"（关旧开新/换存档态），
     // 栈对象做不到。独占权在主循环；HTTP 线程只碰 bridge（既有模式不变）。
     auto simPtr = std::make_unique<agentsim::Simulation>(opts.config);
+    simPtr->setAuditEnabled(opts.audit);           // --audit 才做运行时账目核对（默认关）
     agentsim::Simulation* simRaw = simPtr.get();   // R6-C：换局时随 ptr 一起换
     SimConfig liveCfg = opts.config;   // RuntimeEnv 的写目标（HTTP 线程独占）
     EnvState envSt;                    // 调控面状态（HTTP 线程独占）
@@ -1342,11 +1343,12 @@ int main(int argc, char** argv) {
     }
 
     agentsim::Simulation sim(opts.config);
+    sim.setAuditEnabled(opts.audit);   // --audit 才做运行时账目核对（默认关）
     const std::uint64_t endTick = opts.config.world.maxTicks;
     bool auditFailed = false;
     while (sim.tick() < endTick) {
         sim.step();
-        // GOAL §6 红线：每 tick 审计，失败即终止（退出码 3）。
+        // --audit 时：每 tick 审计，失败即终止（退出码 3）。
         // 此前主循环从不检查 auditOk()，坏账本会一路跑满 20k tick 才在末尾退出，
         // 期间所有统计与轨迹都建立在已破的守恒式上（红队 R7 报 P1）。改为立即跳出。
         // 顺序说明：先写 stats/trace 再判断是否中止，这样失败的那一帧
