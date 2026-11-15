@@ -43,6 +43,7 @@ C++17 单进程模拟器（MSVC，零第三方库）+ 原生 JS 前端 + HTTP �
 
 | 位置 | 内容 |
 | --- | --- |
+| [docs/MECHANICS.md](docs/MECHANICS.md) | ★ 机制手册（硬核玩家版）：全部数理公式与运行时常数，不含代码 |
 | [docs/GOAL.md](docs/GOAL.md) | S1–S25 成功标准全表（含证据索引） |
 | [docs/INDEX.md](docs/INDEX.md) | 每条标准的**可执行验证命令** |
 | [docs/TRACE-CONTRACT.md](docs/TRACE-CONTRACT.md) | trace JSON v3 契约（冻结，改前先看） |
