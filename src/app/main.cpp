@@ -1,4 +1,4 @@
-﻿// agentsim - app/main.cpp : deterministic CLI entry. No timing output.
+// agentsim - app/main.cpp : deterministic CLI entry. No timing output.
 // R3-B：新增 --serve [port] 实时调控模式（EnvControl → RuntimeEnv → SimConfig →
 // 下一帧生效；GET /state 二进制快照）。批跑路径（无 --serve）与旧版逐字节一致
 // ——确定性门禁（check.ps1 双跑）以本文件批跑输出为契约，serve 模式是旁路。
@@ -21,7 +21,9 @@
 #include "sim/Simulation.h"
 
 #include <algorithm>
+#include <charconv>
 #include <chrono>
+#include <condition_variable>
 #include <cstdlib>
 #include <mutex>
 #include <cmath>
@@ -53,9 +55,12 @@ using agentsim::Simulation;
 using agentsim::SunConfig;
 using agentsim::Vec2;
 using agentsim::app::EnvChange;
+using agentsim::app::EnvCommandResult;
 using agentsim::app::EnvControl;
-using agentsim::app::EnvEventEffect;
-using agentsim::app::EnvPendingEvent;
+using agentsim::app::EnvEffectRequest;
+using agentsim::app::EnvEffectState;
+using agentsim::app::EnvEffectStatus;
+using agentsim::app::EnvSeedRequest;
 using agentsim::app::EnvState;
 using agentsim::app::HttpServer;
 using agentsim::app::ParamSchema;
@@ -123,6 +128,32 @@ bool startsWith(const std::string& s, const char* prefix) {
     return s.rfind(prefix, 0) == 0;
 }
 
+// 最小 JSON 字符串转义（本文件自用；EnvControl 的版本在 app/ 内部匿名命名空间）。
+// POST /env 的回执要用它把中文错误消息与命令行原样带回前端。
+std::string envJsonEscapeLocal(const std::string& s) {
+    std::string out;
+    out.reserve(s.size() + 8);
+    for (char c : s) {
+        switch (c) {
+            case '"': out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
+            case '\n': out += "\\n"; break;
+            case '\r': out += "\\r"; break;
+            case '\t': out += "\\t"; break;
+            default:
+                if (static_cast<unsigned char>(c) < 0x20) {
+                    char buf[8];
+                    std::snprintf(buf, sizeof(buf), "\\u%04x",
+                                  static_cast<unsigned>(static_cast<unsigned char>(c)));
+                    out += buf;
+                } else {
+                    out += c;
+                }
+        }
+    }
+    return out;
+}
+
 bool parseIntArg(const std::string& s, int& out) {
     if (s.empty() || s.size() > 11) return false;
     size_t i = (s[0] == '-' || s[0] == '+') ? 1 : 0;
@@ -151,42 +182,108 @@ bool parseDoubleArg(const std::string& s, double& out) {
 // ---- HTTP <-> 主循环 桥（ServeBridge）----
 // HTTP 线程与主循环之间唯一共享状态（std::mutex 保护）。设计目标：
 // HTTP 线程绝不直接读 Simulation —— 它只消费主循环每帧发布的只读快照；
-// 主循环绝不直接写调控面 —— 它只消费锁内交换的事件队列与 cfgDirty 标志。
-// TakeCfg 用"整对象拷贝出锁"避免锁内做 SimConfig 级深拷贝。
+// 调控配置与命令通过 ServeBridge 交接，世界和时间轴由模拟线程持有。
 class ServeBridge {
 public:
-    void pushEvent(const EnvPendingEvent& ev) {
+    explicit ServeBridge(const SimConfig& config) : config_(config) {}
+    // P0-5：外部播种请求（显式外部输入；主循环执行，因为要动 sim）。
+    void pushSeed(const EnvSeedRequest& req) {
         std::lock_guard<std::mutex> lk(m_);
-        events_.push_back(ev);
+        seeds_.push_back(req);
     }
-    void takeEvents(std::vector<EnvPendingEvent>& out) {
+    void takeSeeds(std::vector<EnvSeedRequest>& out) {
         std::lock_guard<std::mutex> lk(m_);
-        out.swap(events_);
-        events_.clear();
+        out.swap(seeds_);
+        seeds_.clear();
     }
-    void markCfgDirty() { std::lock_guard<std::mutex> lk(m_); cfgDirty_ = true; }
-    bool takeCfgDirty() {
+    // 玩家光照基线（事件偏移之外的那一半）。HTTP 线程写、主循环读；
+    // 事件到期只撤"事件偏移"这一半，本值原样保留 —— 这就是 A5 的
+    // "玩家在期间改的基础环境设置仍然有效"。
+    double playerSunBase() const {
         std::lock_guard<std::mutex> lk(m_);
-        const bool d = cfgDirty_;
+        return config_.sun.baseLevel;
+    }
+    // 事件运行时状态（endTick 由主循环盖戳/到期）。放锁内是因为 HTTP 线程要读
+    // 快照（GET /env 的剩余时长）而主循环要写 —— 两边都穿同一把锁。
+    EnvEffectState effectSnapshot() const {
+        std::lock_guard<std::mutex> lk(m_);
+        return effect_;
+    }
+    // 返回同一临界区中的事件状态与代数，首个推进帧起算。
+    struct EffectTick {
+        EnvEffectState state{};
+        long long generation = 0;
+    };
+    EffectTick tickEffect(long long tick) {
+        std::lock_guard<std::mutex> lk(m_);
+        EffectTick r;
+        EnvControl::stampEffectStart(effect_, tick);
+        EnvControl::expireEffect(effect_, tick);
+        r.state = effect_;
+        r.generation = effectGen_;
+        return r;
+    }
+    // 主循环：执行完一批事件请求后写入新的事件状态。
+    void setEffect(const EnvEffectState& eff) {
+        std::lock_guard<std::mutex> lk(m_);
+        effect_ = eff;
+    }
+    // HTTP 线程：撤销/续期后立刻让主循环之外的读者看到（GET /env 的即时反馈）。
+    // 真正的 endTick 盖戳仍由主循环负责（tickEffect）。
+    // 每次改动都递增代数，主循环据此知道"生效光照要重算一次"。
+    void setEffectFromCommand(const EnvEffectRequest& req, EnvEffectState& out) {
+        std::lock_guard<std::mutex> lk(m_);
+        if (req.cancel) {
+            EnvControl::clearEffect(effect_);
+        } else {
+            EnvControl::beginEffect(effect_, req);
+        }
+        ++effectGen_;
+        out = effect_;
+    }
+    void setConfig(const SimConfig& cfg, bool pending) {
+        std::lock_guard<std::mutex> lk(m_);
+        config_ = cfg;
+        cfgDirty_ = pending;
+    }
+    SimConfig config() const {
+        std::lock_guard<std::mutex> lk(m_);
+        return config_;
+    }
+    bool takeConfig(SimConfig& cfg) {
+        std::lock_guard<std::mutex> lk(m_);
+        if (!cfgDirty_) return false;
+        cfg = config_;
         cfgDirty_ = false;
-        return d;
+        return true;
     }
-    // HTTP 线程：把当前 liveCfg 拷进 out（锁内仅拷贝指针级的 cfg 指针，不做深拷贝；
-    // 深拷贝由调用方在锁外完成——copyCfg 是静态工具，无共享状态）。
-    void copyCfg(const SimConfig& src, SimConfig& dst) const {
-        std::lock_guard<std::mutex> lk(m_);
-        dst = src;  // HTTP 线程是 liveCfg 的唯一写者；主循环读时 HTTP 线程可能
-                    // 正在写 —— 这正是本锁存在的理由：liveCfg 的读写相遇点
-                    // 全部穿过 m_。
-    }
-    void publish(std::uint64_t tick, std::size_t nuclei,
+    void publish(std::uint64_t tick,
                  const std::vector<unsigned char>& state,
-                 const std::string& envJson) {
+                 int cyanoNodes, int cyanoLinks) {
         std::lock_guard<std::mutex> lk(m_);
         tick_ = tick;
-        nuclei_ = nuclei;
+        EnvControl::expireEffect(effect_, static_cast<long long>(tick_));
         state_ = state;
-        envJson_ = envJson;
+        cyanoNodes_ = cyanoNodes;
+        cyanoLinks_ = cyanoLinks;
+    }
+    // P0-5：GET /env 改成"请求时现算"——主循环只出版计数与 tick，JSON 由 HTTP 线程
+    // 用 EnvControl::toJson 现场拼。这样触发命令一落地，下一次 GET /env 立刻就能
+    // 读到 active/remaining（不再等主循环下一次发布，暂停态也不会有 20ms 陈旧窗口）。
+    struct EnvCounts {
+        long long tick = 0;
+        int cyanoNodes = 0;
+        int cyanoLinks = 0;
+        bool paused = false;
+    };
+    EnvCounts counts() const {
+        std::lock_guard<std::mutex> lk(m_);
+        EnvCounts c;
+        c.tick = static_cast<long long>(tick_);
+        c.cyanoNodes = cyanoNodes_;
+        c.cyanoLinks = cyanoLinks_;
+        c.paused = paused_;   // 播放控制真值（用户按的是这个）
+        return c;
     }
     std::uint64_t tick() const {
         std::lock_guard<std::mutex> lk(m_);
@@ -196,9 +293,27 @@ public:
         std::lock_guard<std::mutex> lk(m_);
         return state_;  // 拷贝出站：HTTP 响应期间主循环可继续发布新帧
     }
-    std::string envJson() const {
+    void publishCheckpoints(const agentsim::app::Timeline& timeline) {
         std::lock_guard<std::mutex> lk(m_);
-        return envJson_;
+        checkpoints_.clear();
+        for (const auto& cp : timeline) checkpoints_.push_back(cp.frame);
+    }
+    std::vector<std::uint64_t> checkpoints() const {
+        std::lock_guard<std::mutex> lk(m_);
+        return checkpoints_;
+    }
+    void publishWorldResult(const std::string& error) {
+        std::lock_guard<std::mutex> lk(m_);
+        worldError_ = error;
+        worldDone_ = true;
+        worldResult_.notify_one();
+    }
+    bool waitWorldResult(std::string& error) {
+        std::unique_lock<std::mutex> lk(m_);
+        if (!worldResult_.wait_for(lk, std::chrono::seconds(3), [&] { return worldDone_; }))
+            return false;
+        error = worldError_;
+        return true;
     }
     // R6-C：/seek 回放请求（暂停态限定；主循环恢复检查点后补帧到目标）。
     void requestLoad(const agentsim::SimConfig& cfg, const std::string& name) {
@@ -206,6 +321,7 @@ public:
         loadCfg_ = cfg;
         loadName_ = name;
         loadPending_ = true;
+        worldDone_ = false;
     }
     bool takeLoadRequest(agentsim::SimConfig& cfg, std::string& name) {
         std::lock_guard<std::mutex> lk(m_);
@@ -220,6 +336,7 @@ public:
         std::lock_guard<std::mutex> lk(m_);
         seekTarget_ = frame;
         seekPending_ = true;
+        worldDone_ = false;
     }
     bool takeSeekRequest(std::uint64_t& frame) {
         std::lock_guard<std::mutex> lk(m_);
@@ -301,12 +418,19 @@ private:
     bool paused_ = false;
     bool stepOnce_ = false;
     mutable std::mutex m_;
-    std::vector<EnvPendingEvent> events_;
+    std::vector<EnvSeedRequest> seeds_;
+    EnvEffectState effect_;         // 事件自己的临时偏移 + 到期帧（与玩家基础值分开）
+    long long effectGen_ = 0;       // 事件状态代数（主循环判断"要不要重算生效光照"）
+    SimConfig config_;
     bool cfgDirty_ = false;
     std::uint64_t tick_ = 0;
-    std::size_t nuclei_ = 0;
     std::vector<unsigned char> state_;
-    std::string envJson_;
+    std::vector<std::uint64_t> checkpoints_;
+    std::condition_variable worldResult_;
+    bool worldDone_ = false;
+    std::string worldError_;
+    int cyanoNodes_ = 0;   // 主循环每帧出版：GET /env 现算用
+    int cyanoLinks_ = 0;
     // R6-C：/load 载入请求（HTTP 线程已 loadHeader 拿 cfg，主循环构造 sim 并恢复实体）。
     // R6-C：load 请求。
     bool loadPending_ = false;
@@ -327,18 +451,37 @@ private:
 };
 
 // ---- POST /env 行式协议解析（HTTP 线程执行）----
-// 每行一条命令：axis.light=3 / fine.sun_base_level=1.35 / event.harvest=1 /
-// preset.balance=1 / cyano=off。逐条走 EnvControl::apply（状态机，本线程独占
-// envSt）+ RuntimeEnv::applyAll（key -> liveCfg 字段，本线程独占 liveCfg）。
-// 事件只产出描述并入队（锁内），由主循环下一帧走 ledger 执行——能量绝不改于
-// HTTP 线程。返回 200 JSON（ok/applied/rejected/unwired）。
+// 每行一条命令：axis.light=3 / fine.sun_base_level=1.35 / event.winter=1 /
+// winter.duration=600 / seed.cyano=120 / preset.balance=1 / cyano=off。
+// 逐条走 EnvControl::apply（状态机，本线程独占 envSt）+ RuntimeEnv::applyAll
+// （key -> liveCfg 字段，本线程独占 liveCfg）。
+//
+// 【P0-5】三类输出分流：
+//   参数变更 → RuntimeEnv 写 liveCfg（下帧 applyConfig 生效）；
+//   环境事件 → 入队给主循环（本线程绝不改 sim，事件只改环境状态）；
+//   外部播种 → 入队给主循环（要动 sim 的蓝细菌场）。
+// HTTP 状态码：全部成功 200；有被拒命令 400（回执里逐条给 code + error），
+// 不再"200 + ok:false"含糊过去 —— 过期/未知命令必须有明确反馈。
 std::string handleEnvPost(const std::string& body, SimConfig& cfg,
-                          EnvState& envSt, ServeBridge& bridge) {
+                          EnvState& envSt, ServeBridge& bridge, int& status) {
     int applied = 0;
     int rejected = 0;
     int paramChanges = 0;
     int queuedEvents = 0;
+    int queuedSeeds = 0;
     std::string lastErr;
+    std::string lastCode;
+    std::string rejectItems;   // 逐条被拒：[{"line":..,"code":..,"error":..}]
+    auto noteReject = [&](const std::string& line, const std::string& code,
+                          const std::string& msg) {
+        ++rejected;
+        lastErr = msg;
+        lastCode = code;
+        if (!rejectItems.empty()) rejectItems += ',';
+        rejectItems += "{\"line\":\"" + envJsonEscapeLocal(line) + "\",\"code\":\"" +
+                       envJsonEscapeLocal(code) + "\",\"error\":\"" +
+                       envJsonEscapeLocal(msg) + "\"}";
+    };
     size_t pos = 0;
     while (pos <= body.size()) {
         size_t eol = body.find('\n', pos);
@@ -351,45 +494,60 @@ std::string handleEnvPost(const std::string& body, SimConfig& cfg,
         }
         if (line.empty()) continue;
         const size_t eq = line.find('=');
-        if (eq == std::string::npos) { ++rejected; lastErr = "malformed line: " + line; continue; }
+        if (eq == std::string::npos) {
+            noteReject(line, "malformed_line", "缺少 '=': " + line);
+            continue;
+        }
         const std::string key = line.substr(0, eq);
         const std::string value = line.substr(eq + 1);
         std::vector<EnvChange> changes;
-        EnvPendingEvent ev;
+        EnvCommandResult cmd;
         std::string err;
-        if (!EnvControl::apply(key, value, envSt, changes, err, &ev)) {
-            ++rejected;
-            lastErr = err;
+        if (!EnvControl::apply(key, value, envSt, changes, err, &cmd)) {
+            noteReject(line, cmd.code.empty() ? "rejected" : cmd.code, err);
             continue;
         }
-        // 事件：只产出描述，入队由主循环下一帧走 ledger 执行（不在这里碰能量）。
-        if (!ev.id.empty()) {
-            bridge.pushEvent(ev);
+        // 环境事件：只改"事件自己的临时偏移"（锁内），主循环负责盖戳与到期。
+        // 这里绝不碰 sim / 任何核的能量 —— 触发本身只改变环境状态。
+        if (cmd.effect.cancel || !cmd.effect.id.empty()) {
+            EnvEffectState eff;
+            bridge.setEffectFromCommand(cmd.effect, eff);
             ++queuedEvents;
+        }
+        // 外部播种：入队（显式外部输入，独立于事件）。
+        if (cmd.seed.requested) {
+            bridge.pushSeed(cmd.seed);
+            ++queuedSeeds;
         }
         // 参数变更：key -> liveCfg 字段（RuntimeEnv 是映射唯一权威；本线程独占）。
         const int ok = RuntimeEnv::applyAll(cfg, changes);
         paramChanges += ok;
-        if (!changes.empty()) bridge.markCfgDirty();
         rejected += static_cast<int>(changes.size()) - ok;
         applied += ok;
         if (changes.empty()) ++applied;  // 幂等命中（同档/同开关态）也算一次成功干预
     }
+    // 玩家基础光照基线：liveCfg.sun.baseLevel 就是"玩家那一半"，
+    // 事件的临时偏移存在主循环的 EnvEffectState 里（到期只撤偏移）。
+    if (paramChanges > 0) bridge.setConfig(cfg, true);
+    status = (rejected == 0) ? 200 : 400;
     std::string resp = "{\"ok\":";
     resp += (rejected == 0) ? "true" : "false";
     resp += ",\"applied\":" + std::to_string(applied);
     resp += ",\"paramChanges\":" + std::to_string(paramChanges);
     resp += ",\"queuedEvents\":" + std::to_string(queuedEvents);
+    resp += ",\"queuedSeeds\":" + std::to_string(queuedSeeds);
     resp += ",\"rejected\":" + std::to_string(rejected);
     if (!lastErr.empty()) {
-        resp += ",\"error\":\"" + lastErr + "\"";
+        resp += ",\"code\":\"" + envJsonEscapeLocal(lastCode) + "\"";
+        resp += ",\"error\":\"" + envJsonEscapeLocal(lastErr) + "\"";
     }
+    if (!rejectItems.empty()) resp += ",\"rejections\":[" + rejectItems + "]";
     const std::vector<std::string> unwired = RuntimeEnv::unwiredKeys();
     if (!unwired.empty()) {
         resp += ",\"unwired\":[";
         for (size_t i = 0; i < unwired.size(); ++i) {
             if (i > 0) resp += ',';
-            resp += '"' + unwired[i] + '"';
+            resp += '"' + envJsonEscapeLocal(unwired[i]) + '"';
         }
         resp += ']';
     }
@@ -397,86 +555,40 @@ std::string handleEnvPost(const std::string& body, SimConfig& cfg,
     return resp;
 }
 
-// ---- 事件执行器（主循环线程；能量必须走 ledger）----
-// 审计红线：每个事件执行后 sim.auditOk() 必须仍为 true，否则打日志并 exit 3
-//（运行面不能带着破账继续跑——审计恒等式是本项目的存在性证明）。
-// 写点声明：harvest/winter/plague 直接对核能量做 +=/-=，是"组合根事件通道"——
-// 与 spawnNuclei 的出生引导（守卫 1c 已知豁免）同一性质的配置面写点：
-// 玩家事件是配置面动作，行为层没有事件 API（AgentBehavior.h 本轮不可改），
-// 能量记账全部走 ledger（注入/转移/耗散三通道），审计恒等式逐事件自证。
-// R4 若把事件下沉为 AgentBehavior::applyEvent，这里的直接写随之退役。
-void executePendingEvents(Simulation& sim,
-                          const std::vector<EnvPendingEvent>& events) {
-    using agentsim::Nucleus;
-    for (const EnvPendingEvent& ev : events) {
-        const EnvEventEffect& eff = ev.effect;
-        if (ev.id == "harvest") {
-            // 每核 +8，单次事件总注入 <= capPerEvent（2000）。能量来源 = 环境
-            // 生产者池（kFoodPoolId == 0 == 蓝细菌池），一级注入与光合同通道；
-            // 随后逐核 transfer（零和搬运），账本视角 = "环境产出一笔、核群分食"。
-            const double cap = eff.capPerEvent > 0.0 ? eff.capPerEvent : 0.0;
-            const double per = eff.perNucleus;
-            double budget = cap > 0.0 ? cap : 1e300;
-            double injected = 0.0;
-            std::vector<Nucleus>& pop =
-                const_cast<std::vector<Nucleus>&>(sim.nuclei());
-            for (Nucleus& n : pop) {
-                if (!n.alive) continue;
-                if (per > budget) break;  // 封顶：剩余核不再注入
-                n.energy += per;
-                sim.ledger().transfer(0, n.id, per);
-                injected += per;
-                budget -= per;
-            }
-            if (injected > 0.0) sim.ledger().injectPrimary(0, injected);
-            std::printf("[serve] event harvest: injected=%.3f (cap=%.1f)\n",
-                        injected, cap);
-        } else if (ev.id == "winter") {
-            // 每核 -5（能量 < skipBelow 跳过）：扣减走 dissipate（能量离开系统）。
-            std::vector<Nucleus>& pop =
-                const_cast<std::vector<Nucleus>&>(sim.nuclei());
-            double total = 0.0;
-            for (Nucleus& n : pop) {
-                if (!n.alive) continue;
-                if (n.energy < eff.skipBelow) continue;  // <5 跳过（契约原文）
-                const double take = eff.perNucleus < 0.0 ? -eff.perNucleus : eff.perNucleus;
-                if (take > n.energy) continue;  // 付不起不扣（能量永不为负）
-                n.energy -= take;
-                sim.ledger().dissipate("event:winter", take);
-                total += take;
-            }
-            std::printf("[serve] event winter: dissipated=%.3f\n", total);
-        } else if (ev.id == "plague") {
-            // 能量 > richThreshold 的富核 -12：抑制垄断巨头。
-            std::vector<Nucleus>& pop =
-                const_cast<std::vector<Nucleus>&>(sim.nuclei());
-            double total = 0.0;
-            for (Nucleus& n : pop) {
-                if (!n.alive) continue;
-                if (!(n.energy > eff.richThreshold)) continue;
-                const double take = eff.perNucleus < 0.0 ? -eff.perNucleus : eff.perNucleus;
-                if (take > n.energy) continue;
-                n.energy -= take;
-                sim.ledger().dissipate("event:plague", take);
-                total += take;
-            }
-            std::printf("[serve] event plague: dissipated=%.3f\n", total);
-        } else if (ev.id == "bloom") {
-            // 追加蓝细菌节点：0 能量播种（账面零操作，能量从光合长出入账）。
-            const int added =
-                sim.addCyanoNodes(eff.cyanoNodesToAdd > 0 ? eff.cyanoNodesToAdd : 0);
-            std::printf("[serve] event bloom: +%d cyano nodes (request %d, cap-guarded)\n",
-                        added, eff.cyanoNodesToAdd);
-        }
-        // 审计红线：事件后必须仍守恒，否则 exit 3（任务卡原文）。
+
+// ---- 事件的时间轴（主循环线程）----
+// 【P0-5 玩家干预重做】普通玩法的事件不再直接改核的能量：本文件里已经没有
+// 任何把能量写进 Nucleus 的事件代码路径（harvest/plague/bloom 三个执行分支随
+// 命令一起删除，EnvControl 侧也拒绝这三个命令名）。
+//
+// 三个阶段各自可观测（GET /env 的 effect.remainingFrames 一路读得到）：
+//   触发瞬间  HTTP 线程 setEffectFromCommand → active=true, endTick=0（未起算）
+//   后续模拟步 主循环 tickEffect → 首个模拟帧盖戳 endTick=tick+duration，
+//             之后每帧 remaining = endTick - tick 递减（暂停时不推进 → 不耗时长）
+//   到期时刻   tick >= endTick → expireEffect **只撤事件偏移**；
+//             玩家基础光照值在 ServeBridge 里原样保留，玩家期间的改动继续有效。
+//
+// 审计红线保留：每帧推进后 sim.auditOk() 必须仍为 true，否则 exit 3（见主循环）。
+
+// 外部播种（显式外部输入）。与"自然生长/事件奖励"区分：
+//   - 不产生能量（追加节点以 0 能量播种，光合长出来才入账；与构造期播种同口径），
+//   - 不是事件，不占用 /env event.*，回执与 /env JSON 都标 external。
+void executeSeedRequests(Simulation& sim, const std::vector<EnvSeedRequest>& requests) {
+    for (const EnvSeedRequest& req : requests) {
+        if (!req.requested) continue;
+        const int added = sim.addCyanoNodes(req.count);
+        std::printf("[serve] external seed %s: requested=%d added=%d (external input)\n",
+                    req.kind.c_str(), req.count, added);
+        std::fflush(stdout);
         if (!sim.auditOk()) {
             std::fprintf(stderr,
-                         "error: audit failed after event \"%s\" - exiting (code 3)\n",
-                         ev.id.c_str());
+                         "error: audit failed after seeding %d nodes - exiting (code 3)\n",
+                         added);
             std::exit(3);
         }
     }
 }
+
 
 // ---- GET /state 二进制快照（格式定义见交付报告；任务卡 §4 契约）----
 // 小端，头 80 字节：magic 'A'(1) + version=1(1) + 状态(1) + 保留(1) + 帧号 i32(4)
@@ -626,11 +738,9 @@ std::vector<unsigned char> buildStateSnapshot(const Simulation& sim,
 
     pushU8(0x41);                 // magic 'A'
     pushU8(2);                    // version=2（R8-A：核记录 128B = 32B 头 + 24 基因；v1=32B 无基因）
-    // R11-P1-6：结束相位可信号——灭绝/到达帧上限时 phase=1（前端据此显示结束原因）
-    const bool snapEnded = reason && (std::strcmp(reason, "extinct") == 0 ||
-                                      std::strcmp(reason, "max_ticks") == 0);
+    const bool snapEnded = reason && std::strcmp(reason, "max_ticks") == 0;
     pushU8(paused ? 2 : (snapEnded ? 1 : 0));  // 状态：0=运行 1=已结束 2=暂停
-    pushU8(0);                    // 保留
+    pushU8(sim.auditEnabled() ? (sim.auditOk() ? 1 : 2) : 0);
     pushI32(static_cast<int>(sim.tick()));
     pushF32(static_cast<float>(cfg.world.width));
     pushF32(static_cast<float>(cfg.world.height));
@@ -644,7 +754,7 @@ std::vector<unsigned char> buildStateSnapshot(const Simulation& sim,
                 ? static_cast<float>(cyanoEnergy / static_cast<double>(cyanoCount))
                 : 0.0f);
     pushF32(static_cast<float>(sunLevel));   // 全局阳光（serve 估算，前端渲染共用）
-    pushI32(0);                              // 保留
+    pushI32(static_cast<int>(cfg.cyanoMaxNodes));
     // R11-P1-6：结束原因写入保留区（≤27 字符 + NUL；v2.3.1 finishReason 对位）；头恰 80 字节
     {
         char reasonBuf[28] = {0};
@@ -724,23 +834,23 @@ std::string packsJson(const PackState& ps, const std::string& packsErr) {
            ",\"err\":\"" + agentsim::app::ResourcePackStore::jsonEscape(packsErr) + "\"}";
 }
 
+EnvEffectState restoredEffect(const Simulation& sim) {
+    const auto effect = sim.lightEffect();
+    if (effect.end <= sim.tick()) return {};
+    return {true, "winter", effect.offset, static_cast<long long>(effect.duration),
+            static_cast<long long>(effect.end)};
+}
+
 // ---- --serve 模式主循环 ----
 // 线程模型（数据竞争免疫的归属设计）：
-//   HTTP 线程独占：envSt（调控面状态机）、liveCfg（RuntimeEnv 写目标）、
-//                 unwired 诊断、POST /env 的全部解析与应用。
-//   主循环独占：sim（唯一推进者）、事件执行、快照构建。
-//   ServeBridge（mutex 保护）：事件队列（HTTP 写 / 主循环读）、
-//                 cfgDirty 标志、每帧发布的 {tick, nuclei, cyanoNodes,
-//                 cyanoLinks, /env JSON, /state 二进制} 只读快照。
-// 路由层绝不直接读 sim —— 只读 bridge 里的发布快照，主循环写、HTTP 读，
-// 锁内 memcpy 级开销。
+// HTTP 线程解析命令和维护控件状态；模拟线程推进世界、管理时间轴和生成快照。
+// ServeBridge 用同一把锁交换配置、命令及已发布的只读状态。
 int serveMode(const CliOptions& opts, int port, bool ticksGiven, bool openBrowser) {
     // R6-C：sim 改为 unique_ptr——/run /load 需要"原子替换世界"（关旧开新/换存档态），
     // 栈对象做不到。独占权在主循环；HTTP 线程只碰 bridge（既有模式不变）。
     auto simPtr = std::make_unique<agentsim::Simulation>(opts.config);
     simPtr->setAuditEnabled(opts.audit);           // --audit 才做运行时账目核对（默认关）
     agentsim::Simulation* simRaw = simPtr.get();   // R6-C：换局时随 ptr 一起换
-    SimConfig liveCfg = opts.config;   // RuntimeEnv 的写目标（HTTP 线程独占）
     EnvState envSt;                    // 调控面状态（HTTP 线程独占）
     // R7-A：启动即加载材质包（resourcepacks.list 不存在 = 只用内置默认色）。
     PackState packState;
@@ -762,9 +872,11 @@ int serveMode(const CliOptions& opts, int port, bool ticksGiven, bool openBrowse
         std::printf("[serve] resource packs: %zu available, %zu enabled\n",
                     packState.all.size(), packState.enabled.size());
     }
-    ServeBridge bridge;
+    ServeBridge bridge(opts.config);
     // R6-C：时间轴（回放数据源）。默认 200 帧一个检查点。
-    auto timelinePtr = std::make_unique<agentsim::app::Timeline>(liveCfg);   // R6-C：回放检查点
+    auto timelinePtr = std::make_unique<agentsim::app::Timeline>(opts.config);
+    timelinePtr->checkpoint(*simRaw);
+    bridge.publishCheckpoints(*timelinePtr);
 
     HttpServer server;
     // R10 修复：webRoot 相对可执行文件定位（双击 Explorer 时 CWD 可能不是仓库根——
@@ -819,7 +931,15 @@ int serveMode(const CliOptions& opts, int port, bool ticksGiven, bool openBrowse
             return true;
         }
         if (method == "GET" && path == "/env") {
-            resp = bridge.envJson();  // 主循环每帧发布的 JSON（含 cyano 计数）
+            // P0-5：现算，不读主循环的发布缓存 —— 触发命令刚落地就要能读到
+            // active/remaining（暂停态也一样：暂停只冻 tick，不冻这份快照）。
+            const ServeBridge::EnvCounts c = bridge.counts();
+            const EnvEffectState eff = bridge.effectSnapshot();
+            const EnvEffectStatus st = EnvControl::effectStatus(eff, c.tick);
+            const double playerBase = bridge.playerSunBase();
+            resp = EnvControl::toJson(envSt, true, c.paused, c.cyanoNodes, c.cyanoLinks, st,
+                                      EnvControl::effectiveSunBase(playerBase, eff),
+                                      playerBase, c.tick);
             contentType = "application/json; charset=utf-8";
             status = 200;
             return true;
@@ -833,9 +953,33 @@ int serveMode(const CliOptions& opts, int port, bool ticksGiven, bool openBrowse
             return true;
         }
         if (method == "POST" && path == "/env") {
-            resp = handleEnvPost(body, liveCfg, envSt, bridge);
+            // P0-5：过期/未知命令必须有明确反馈 —— 有被拒命令即 400（回执带
+            // code / error / rejections[]）。全部成功 200。
+            int envStatus = 200;
+            auto pendingConfig = bridge.config();
+            resp = handleEnvPost(body, pendingConfig, envSt, bridge, envStatus);
             contentType = "application/json; charset=utf-8";
-            status = resp.find("\"ok\":true") != std::string::npos ? 200 : 200;
+            status = envStatus;
+            return true;
+        }
+        // GET /env 之外的只读别名：GET /env/event 显式给当前环境事件（含剩余帧数），
+        // 供 A5 验收脚本用一条路径读"触发瞬间 / 后续模拟步 / 到期时刻"。
+        if (method == "GET" && path == "/env/event") {
+            const EnvEffectState eff = bridge.effectSnapshot();
+            const EnvEffectStatus st =
+                EnvControl::effectStatus(eff, static_cast<long long>(bridge.tick()));
+            resp = "{\"ok\":true,\"tick\":" + std::to_string(bridge.tick()) +
+                   ",\"active\":" + (st.active ? "true" : "false") +
+                   ",\"id\":\"" + st.id + "\",\"lightOffset\":" +
+                   std::to_string(st.lightOffset) + ",\"durationFrames\":" +
+                   std::to_string(st.durationFrames) + ",\"remainingFrames\":" +
+                   std::to_string(st.remainingFrames) + ",\"endTick\":" +
+                   std::to_string(st.endTick) + ",\"started\":" +
+                   (st.started ? "true" : "false") + ",\"sunBaseEffective\":" +
+                   std::to_string(EnvControl::effectiveSunBase(bridge.playerSunBase(), eff)) +
+                   ",\"sunBasePlayer\":" + std::to_string(bridge.playerSunBase()) + "}";
+            contentType = "application/json; charset=utf-8";
+            status = 200;
             return true;
         }
         if (method == "GET" && path == "/state") {
@@ -848,7 +992,7 @@ int serveMode(const CliOptions& opts, int port, bool ticksGiven, bool openBrowse
         // ---- R6-C：存档与新局路由（骨架占位，逐步真实现）----
         if (method == "POST" && path == "/run") {
             // 开新局：按 body 参数构造新 SimConfig，经 bridge 入队，主循环原子换世界。
-            agentsim::SimConfig next = liveCfg;
+            agentsim::SimConfig next = bridge.config();
             const std::string seedS = formValue(body, "seed");
             const std::string nucleiS = formValue(body, "nuclei");
             const std::string cyanoS = formValue(body, "cyano_nodes");
@@ -892,7 +1036,7 @@ int serveMode(const CliOptions& opts, int port, bool ticksGiven, bool openBrowse
             const std::string name = formValue(body, "name");
             std::string verr;
             if (!agentsim::app::SaveStore::validName(name, verr)) {
-                resp = std::string("{\"ok\":false,\"error\":\"") + verr + "\"}";
+                resp = std::string("{\"ok\":false,\"error\":\"") + envJsonEscapeLocal(verr) + "\"}";
                 contentType = "application/json; charset=utf-8"; status = 400; return true;
             }
             bridge.requestSave(name);
@@ -917,6 +1061,15 @@ int serveMode(const CliOptions& opts, int port, bool ticksGiven, bool openBrowse
                 contentType = "application/json; charset=utf-8"; status = 400; return true;
             }
             bridge.requestLoad(cfg2, name);
+            if (!bridge.waitWorldResult(verr) || !verr.empty()) {
+                status = verr.empty() ? 504 : 400;
+                resp = "{\"ok\":false,\"error\":\"" +
+                       envJsonEscapeLocal(verr.empty() ? "load timeout" : verr) + "\"}";
+                contentType = "application/json; charset=utf-8";
+                return true;
+            }
+            envSt = {};
+            envSt.cyanoOn = bridge.config().runtime.cyanoEnabled;
             resp = "{\"ok\":true,\"name\":\"" + name + "\"}";
             contentType = "application/json; charset=utf-8"; status = 200; return true;
         }
@@ -945,9 +1098,9 @@ int serveMode(const CliOptions& opts, int port, bool ticksGiven, bool openBrowse
         if (method == "GET" && path == "/timeline") {
             std::string arr = "[";
             bool firstCp = true;
-            for (const auto& cp : *timelinePtr) {
+            for (const auto frame : bridge.checkpoints()) {
                 if (!firstCp) arr += ",";
-                arr += std::to_string(cp.frame);
+                arr += std::to_string(frame);
                 firstCp = false;
             }
             arr += "]";
@@ -966,8 +1119,22 @@ int serveMode(const CliOptions& opts, int port, bool ticksGiven, bool openBrowse
                 resp = "{\"ok\":false,\"error\":\"missing frame\"}";
                 contentType = "application/json; charset=utf-8"; status = 400; return true;
             }
-            const std::uint64_t target = std::stoull(fs_);
+            std::uint64_t target = 0;
+            const auto parsed = std::from_chars(fs_.data(), fs_.data() + fs_.size(), target);
+            if (parsed.ec != std::errc() || parsed.ptr != fs_.data() + fs_.size()) {
+                resp = "{\"ok\":false,\"error\":\"invalid frame\"}";
+                contentType = "application/json; charset=utf-8"; status = 400; return true;
+            }
             bridge.requestSeek(target);   // 入队，主循环执行（sim 独占）
+            std::string detail;
+            if (!bridge.waitWorldResult(detail) || !detail.empty()) {
+                status = detail.empty() ? 504 : 400;
+                resp = "{\"ok\":false,\"error\":\"" +
+                       envJsonEscapeLocal(detail.empty() ? "seek timeout" : detail) + "\"}";
+                contentType = "application/json; charset=utf-8";
+                return true;
+            }
+            envSt.cyanoOn = bridge.config().runtime.cyanoEnabled;
             resp = "{\"ok\":true,\"frame\":" + fs_ + "}";
             contentType = "application/json; charset=utf-8"; status = 200; return true;
         }
@@ -1044,118 +1211,155 @@ int serveMode(const CliOptions& opts, int port, bool ticksGiven, bool openBrowse
     //（与批跑同契约，便于脚本验收）。
     const bool runForever = !ticksGiven;
     const std::uint64_t maxTicks = opts.config.world.maxTicks;
-    int renderInterval = liveCfg.runtime.renderInterval > 0
-                             ? liveCfg.runtime.renderInterval : 1;
     auto lastFrame = std::chrono::steady_clock::now();
+    auto latestFrame = simRaw->tick();
+    long long lastEffectGen = -1;
+    bool viewingPast = false;
+
+    const auto publishState = [&](bool paused) {
+        const bool atLimit = !runForever && simRaw->tick() >= maxTicks;
+        const char* reason = atLimit ? "max_ticks" :
+            (simRaw->nucleusCount() == 0 ? "extinct" : (paused ? "paused" : "running"));
+        const auto& config = simRaw->cfgProbe();
+        bridge.publish(simRaw->tick(),
+                       buildStateSnapshot(*simRaw, config, paused,
+                                          serveSunEstimate(simRaw->effectiveSun(), simRaw->tick()),
+                                          reason),
+                       static_cast<int>(simRaw->cyanoNodes().size()),
+                       static_cast<int>(simRaw->cyanoLinks().size()));
+    };
+    const auto syncRestoredWorld = [&] {
+        bridge.setConfig(simRaw->cfgProbe(), false);
+        bridge.setEffect(restoredEffect(*simRaw));
+        bridge.publishCheckpoints(*timelinePtr);
+        publishState(bridge.paused());
+    };
+    publishState(false);
     while (runForever || simRaw->tick() < maxTicks) {
-        // R6-C：/run 换局（HTTP 线程交新 cfg，本帧原子换世界）。
-        {
-            agentsim::SimConfig next;
-            if (bridge.takeRunRequest(next)) {
-                simPtr = std::make_unique<agentsim::Simulation>(next);
-                simRaw = simPtr.get();
-                timelinePtr = std::make_unique<agentsim::app::Timeline>(next);   // 新局重置时间轴
-                std::printf("[serve] new run: seed=%llu nuclei=%zu cyano=%zu\n",
-                            (unsigned long long)next.world.seed,
-                            next.colony.nuclei, next.cyanoNodeCount);
-            }
+        SimConfig next;
+        if (bridge.takeRunRequest(next)) {
+            simPtr = std::make_unique<Simulation>(next);
+            simRaw = simPtr.get();
+            simRaw->setAuditEnabled(opts.audit);
+            timelinePtr = std::make_unique<agentsim::app::Timeline>(next);
+            timelinePtr->checkpoint(*simRaw);
+            latestFrame = simRaw->tick();
+            viewingPast = false;
+            lastEffectGen = -1;
+            syncRestoredWorld();
         }
-        // R6-C：/load 载入（构造期实体用存档 cfg，实体态从 save.bin 恢复）。
-        {
-            agentsim::SimConfig lcfg;
-            std::string lname;
-            if (bridge.takeLoadRequest(lcfg, lname)) {
-                simPtr = std::make_unique<agentsim::Simulation>(lcfg);
+
+        SimConfig loadConfig;
+        std::string loadName;
+        if (bridge.takeLoadRequest(loadConfig, loadName)) {
+            std::string error;
+            std::string policyName;
+            auto loaded = std::make_unique<Simulation>(loadConfig);
+            if (agentsim::app::SaveStore::load(loadName, *loaded, loadConfig, policyName, error) &&
+                loaded->auditOk()) {
+                loaded->setAuditEnabled(opts.audit);
+                auto history = std::make_unique<agentsim::app::Timeline>(loadConfig);
+                std::string timelineError;
+                if (!history->importFrom("saves/" + loadName + "/timeline.bin", timelineError)) {
+                    history = std::make_unique<agentsim::app::Timeline>(loadConfig);
+                }
+                history->discardAfter(loaded->tick());
+                history->checkpoint(*loaded);
+                simPtr = std::move(loaded);
                 simRaw = simPtr.get();
-                std::string serr;
-                const bool ok = agentsim::app::SaveStore::load(lname, *simRaw, lcfg, lname, serr);
-                timelinePtr = std::make_unique<agentsim::app::Timeline>(lcfg);
-                std::printf("[serve] load '%s': %s (tick=%llu)\n", lname.c_str(),
-                            ok ? "ok" : serr.c_str(),
-                            (unsigned long long)simRaw->tick());
+                timelinePtr = std::move(history);
+                latestFrame = simRaw->tick();
+                viewingPast = false;
+                lastEffectGen = -1;
+                syncRestoredWorld();
+            } else if (error.empty()) {
+                error = "saved world failed the energy audit";
             }
+            bridge.publishWorldResult(error);
         }
-        // R6-C：/seek 回放（暂停态；从最近检查点恢复 + 补帧到目标）。
-        {
-            std::uint64_t target = 0;
-            if (bridge.takeSeekRequest(target)) {
-                std::string serr;
-                if (timelinePtr->seek(target, *simRaw, serr)) {
-                    while (simRaw->tick() < target) simRaw->step();
-                    std::printf("[serve] seek to %llu (from checkpoint)\n",
-                                (unsigned long long)target);
-                } else {
-                    std::printf("[serve] seek failed: %s\n", serr.c_str());
+
+        std::uint64_t target = 0;
+        if (bridge.takeSeekRequest(target)) {
+            std::string error;
+            if (target > latestFrame) {
+                error = "frame is beyond the recorded timeline";
+            } else {
+                auto restored = std::make_unique<Simulation>(timelinePtr->cfg());
+                restored->setAuditEnabled(opts.audit);
+                if (timelinePtr->seek(target, *restored, error) && restored->runTo(target)) {
+                    simPtr = std::move(restored);
+                    simRaw = simPtr.get();
+                    viewingPast = simRaw->tick() < latestFrame;
+                    lastEffectGen = -1;
+                    syncRestoredWorld();
+                } else if (error.empty()) {
+                    error = "replayed world failed the energy audit";
                 }
             }
+            bridge.publishWorldResult(error);
         }
-        // R6-C：存档请求（HTTP 线程入队，本帧执行——sim 独占在主循环）。
-        {
-            std::string saveName;
-            if (bridge.takeSaveRequest(saveName)) {
-                std::string serr;
-                const bool ok = agentsim::app::SaveStore::save(saveName, *simRaw, liveCfg,
-                                                     liveCfg.policy.name, serr);
-                bridge.publishSaveResult(ok, ok ? "" : serr);
-                std::printf("[serve] save '%s': %s\n", saveName.c_str(),
-                            ok ? "ok" : serr.c_str());
+
+        std::string saveName;
+        if (bridge.takeSaveRequest(saveName)) {
+            std::string error;
+            const auto& config = simRaw->cfgProbe();
+            bool ok = agentsim::app::SaveStore::save(saveName, *simRaw, config,
+                                                      config.policy.name, error);
+            if (ok) {
+                ok = timelinePtr->exportTo("saves/" + saveName + "/timeline.bin", error,
+                                           simRaw->tick());
             }
+            bridge.publishSaveResult(ok, error);
         }
-        // 1) 取 HTTP 线程排队的参数变更（cfgDirty 才拷贝）。
-        // 播放控制：暂停态下不推进（除非本帧是"单步"请求）。
-        const bool advance = bridge.shouldAdvance();
-        if (!advance) {
-            // 仍要发布快照，让前端知道"暂停了"而不是"断了"。
-            // R8 修复：发布**当前世界**的新快照（paused=true），不能发 bridge.state()
-            // 旧缓存——/load、/seek、/run 换局后暂停态下 HTTP /state 会返回载入前的
-            // 旧世界（实测 load 后 tick 显示旧值，resume 才跳到真世界）。
-            const std::vector<unsigned char> snapPaused =
-                buildStateSnapshot(*simRaw, liveCfg, true,
-                                   serveSunEstimate(liveCfg.sun, simRaw->tick()), "paused");
-            bridge.publish(simRaw->tick(), simRaw->nucleusCount(), snapPaused, bridge.envJson());
+
+        if (!bridge.shouldAdvance()) {
+            publishState(true);
             std::this_thread::sleep_for(std::chrono::milliseconds(20));
             continue;
         }
-        if (bridge.takeCfgDirty()) {
-            SimConfig next;
-            bridge.copyCfg(liveCfg, next);
-            simRaw->applyConfig(next);
-            // render_interval 的运行时落点（HTTP 线程写、本循环读经拷贝）。
-            if (next.runtime.renderInterval > 0) renderInterval = next.runtime.renderInterval;
+
+        const bool configChanged = bridge.takeConfig(next);
+        if (configChanged) simRaw->applyConfig(next);
+        const auto effect = bridge.tickEffect(static_cast<long long>(simRaw->tick()));
+        const bool effectChanged = effect.generation != lastEffectGen;
+        if (effectChanged) {
+            simRaw->setLightEffect({effect.state.lightOffset,
+                                    static_cast<agentsim::Tick>(effect.state.durationFrames),
+                                    static_cast<agentsim::Tick>(effect.state.endTick)});
+            lastEffectGen = effect.generation;
         }
-        // 2) 事件（上一帧 HTTP 排队）：能量走 ledger，审计失败即 exit 3。
-        {
-            std::vector<EnvPendingEvent> batch;
-            bridge.takeEvents(batch);
-            if (!batch.empty()) executePendingEvents(*simRaw, batch);
+
+        std::vector<EnvSeedRequest> seeds;
+        bridge.takeSeeds(seeds);
+        if (!seeds.empty()) executeSeedRequests(*simRaw, seeds);
+
+        if (viewingPast || configChanged || effectChanged || !seeds.empty()) {
+            if (viewingPast) timelinePtr->discardAfter(simRaw->tick());
+            timelinePtr->checkpoint(*simRaw);
+            bridge.publishCheckpoints(*timelinePtr);
+            viewingPast = false;
         }
-        // 3) 帧推进 + 每帧审计（红线）。
+
         simRaw->step();
+        latestFrame = simRaw->tick();
         if (!simRaw->auditOk()) {
             std::fprintf(stderr, "error: audit failed at tick %llu - exiting\n",
                          static_cast<unsigned long long>(simRaw->tick()));
             server.stop();
             return 3;
         }
-        // 4) 发布快照（renderInterval 节流；bridge 锁内换入）。
-        if (simRaw->tick() % static_cast<std::uint64_t>(renderInterval) == 0) {
-            // R11-P1-6：结束原因（灭绝 / 到达帧上限；runForever 模式只会是灭绝）
-            const char* runReason = "running";
-            if (simRaw->nucleusCount() == 0) runReason = "extinct";
-            else if (!runForever && simRaw->tick() >= maxTicks) runReason = "max_ticks";
-            const std::vector<unsigned char> snap =
-                buildStateSnapshot(*simRaw, liveCfg, false, serveSunEstimate(liveCfg.sun, simRaw->tick()), runReason);
-            const std::string envJson = EnvControl::toJson(
-                envSt, true, false, static_cast<int>(simRaw->cyanoNodes().size()),
-                static_cast<int>(simRaw->cyanoLinks().size()));
-            // R6-C：回放检查点（200 帧一个，供 /timeline 与 /seek）。
-        if (simRaw->tick() % timelinePtr->checkpointInterval() == 0) {
-            timelinePtr->maybeCheckpoint(*simRaw, simRaw->tick(), simRaw->stateHash());
+        const auto& config = simRaw->cfgProbe();
+        const auto checkpointInterval = timelinePtr->checkpointInterval();
+        if (checkpointInterval != 0 && latestFrame % checkpointInterval == 0u) {
+            timelinePtr->maybeCheckpoint(*simRaw, latestFrame, simRaw->stateHash());
+            bridge.publishCheckpoints(*timelinePtr);
         }
-        bridge.publish(simRaw->tick(), simRaw->nucleusCount(), snap, envJson);
+        const auto renderInterval = static_cast<std::uint64_t>((std::max)(1, config.runtime.renderInterval));
+        if (latestFrame % renderInterval == 0 || bridge.paused() || (!runForever && latestFrame == maxTicks)) {
+            publishState(bridge.paused());
         }
-        // 5) 限速：maxFps > 0 按其限速；永久模式默认 60fps（可 POST max_fps 覆盖）。
-        double fps = liveCfg.runtime.maxFps;
+
+        double fps = config.runtime.maxFps;
         if (fps <= 0.0 && runForever) fps = 60.0;
         if (fps > 0.0) {
             const auto frameBudget =
@@ -1167,7 +1371,6 @@ int serveMode(const CliOptions& opts, int port, bool ticksGiven, bool openBrowse
             lastFrame = std::chrono::steady_clock::now();
         }
     }
-
     server.stop();
     std::printf("[serve] done tick=%llu nuclei=%zu cyano=%zu total_energy=%.8f audit=%s\n",
                 static_cast<unsigned long long>(simRaw->tick()),

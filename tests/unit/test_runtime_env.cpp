@@ -220,24 +220,22 @@ TEST(runtime_env_cyano_and_producer_keys_write_tuning) {
     CHECK_NEAR(f.cfg.cyanoTuning.minSeparation, 15.0, 1e-12);
     CHECK(RuntimeEnv::applyOne(f.cfg, "cyano_predation_radius", 20.0));
     CHECK_NEAR(f.cfg.nucleus.cyanoPredationRadius, 20.0, 1e-12);
-    CHECK(RuntimeEnv::applyOne(f.cfg, "cyano_conversion_mode", 2));
-    CHECK(f.cfg.cyanoTuning.conversionMode == 2);
+    // 规则 v2（P0-1）：同化率只剩一条基率，与速度/加速度无关。
     CHECK(RuntimeEnv::applyOne(f.cfg, "cyano_conversion_rate", 0.8));
     CHECK_NEAR(f.cfg.cyanoTuning.conversionRate, 0.8, 1e-12);
-    CHECK(RuntimeEnv::applyOne(f.cfg, "cyano_conversion_exponent", 1.5));
-    CHECK_NEAR(f.cfg.cyanoTuning.conversionExponent, 1.5, 1e-12);
-    CHECK(RuntimeEnv::applyOne(f.cfg, "cyano_conversion_speed_ref", 50.0));
-    CHECK_NEAR(f.cfg.cyanoTuning.conversionSpeedRef, 50.0, 1e-12);
-    CHECK(RuntimeEnv::applyOne(f.cfg, "cyano_conversion_accel_ref", 70.0));
-    CHECK_NEAR(f.cfg.cyanoTuning.conversionAccelRef, 70.0, 1e-12);
-    CHECK(RuntimeEnv::applyOne(f.cfg, "cyano_conversion_w_speed", 1.2));
-    CHECK_NEAR(f.cfg.cyanoTuning.conversionWSpeed, 1.2, 1e-12);
-    CHECK(RuntimeEnv::applyOne(f.cfg, "cyano_conversion_w_accel", 1.3));
-    CHECK_NEAR(f.cfg.cyanoTuning.conversionWAccel, 1.3, 1e-12);
-    CHECK(RuntimeEnv::applyOne(f.cfg, "cyano_conversion_min_rate", 0.08));
-    CHECK_NEAR(f.cfg.cyanoTuning.conversionMinRate, 0.08, 1e-12);
-    CHECK(RuntimeEnv::applyOne(f.cfg, "cyano_conversion_max_rate", 1.2));
-    CHECK_NEAR(f.cfg.cyanoTuning.conversionMaxRate, 1.2, 1e-12);
+    // 被删的 8 个通道键：既不能改配置，也不能"静默成功"——它们现在是未知键
+    // （进 unwired），因为映射表里根本没有它们（没有兼容别名、没有开关位）。
+    {
+        Fresh f2;
+        static const char* const kGone[] = {
+            "cyano_conversion_mode", "cyano_conversion_exponent",
+            "cyano_conversion_speed_ref", "cyano_conversion_accel_ref",
+            "cyano_conversion_w_speed", "cyano_conversion_w_accel",
+            "cyano_conversion_min_rate", "cyano_conversion_max_rate",
+        };
+        for (const char* k : kGone) CHECK(!RuntimeEnv::applyOne(f2.cfg, k, 1.0));
+        CHECK(RuntimeEnv::unwiredKeys().size() == 8u);
+    }
     CHECK(RuntimeEnv::applyOne(f.cfg, "cyano_hue_jitter", 12.0));
     CHECK_NEAR(f.cfg.cyanoTuning.hueJitterSigma, 12.0, 1e-12);
     CHECK(RuntimeEnv::applyOne(f.cfg, "cyano_colonies", 6));
@@ -333,14 +331,17 @@ TEST(runtime_env_nucleus_and_ball_keys_wired) {
     CHECK_NEAR(f.cfg.ball.initialEnergy, 12.0, 1e-12);
     CHECK(RuntimeEnv::applyOne(f.cfg, "ball_energy_cap", 600.0));
     CHECK_NEAR(f.cfg.ball.energyCap, 600.0, 1e-12);
-    CHECK(RuntimeEnv::applyOne(f.cfg, "ball_spawn_probability", 0.03));
-    CHECK_NEAR(f.cfg.cyanoTuning.ballSpawnProbability, 0.03, 1e-12);
-    CHECK(RuntimeEnv::applyOne(f.cfg, "ball_spawn_cost", 35.0));
-    CHECK_NEAR(f.cfg.cyanoTuning.ballSpawnCost, 35.0, 1e-12);
-    CHECK(RuntimeEnv::applyOne(f.cfg, "ball_spawn_min_dist", 12.0));
-    CHECK_NEAR(f.cfg.cyanoTuning.ballSpawnMinDist, 12.0, 1e-12);
-    CHECK(RuntimeEnv::applyOne(f.cfg, "ball_spawn_max_dist", 40.0));
-    CHECK_NEAR(f.cfg.cyanoTuning.ballSpawnMaxDist, 40.0, 1e-12);
+    // 规则 v2（P2 提前收口）：蓝细菌产球的 4 个键已从映射表移除 —— 普通玩法里
+    // 没有任何接口能把"产球概率/成本"写回 CyanoTuning（字段本身也已删除）。
+    {
+        static const char* const kNoBallSpawn[] = {
+            "ball_spawn_probability", "ball_spawn_cost",
+            "ball_spawn_min_dist", "ball_spawn_max_dist",
+        };
+        for (const char* k : kNoBallSpawn) CHECK(!RuntimeEnv::applyOne(f.cfg, k, 1.0));
+        // 随之清理诊断集（本 TEST 后面还要断言别的键不受影响）。
+        RuntimeEnv::resetUnwired();
+    }
     CHECK(RuntimeEnv::applyOne(f.cfg, "ball_loss_cost", 6.0));
     CHECK_NEAR(f.cfg.ball.lossCost, 6.0, 1e-12);
     CHECK(RuntimeEnv::applyOne(f.cfg, "detach_radius", 70.0));
@@ -364,11 +365,10 @@ TEST(runtime_env_nucleus_and_ball_keys_wired) {
     CHECK(RuntimeEnv::applyOne(f.cfg, "cyano_enabled", 1.0));
     CHECK(f.cfg.runtime.cyanoEnabled);
 
-    // EnvControl food 轴拼写别名。
-    CHECK(RuntimeEnv::applyOne(f.cfg, "cyano_ball_spawn_probability", 0.04));
-    CHECK_NEAR(f.cfg.cyanoTuning.ballSpawnProbability, 0.04, 1e-12);
-    CHECK(RuntimeEnv::applyOne(f.cfg, "cyano_ball_spawn_cost", 40.0));
-    CHECK_NEAR(f.cfg.cyanoTuning.ballSpawnCost, 40.0, 1e-12);
+    // EnvControl food 轴的两个产球拼写别名同样已删除（轴档位里也不再有产球项）。
+    CHECK(!RuntimeEnv::applyOne(f.cfg, "cyano_ball_spawn_probability", 0.04));
+    CHECK(!RuntimeEnv::applyOne(f.cfg, "cyano_ball_spawn_cost", 40.0));
+    RuntimeEnv::resetUnwired();
 }
 
 // ---------- 拒绝与未知 ----------
@@ -451,11 +451,43 @@ TEST(runtime_env_reset_unwired_clears) {
 }
 
 TEST(runtime_env_wired_key_count_matches_plan) {
-    // 106 schema 键 + cyano_enabled + 2 别名 = 109 表行；拒绝名单 5 键不在表内。
-    // （113 - 5 拒绝 + 2 别名 + 1 cyano_enabled = 111？不——schema 113 键中
-    //  5 个被拒，剩 108 接线 + 2 别名 + cyano_enabled = 111。断言按此口径。）
+    // 口径（规则 v2 之后）：
+    //   ParamSchema 101 键
+    //   - 拒绝名单 5 键（width/height/seed/ticks/regrow_food 不在映射表里）
+    //   - schema 里但映射表也不接的 5 键：ball_radius / ball_vel_range /
+    //     ball_spawn_* 已删、cyano_initial_energy 等走在 runtime.* 之外的既有差异
+    //   实际表行数由 serve 启动横幅自证：[serve] wired keys: 97。
+    //
+    // 这里钉具体数字（不是下限）：删键/加键必须同步改这个数，并在 ParamSchema.cpp
+    // 与 RuntimeEnv.cpp 的注释里写明原因。规则 v2 从 113 降到 97：
+    //   - migration_bonus / migration_radius             -2
+    //   - cyano_conversion_* 8 键                         -8
+    //   - ball_spawn_* 4 键                               -4
+    //   - EnvControl 两个 cyano_ball_spawn_* 别名         -2
+    //   113 - 16 = 97 ✓
     const int wired = RuntimeEnv::wiredKeyCount();
-    CHECK(wired == 113);  // R9-A：+migration_bonus/migration_radius;
+    CHECK(wired == 97);
+}
+
+TEST(runtime_env_removed_keys_are_not_wired) {
+    // 反向自证：被删的键不得以任何形式留在映射表里（改名保留 / 兼容别名 /
+    // "只在某个轴档位里出现"都算后门）。这里是键名层面的最后一道门。
+    Fresh f;
+    static const char* const kGone[] = {
+        "migration_bonus", "migration_radius",
+        "cyano_conversion_mode", "cyano_conversion_exponent",
+        "cyano_conversion_speed_ref", "cyano_conversion_accel_ref",
+        "cyano_conversion_w_speed", "cyano_conversion_w_accel",
+        "cyano_conversion_min_rate", "cyano_conversion_max_rate",
+        "ball_spawn_probability", "ball_spawn_cost",
+        "ball_spawn_min_dist", "ball_spawn_max_dist",
+        "cyano_ball_spawn_probability", "cyano_ball_spawn_cost",
+    };
+    for (const char* k : kGone) {
+        CHECK(!RuntimeEnv::applyOne(f.cfg, k, 1.0));
+    }
+    // 全部落进 unwired（未知键语义），不是"静默接受"。
+    CHECK(RuntimeEnv::unwiredKeys().size() == 16u);
 }
 
 // ---------- 端到端：EnvControl 产出 -> RuntimeEnv 应用 -> SimConfig 变了 ----------
@@ -525,27 +557,57 @@ TEST(runtime_env_apply_then_run_200_ticks_audit_ok) {
     CHECK(sim.nucleusCount() > 0);
 }
 
-TEST(runtime_env_add_cyano_nodes_event_semantics) {
+// 外部播种语义（P0-5）：seed.cyano=N 是玩家显式投入的外部物质。
+// 与旧 bloom 事件的区别不在"加几个节点"，而在规则：播种**不产生能量**
+//（新节点以 0 能量 + initialMaterial 组织落下，能量只能靠之后的光合长出来）。
+TEST(runtime_env_external_seed_respects_cap_and_injects_declared_energy) {
     Fresh f;
     f.cfg.cyanoNodeCount = 16;
     f.cfg.cyanoMaxNodes = 32;
     agentsim::Simulation sim(f.cfg);
     const std::size_t before = sim.cyanoNodes().size();
     CHECK(before >= 16u);
-    // 事件 bloom：追加 8 个节点。
+    double energyBefore = 0.0;
+    for (const agentsim::CyanoNode& c : sim.cyanoNodes()) energyBefore += c.energy;
+    const double seedEnergy = sim.cyanoParams().seedEnergy;
+    CHECK(seedEnergy > 0.0);   // 规则 v2：新个体必须有启动储备
+    // 外部播种 8 个节点。
     const int added = sim.addCyanoNodes(8);
     CHECK(added == 8);
     CHECK(sim.cyanoNodes().size() == before + 8u);
+    // 规则 v2 契约变更：播种节点带着 seedEnergy 的启动能量。
+    // 它们是**外部输入**，所以能量必须增加，且增加量恰好等于 added × seedEnergy，
+    // 并已通过 injectPrimary 记账（否则审计恒等式会立刻破——这正是本用例的守护点）。
+    double energyAfter = 0.0;
+    for (const agentsim::CyanoNode& c : sim.cyanoNodes()) energyAfter += c.energy;
+    CHECK_NEAR(energyAfter - energyBefore, 8.0 * seedEnergy, 1e-9);
     // 护栏：maxNodes=32，请求 100 只补到 32。
     const int added2 = sim.addCyanoNodes(100);
     CHECK(added2 == 32 - static_cast<int>(before) - 8);
     CHECK(sim.cyanoNodes().size() == 32u);
-    // 追加后跑 50 tick：新节点从 0 能量光合生长，审计仍 ok。
-    CHECK(sim.runTo(250));
+    // 审计仍 ok：播种注入的是**已入账**的外部能量（不是凭空出现的）。
     CHECK(sim.auditOk());
-    double cyanoEnergy = 0.0;
-    for (const agentsim::CyanoNode& c : sim.cyanoNodes()) cyanoEnergy += c.energy;
-    CHECK(cyanoEnergy > 0.0);  // 光合确实喂到了追加节点
+}
+
+// 播种后生产者能靠光合自己长起来（不是播种直接给能量）。
+TEST(runtime_env_external_seed_grows_by_photosynthesis) {
+    Fresh f;   // 默认配置：512 节点 / maxNodes 4096，足够形成可存活菌落
+    agentsim::Simulation sim(f.cfg);
+    double energyAtSeed = 0.0;
+    for (const agentsim::CyanoNode& c : sim.cyanoNodes()) energyAtSeed += c.energy;
+    // 规则 v2：播种节点带 seedEnergy 启动储备（不再是 0）。"生长"要证明的是
+    // 节点能把光合**净增加**到播种基线之上，而不是靠播种本身送能量。
+    const double seedEnergy = sim.cyanoParams().seedEnergy;
+    CHECK_NEAR(energyAtSeed,
+               static_cast<double>(sim.cyanoNodes().size()) * seedEnergy, 1e-9);
+    const double baseline = energyAtSeed;
+    CHECK(sim.addCyanoNodes(64) == 64);
+    CHECK(sim.runTo(150));
+    CHECK(sim.auditOk());
+    double energyLater = 0.0;
+    for (const agentsim::CyanoNode& c : sim.cyanoNodes()) energyLater += c.energy;
+    // 真正的判据：跑了一段之后，节点能量的**净增长**必须来自光合。
+    CHECK(energyLater > baseline);
 }
 
 TEST(runtime_env_apply_config_hot_effects_next_frame) {

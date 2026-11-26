@@ -1,6 +1,10 @@
-﻿// agentsim - decision/RiskAversePolicy.cpp
+// agentsim - decision/RiskAversePolicy.cpp
 // EROI（能量回报率）估计与两阈值三模式状态机（带滞回）。decide() 禁 RNG、禁读世界，
-// 只消费感知向量 s 与自身记忆（eroi_/prevProx_/lastDir_/cachedDir_/mode_/frameInMode_）。
+// 只消费感知向量 s 与**传入的个体记忆** memory（riskEroi/riskPrevProx/riskLastDir/
+// riskCachedDir/riskMode/riskFrameInMode）；P0-4 之前这些曾是实例成员。
+//
+// 记号说明：下文注释里的 eroi_ / prevProx_ / mode_ / frameInMode_ 指 memory.riskEroi /
+// memory.riskPrevProx / memory.riskMode / memory.riskFrameInMode。
 //
 // EROI 观测（每帧一步，N=32 -> alpha=0.125）：
 //   gain   = kFoodEnergy * max(0, s[6] - prevProx)   接近度增益 * 单位食物能量
@@ -9,9 +13,9 @@
 //            （v = |s[10..11]| 恰为归一化速度 s[12]；移动耗能 ∝ v^2 与
 //             AgentBehavior 真实公式同形；呼吸含温度因子 (1 + K*d)）
 //   obs    = gain / budget   （budget 下限 1e-6，不产生除零）
-//   eroi_  = alpha*obs + (1-alpha)*eroi_     （EMA，eroi_ 起点 0 恒 >= 0）
-//   eroi_ *= (1 - kTempDiscount * s[16])     （温度失真折扣，s[16] 必须参与；
-//             s[16] 已 clamp01，折扣系数 ∈ [0.5,1] >= 0，eroi_ 仍 >= 0）
+//   eroi  = alpha*obs + (1-alpha)*eroi       （EMA，起点 0 恒 >= 0）
+//   eroi *= (1 - kTempDiscount * s[16])      （温度失真折扣，s[16] 必须参与；
+//             s[16] 已 clamp01，折扣系数 ∈ [0.5,1] >= 0，eroi 仍 >= 0）
 //   最后 clamp 到 [0, kEroiMax]（防病态观测爆表，状态保持有界）。
 //
 // 模式迁移（滞回带 h=0.1，只有完全穿越带宽才算换态，边界抖动被吸收）：
@@ -58,7 +62,7 @@ double clampSym1(double x) {
     return x;
 }
 
-// EROI 估计的内部上界（防病态大观测把状态顶爆，恒有 eroi_ <= kEroiMax）。
+// EROI 估计的内部上界（防病态大观测把状态顶爆，恒有 memory.riskEroi <= kEroiMax）。
 constexpr double kEroiMax = 64.0;
 
 // 扫路施力的侧向偏置权重：合力 = 球方向 + kPushSide * 期望方向。
@@ -102,7 +106,8 @@ RiskAversePolicy::RiskAversePolicy(const Params& p) : p_(p) {
     if (p_.kModSight < -1.0) p_.kModSight = -1.0;
 }
 
-ActionVector RiskAversePolicy::decide(const SensorVector& s, const TargetList& targets) {
+ActionVector RiskAversePolicy::decide(const SensorVector& s, const TargetList& targets,
+                                    PolicyMemory& memory) {
     ActionVector a;
 
     // ---- 0) 输入清洗（copy-in：不改调用方向量，局部副本全干净）----
@@ -115,62 +120,62 @@ ActionVector RiskAversePolicy::decide(const SensorVector& s, const TargetList& t
     const double fdy = clean(s[1]);
 
     // ---- 1) EROI 观测与 EMA ----
-    const double gain = p_.kFoodEnergy * (prox > prevProx_ ? prox - prevProx_ : 0.0);
+    const double gain = p_.kFoodEnergy * (prox > memory.riskPrevProx ? prox - memory.riskPrevProx : 0.0);
     const double budget = (p_.kMoveCostRate * v2 +
                            p_.kRespRate * (1.0 + p_.kRespTempK * d)) /
                           32.0;
     const double obs = gain / (budget > 1e-6 ? budget : 1e-6);
-    eroi_ = p_.alpha * obs + (1.0 - p_.alpha) * eroi_;
+    memory.riskEroi = p_.alpha * obs + (1.0 - p_.alpha) * memory.riskEroi;
     // 温度折扣：失真大 -> 能耗抬升 -> EROI 打折（必写项，s[16] 参与决策）。
-    eroi_ *= (1.0 - p_.kTempDiscount * d);
-    if (!(eroi_ > 0.0)) eroi_ = 0.0; // NaN/负值一律归 0，恒 >= 0
-    if (eroi_ > kEroiMax) eroi_ = kEroiMax;
-    prevProx_ = prox;
+    memory.riskEroi *= (1.0 - p_.kTempDiscount * d);
+    if (!(memory.riskEroi > 0.0)) memory.riskEroi = 0.0; // NaN/负值一律归 0，恒 >= 0
+    if (memory.riskEroi > kEroiMax) memory.riskEroi = kEroiMax;
+    memory.riskPrevProx = prox;
 
     // ---- 2) 模式迁移（滞回带 0.1）----
-    if (mode_ == 2) {
-        if (eroi_ < p_.eroiHigh - p_.hysteresis) mode_ = 1;
-    } else if (mode_ == 0) {
-        if (eroi_ > p_.eroiLow + p_.hysteresis) mode_ = 1;
+    if (memory.riskMode == 2) {
+        if (memory.riskEroi < p_.eroiHigh - p_.hysteresis) memory.riskMode = 1;
+    } else if (memory.riskMode == 0) {
+        if (memory.riskEroi > p_.eroiLow + p_.hysteresis) memory.riskMode = 1;
     } else { // Mid
-        if (eroi_ > p_.eroiHigh + p_.hysteresis) {
-            mode_ = 2;
-        } else if (eroi_ < p_.eroiLow - p_.hysteresis) {
-            mode_ = 0;
+        if (memory.riskEroi > p_.eroiHigh + p_.hysteresis) {
+            memory.riskMode = 2;
+        } else if (memory.riskEroi < p_.eroiLow - p_.hysteresis) {
+            memory.riskMode = 0;
         }
     }
-    if (mode_ != frameInModeMode_) {
-        frameInModeMode_ = mode_;
-        frameInMode_ = 0;
+    if (memory.riskMode != memory.riskFrameInModeMode) {
+        memory.riskFrameInModeMode = memory.riskMode;
+        memory.riskFrameInMode = 0;
     }
-    ++frameInMode_;
+    ++memory.riskFrameInMode;
 
     // ---- 3) 方向与 boost ----
     double dx = 0.0, dy = 0.0;
     const double len = std::sqrt(fdx * fdx + fdy * fdy);
     const bool hasFood = len > 1e-9;
     if (hasFood) {
-        lastDirX_ = fdx / len;
-        lastDirY_ = fdy / len;
+        memory.riskLastDir[0] = fdx / len;
+        memory.riskLastDir[1] = fdy / len;
     }
 
-    if (mode_ == 2) {
+    if (memory.riskMode == 2) {
         // Earn：环境肥沃，全速觅食，方向每帧更新（抓住窗口）。
         if (hasFood) {
-            dx = lastDirX_;
-            dy = lastDirY_;
+            dx = memory.riskLastDir[0];
+            dy = memory.riskLastDir[1];
         }
         a.boost = 1.0;
-    } else if (mode_ == 0) {
+    } else if (memory.riskMode == 0) {
         // Conserve：省能巡航，方向每 3 帧只更新一次（减少转向损耗）。
-        if (hasFood && frameInMode_ % p_.dirRefreshInterval == 1) {
-            hasCachedDir_ = true;
-            cachedDirX_ = lastDirX_;
-            cachedDirY_ = lastDirY_;
+        if (hasFood && memory.riskFrameInMode % p_.dirRefreshInterval == 1) {
+            memory.riskHasCachedDir = 1;
+            memory.riskCachedDir[0] = memory.riskLastDir[0];
+            memory.riskCachedDir[1] = memory.riskLastDir[1];
         }
-        if (hasFood && hasCachedDir_) {
-            dx = cachedDirX_;
-            dy = cachedDirY_;
+        if (hasFood && memory.riskHasCachedDir != 0) {
+            dx = memory.riskCachedDir[0];
+            dy = memory.riskCachedDir[1];
         } // 其余帧输出零向量（无食物/无缓存），绝不拿陈旧方向盲走
         a.boost = p_.cruiseBoost;
     } else {
@@ -178,14 +183,14 @@ ActionVector RiskAversePolicy::decide(const SensorVector& s, const TargetList& t
         double t = 0.0;
         const double span = p_.eroiHigh - p_.eroiLow;
         if (span > 1e-9) {
-            t = (eroi_ - p_.eroiLow) / span;
+            t = (memory.riskEroi - p_.eroiLow) / span;
             if (!(t > 0.0)) t = 0.0;
             if (t > 1.0) t = 1.0;
         }
         a.boost = p_.cruiseBoost + (1.0 - p_.cruiseBoost) * t;
         if (hasFood) {
-            dx = lastDirX_;
-            dy = lastDirY_;
+            dx = memory.riskLastDir[0];
+            dy = memory.riskLastDir[1];
         }
     }
     a.dirX = dx;
@@ -196,7 +201,8 @@ ActionVector RiskAversePolicy::decide(const SensorVector& s, const TargetList& t
     // 球（targets 按环面距离升序），球方向与本帧期望方向点积足够大（挡路）时，
     // 沿"球方向 + 侧向偏置（期望方向的一半）"施力：既有直接推离分量，又有
     // 顺着本帧路径的扫开分量。
-    if (mode_ == 2 && p_.kPushBoost > 0.0 && targets.count > 0 && (dx != 0.0 || dy != 0.0)) {
+    if (memory.riskMode == 2 && p_.kPushBoost > 0.0 && targets.count > 0 &&
+        (dx != 0.0 || dy != 0.0)) {
         // 线性扫 dist 最小项（count <= 8，无稳定性需求）。
         int nearest = 0;
         double bestDist = targets.items[0].dist;
@@ -237,30 +243,30 @@ ActionVector RiskAversePolicy::decide(const SensorVector& s, const TargetList& t
     // （疏散、少看省心）；Mid：零（中性）。k 默认 0 = mod 全 0。
     if (p_.kModCohesion != 0.0) {
         double m = 0.0;
-        if (mode_ == 2) m = p_.kModCohesion;
-        else if (mode_ == 0) m = -p_.kModCohesion;
+        if (memory.riskMode == 2) m = p_.kModCohesion;
+        else if (memory.riskMode == 0) m = -p_.kModCohesion;
         a.mod[3] = clampSym1(m);
     }
     if (p_.kModSight != 0.0) {
         double m = 0.0;
-        if (mode_ == 2) m = p_.kModSight;
-        else if (mode_ == 0) m = -p_.kModSight;
+        if (memory.riskMode == 2) m = p_.kModSight;
+        else if (memory.riskMode == 0) m = -p_.kModSight;
         a.mod[0] = clampSym1(m);
     }
     return a;
 }
 
-void RiskAversePolicy::reset() {
-    eroi_ = 0.0;
-    prevProx_ = 0.0;
-    lastDirX_ = 0.0;
-    lastDirY_ = 0.0;
-    hasCachedDir_ = false;
-    cachedDirX_ = 0.0;
-    cachedDirY_ = 0.0;
-    mode_ = 1;
-    frameInMode_ = 0;
-    frameInModeMode_ = 1;
+void RiskAversePolicy::reset(PolicyMemory& memory) {
+    memory.riskEroi = 0.0;
+    memory.riskPrevProx = 0.0;
+    memory.riskLastDir[0] = 0.0;
+    memory.riskLastDir[1] = 0.0;
+    memory.riskHasCachedDir = 0;
+    memory.riskCachedDir[0] = 0.0;
+    memory.riskCachedDir[1] = 0.0;
+    memory.riskMode = 1;
+    memory.riskFrameInMode = 0;
+    memory.riskFrameInModeMode = 1;
 }
 
 } // namespace agentsim

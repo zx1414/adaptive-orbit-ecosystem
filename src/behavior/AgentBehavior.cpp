@@ -1,4 +1,4 @@
-﻿// agentsim - behavior/AgentBehavior.cpp
+// agentsim - behavior/AgentBehavior.cpp
 #include "AgentBehavior.h"
 
 #include <algorithm>
@@ -13,6 +13,10 @@ namespace {
 // ---- T08 三动作参数（按任务约定不改 Config.h，常量 + 注释收敛于此）----
 // 产球：能量须 > deployCost；每核球数上限；新球轨道半径固定 10。
 constexpr double kDeployCost = 8.0;
+// 规则 v2（A11）：建造一个器官消耗的身体物质，以及建造后必须留下的身体下限。
+// 器官是身体的一部分（物质从核体转出），所以"造球"与"维持身体/繁殖"争材料。
+constexpr double kOrganMassCost = 2.0;
+constexpr double kOrganMassReserve = 6.0;
 constexpr int kMaxBalls = 3;
 constexpr double kBallRadius = 10.0;
 // C3a：产球种子能量——新球诞生时从核侧经 ledger.transfer 注入的初始储能
@@ -29,13 +33,22 @@ constexpr double kChildEnergyFraction = 0.5;
 constexpr double kSocialModLimit = 0.4;
 // R2-A：出生偏移半径上限（子代出生在亲代附近 [0,kBirthOffset) 随机偏移，防重叠出生）。
 constexpr double kBirthOffset = 12.0;
-// R2-A §8：死亡能量分配——70% 当场耗散（热力学损失），30% 进尸体营养包（Carrion）
-// 由组合根分配给最近的蓝细菌节点。ECOLOGY-DESIGN §三.2 的营养循环地基。
-constexpr double kDeathCarrionFraction = 0.3;
+// 规则 v2（P1）：繁殖的物质分配。亲代给子代自己身体的一半，但必须给自己
+// 留下 kReproMassReserve 的身体（否则繁殖就是自杀）。材料不足 → 不繁殖。
+constexpr double kReproMassReserve = 6.0;
+// 规则 v2（P1）：死亡产物的去向。
+// 旧版这里有一个 kDeathCarrionFraction = 0.3——把剩余**能量**的 30% 做成营养包。
+// 它从来没生效过：正常死亡分支要求 energy <= 0，抽 30% 的基数恒为零。
+// 现在死亡的产物是**身体物质**（bodyMass → remains_.debris），不是能量的分成，
+// 所以不再需要任何比例常量：可支配能量耗尽的事实本身就记在账上（耗散），
+// 身体物质则完整留在原地进入分解流。
 // T08 内部触发规则：能量阈值 + 少量随机（走自传 RNG，确定性）。优先级：繁殖 > 产球 > 回收。
 constexpr double kDeployTriggerFrac = 0.6;  // 能量超过 0.6*cap 后开始考虑产球
 constexpr double kReproTriggerFrac = 0.9;   // 能量超过 0.9*cap 后开始考虑繁殖
 constexpr double kRecycleEnergyFrac = 0.25; // 能量低于 0.25*cap 时回收球换能
+// 规则 v2（P2）：资源球每帧最多取回其存量的这个比例（有限速率，验收 A10）。
+// 取 0.05：满球（cap 60）每帧最多回 3 能量，够撑十几帧的呼吸开销而不是瞬间回满。
+constexpr double kResourceBallWithdrawRate = 0.05;
 constexpr double kActionRollP = 0.10;       // 阈值满足时每 tick 的触发概率（少量随机）
 
 // ---- S18：球作仓库（colonyCap / capOverflow）----
@@ -94,6 +107,15 @@ bool AgentBehavior::deployBall(Nucleus& n, AgentLedger& ledger, PCG32& rng,
     if (!n.alive) return false;
     if (n.energy <= kDeployCost) return false;             // 严格大于才花得起
     if (static_cast<int>(n.balls.size()) >= kMaxBalls) return false;
+    // 规则 v2（A11）：建造器官要求"身体足够大"，但**不从 bodyMass 里扣物质**。
+    // 为什么这样才守恒：器官是同一个体的身体附件，它没有独立的物质载体
+    //（Ball 只记能量）。若从 bodyMass 扣一笔而不把它记到别处，那笔物质就
+    // 凭空消失了——实测每建一个器官漏 2 单位（2000 tick 累计 -74，正是
+    // A7 守恒断言该抓到的那类错误）。
+    // 所以：bodyMass 是**建造门槛**（身体太小长不出新器官），真正的代价是
+    // 能量（kDeployCost 全额耗散 + 种子能量转移）——它才是与繁殖竞争的
+    // 那份资源（A11 的取舍）。器官死亡/脱离不搬运物质，只有能量在动。
+    if (n.bodyMass < kOrganMassCost + kOrganMassReserve) return false;
     n.energy -= kDeployCost;                               // 唯一写点：行为层
     ledger.dissipate("deploy", kDeployCost);               // 账实相等（零和）
     Ball b;
@@ -108,9 +130,9 @@ bool AgentBehavior::deployBall(Nucleus& n, AgentLedger& ledger, PCG32& rng,
     // 改为：宿主前缀保证可追溯 + 进程级单调计数保证唯一。
     // 计数器是 static，进程内单调，不依赖容器大小，因此复用不可能发生。
     // 确定性不受影响：同一 seed 下产球的次数与顺序完全一致，计数器走过的值也一致。
-    static EntityId s_nextBallSerial = 0;
-    ++s_nextBallSerial;
-    b.id = (n.id << 16) | 0xB000ULL | (s_nextBallSerial & 0x0FFFULL);
+    // 规则 v2（A13）：序号随个体走并随存档序列化（见 Nucleus::ballSerial 注释）。
+    ++n.ballSerial;
+    b.id = (n.id << 16) | 0xB000ULL | (n.ballSerial & 0x0FFFULL);
     b.angle = rng.nextDouble() * kTwoPi;                   // 随机轨道角（自传 RNG）
     b.radius = kBallRadius;            // 初值；apply 每帧按球能单调重算（C3b）
     b.energy = 0.0;
@@ -263,11 +285,29 @@ bool AgentBehavior::reproduce(Nucleus& n, std::vector<Nucleus>& population,
     // 种群护栏：ColonyConfig::maxNuclei（默认 300）经调用方传入？不——护栏由组合根
     // 在采样侧把守（aliveCount_ < maxNuclei 才调用本函数），本函数保留旧语义：
     // 只做能量与活性校验，容量账以组合根 aliveCount_ 为准（避免二次计数口径漂移）。
+    // ---- 规则 v2（P1/A7）：繁殖要分配**身体材料**，不是凭空造一个孩子 ----
+    // 亲代把 bodyMass 的一半分给子代，自己的剩余不能低于 kReproMassReserve
+    // （否则繁殖等于自杀）。物质只在亲代与子代之间搬家，总量零和——
+    // 这是 A7"繁殖只搬运原有养分"的落点。
+    // 材料不足就不繁殖：这是"早繁殖 vs 攒材料"取舍的物理基础。
+    // 顺序要点：材料检查必须在扣能量**之前**（拒绝路径不得留下半截账），
+    // 且仍不消耗任何 rng（与能量不足的拒绝路径同一契约）。
+    double giveMass = n.bodyMass * 0.5;
+    const double giveable = n.bodyMass - kReproMassReserve;
+    if (giveMass > giveable) giveMass = giveable > 0.0 ? giveable : 0.0;
+    if (!(giveMass > 0.0)) return false;                   // 没材料可分：拒绝
     n.energy -= k;                                         // 唯一写点：行为层
+    n.bodyMass -= giveMass;                                // 唯一写点：行为层
     Nucleus child = n;                                     // 3) 全字段拷贝（含 genome）
     child.id = childId;
+    child.bodyMass = giveMass;                             // 子代的材料来自亲代分配
     child.balls.clear();                                   // 子代不带亲代球（球是亲代资产）
+    child.ballSerial = 0;                                  // 子代的器官序号从零起（不继承）
     child.detached_.clear();
+    // 规则 v2（P0-4 / A4 后半）：行为记忆**不继承**。
+    // 子代得到的是基因（上面已变异），不是亲代最近一次的觅食经历——
+    // 记忆必须从"全新个体"起点开始。
+    child.memory = PolicyMemory{};
     // 5) 繁殖必变异：先拷贝父代，再对子代变异（coeff = cfg.mutationCoefficient，
     // 默认 0.25）。genomeMutate 收尾自带 genomeClamp + genomeNormalizeAffinity。
     genomeMutate(child.genome, rng, mutationCoefficient, ranges);
@@ -328,7 +368,8 @@ void AgentBehavior::apply(Nucleus& n, ActionVector action, AgentEnvironment& env
     // 无法急转（机动性遗传代价），低速核可以急转。
     // externalAcc（对核物理的社会加速度）在同一合加速度上叠加后再统一限幅：
     // 两阶段积分的"积分"阶段，消除核间作用顺序依赖。
-    const Vec2 baseVel{dir.x * bp.moveK, dir.y * bp.moveK};
+    const double moveSpeed = bp.moveK * std::clamp(action.speedScale, 0.0, 1.0);
+    const Vec2 baseVel{dir.x * moveSpeed, dir.y * moveSpeed};
     Vec2 vel{baseVel.x + externalAcc.x, baseVel.y + externalAcc.y};
     const double geneAccel = geneOr(n.genome.maxAccel, bp.moveK);
     {
@@ -549,55 +590,80 @@ void AgentBehavior::apply(Nucleus& n, ActionVector action, AgentEnvironment& env
         if (roll < kActionRollP) {
             const double capRef = n.cap > 0.0 ? n.cap
                                              : (geneOr(n.genome.energyThreshold, 20.0) * 4.0);
+            // ---- 规则 v2（P2 / A11）：器官分配由自身状态与遗传倾向共同决定 ----
+            // 旧规则是硬编码优先级（"没侦察球就先造侦察球，否则造资源球"），
+            // 与个体的基因和当下处境无关。现在按"想要哪一类"打分：
+            //   · 储备压力：能量/容量 越高越想囤（备份路线），越低越需要先有眼睛；
+            //   · 侦察价值：还没有侦察球的核，眼睛的边际价值最高；
+            //   · 遗传投入倾向：absorbPreference 决定"爱囤"，orbitRadius 决定
+            //     "爱探测"（两者都是既有基因，这里让它们真正参与取舍）。
+            // 打分最高者胜出；同分按类型序号（确定性 tie-break，零 rng）。
+            // 建造要花钱：deployBall 扣 kDeployCost + 种子能量——这笔钱本来可以
+            // 用于繁殖，所以"多造一个球"与"早一点繁殖"是真实的取舍（A11）。
             if (n.energy > capRef * kDeployTriggerFrac) {
-                // S17 接线：侦察球是菌落对外感知的**唯一**来源（sense 的 scoutCount）。
-                // 如果 deployBall 永远只产 Resource，scoutCount 就恒为 0，
-                // S17 等于从未在生态里生效——必须真的产 Scout 球。
-                // 规则：核当前没有 Scout 球时优先补一个 Scout（保证每个核都有眼睛），
-                // 已有 Scout 则继续产 Resource（囤能量仓库）。
-                bool hasScout = false;
+                const double fill = (n.cap > 0.0) ? (n.energy / n.cap) : 0.0;
+                int nScout = 0;
+                int nResource = 0;
                 for (const Ball& b : n.balls) {
-                    if (b.type == BallType::Scout) { hasScout = true; break; }
+                    if (b.type == BallType::Scout) ++nScout;
+                    else if (b.type == BallType::Resource) ++nResource;
                 }
-                deployBall(n, ledger, rng, env.config().world.width, env.config().world.height,
-                           hasScout ? BallType::Resource : BallType::Scout);
+                // 储备路线：能量越接近满仓，越倾向造资源球（把富余存起来）。
+                const double hoardTrait = geneOr(n.genome.absorbPreference[0], 1.0);
+                const double scoutTrait = geneOr(n.genome.orbitRadius[1], 120.0) / 120.0;
+                const double scoreHoard = fill * hoardTrait * (nResource < 2 ? 1.0 : 0.3);
+                const double scoreScout = (1.0 - fill) * scoutTrait *
+                                          (nScout < 1 ? 1.5 : 0.25);
+                const BallType wantType =
+                    (scoreScout > scoreHoard) ? BallType::Scout : BallType::Resource;
+                deployBall(n, ledger, rng, env.config().world.width,
+                           env.config().world.height, wantType);
             } else if (n.energy < capRef * kRecycleEnergyFrac && !n.balls.empty()) {
                 recycleBall(n, ledger);
             }
         }
     }
-    // ---- 6c. S18 容量结算：菌落容量 = 原生上限 + Resource 球仓库之和 ----
-    // n.cap 每帧重算（球可出生/销毁/换类型，快照不可信）；超容部分全额耗散
-    // （reason="capOverflow"），账实相等：核侧扣多少，账面耗散多少，零和恒等式不破。
-    // 排在 T08 触发之后、死亡判定之前：本帧溢出的能量不留到下一帧，死核不结算容量。
-    n.cap = colonyCap(n, bp);
+    // 核体与储能器官各自持有储备。核体容量只计算原生上限。
+    n.cap = bp.nativeCap;
     if (n.energy > n.cap) {
+        for (Ball& ball : n.balls) depositEnergy(n, ball, n.energy - n.cap, ledger);
         const double excess = n.energy - n.cap;
         if (excess > 0.0) {
             n.energy -= excess;
             ledger.dissipate("capOverflow", excess);
         }
     }
-    // ---- 7. 能量下限与死亡（R2-A §8：尸体营养循环）----
+    // ---- 规则 v2（P2）：缺粮时按有限速率从资源球取回 ----
+    // 滞回：存入阈值 kDepositFrac(0.75)、取回阈值 kWithdrawFrac(0.35)。
+    // 速率限制 = 球存量的 kResourceBallWithdrawRate/帧——不是瞬间搬空，
+    // 所以"带储备离群能撑一段时间"是真的，而不是一帧满血（验收 A10）。
+    if (n.alive && n.cap > 0.0 && n.energy < n.cap * kWithdrawFrac) {
+        for (Ball& b : n.balls) {
+            if (b.type != BallType::Resource) continue;
+            if (!(b.energy > 0.0)) continue;
+            const double got = withdrawEnergy(n, b, kResourceBallWithdrawRate, ledger);
+            if (got > 0.0 && n.energy >= n.cap * kWithdrawFrac) break;
+        }
+    }
+    // ---- 7. 能量下限与死亡（规则 v2：能量账与物质账分开结算）----
     if (n.energy <= 0.0) {
-        // 死亡：核能量归零。负残差（数值误差）不得凭空入账——
+        // 死亡：可支配能量归零。负残差（数值误差）不得凭空入账——
         // 账面只对真实存在的正余额做耗散，负值部分本来就是账外数值噪声。
-        // R2-A：核体能量 70% 当场耗散（热力学损失），30% 打包成 Carrion（位置+能量）
-        // 由组合根分配给最近的蓝细菌节点（尸体 → 分解者 → 生产者）。球储能
-        // 仍全额当场耗散（球是易散结构，不留尸体）。
+        // **能量去向**：剩余正余额全额 dissipate("death")（热力学损失）。
+        // **物质去向**：bodyMass 完整留在原地 → remains_.debris，由组合根放进
+        //   当地养分场，再经局部分解成为可吸收养分。这才是"饿死也留下身体"
+        //   （A6）；旧版从能量里抽 30% 的做法在正常死亡路径上恒为零。
+        // 球随核死亡一并回收：球内储备是**能量**，按剩余全额耗散（球是易散结构，
+        // 不留身体）；球本身是器官，不进入物质流。账面守恒。
         const double left = n.energy > 0.0 ? n.energy : 0.0;
         n.energy = 0.0;
         n.alive = false;
-        if (left > 0.0) {
-            const double carrionShare = left * kDeathCarrionFraction;
-            const double lost = left - carrionShare;
-            if (lost > 0.0) ledger.dissipate("death", lost);
-            if (carrionShare > 0.0) {
-                n.carrion_.pos = n.pos;          // 死亡位置
-                n.carrion_.energy = carrionShare;
-            }
+        if (left > 0.0) ledger.dissipate("death", left);
+        if (n.bodyMass > 0.0) {
+            n.remains_.pos = n.pos;        // 死亡位置
+            n.remains_.debris = n.bodyMass; // 留下的身体（物质）
+            n.bodyMass = 0.0;
         }
-        // 球随核死亡一并回收：球储能按剩余全额耗散，账面守恒。
         for (Ball& b : n.balls) {
             if (b.energy > 0.0) {
                 ledger.dissipate("death", b.energy);
@@ -761,16 +827,86 @@ void AgentBehavior::socialAccelerations(Nucleus& n, const AgentEnvironment& env,
     }
 }
 
-// ---- S22 捕食接线：把蓝细菌被吃掉的那部分能量记到核账上 ----
-// 组合根已经用 cyano_.graze() 从蓝细菌扣掉了 amount（那一步不改账本，因为蓝细菌
-// 能量本来就在 sumLiving 里，只是换了持有者）。本函数负责唯一写点：
-// 核能量 += amount，并记 transfer（零和搬运，不改注入/耗散总额）。
-void AgentBehavior::absorbPrey(Nucleus& n, EntityId preyId, double amount,
-                               AgentLedger& ledger) {
-    if (!n.alive) return;
-    if (!(amount > 0.0)) return;                 // NaN/非正值直接忽略
-    n.energy += amount;                          // 唯一写点：行为层
-    ledger.transfer(preyId, n.id, amount);       // 蓝细菌 → 核，零和
+// ---- 规则 v2：摄食结算（取走量 / 吸收量分开，验收 A1）----
+// 与环境层的分工：CyanoField::grazeBatch 决定"谁咬到多少"（共享资源分配），
+// 本函数决定"咬到的东西里有多少真的进了身体"（个体同化）。
+// 分工的意义：A1 要求"当步实际取走量和吸收量都一致"——取走量由批结算给出，
+// 吸收量只由 efficiency（= conversionRate × 消化基因）决定，两者都不看速度。
+AgentBehavior::GrazeResult AgentBehavior::absorbGraze(Nucleus& n, double materialTaken,
+                                                      double energyTransferred,
+                                                      double efficiency,
+                                                      AgentLedger& ledger) {
+    GrazeResult out;
+    if (!n.alive) return out;
+    if (!(materialTaken > 0.0)) return out;
+    double eff = efficiency;
+    if (!(eff >= 0.0)) eff = 0.0;   // NaN/负值 → 不同化（保守）
+    if (eff > 1.0) eff = 1.0;       // 同化率不能超过 1（不凭空造物质）
+    out.materialTaken = materialTaken;
+    out.materialAbsorbed = materialTaken * eff;
+    out.materialRejected = materialTaken - out.materialAbsorbed;
+    // 物质：吸收的部分构成身体；未同化的部分回到环境（由组合根按返回值
+    // 放进当地残骸 → 局部分解 → 可吸收养分，物质账闭合，见 A7）。
+    n.bodyMass += out.materialAbsorbed;
+    // 能量：随组织转移出来的可用能量按同一同化率吸收，其余耗散掉
+    // （未同化的那部分组织里包着的化学能没有被这个个体利用）。
+    if (energyTransferred > 0.0) {
+        out.energyAbsorbed = energyTransferred * eff;
+        out.energyLost = energyTransferred - out.energyAbsorbed;
+        n.energy += out.energyAbsorbed;
+        if (out.energyLost > 0.0) ledger.dissipate("grazeReject", out.energyLost);
+        for (Ball& ball : n.balls) {
+            depositEnergy(n, ball, n.energy - n.cap * kDepositFrac, ledger);
+        }
+    }
+    return out;
+}
+
+// ---- 规则 v2（P2）：资源球存取 ----
+// 语义要点（验收 A10）：球是**独立持有者**。转入就是从核能量搬到球能量，
+// 取出就是反过来；两笔都走 ledger.transfer（零和），所以"同一份能量同时记在
+// 核和球上"在结构上不可能发生。球的 cap（容量）与 energy（已存储）是两个
+// 独立的量：容量决定能存多少，存量决定现在有多少。
+double AgentBehavior::availableEnergyStorage(const Nucleus& n) {
+    double room = n.cap - n.energy;
+    for (const Ball& ball : n.balls) {
+        if (ball.type == BallType::Resource && ball.cap > ball.energy) {
+            room += ball.cap - ball.energy;
+        }
+    }
+    return std::max(0.0, room);
+}
+
+double AgentBehavior::depositEnergy(Nucleus& n, Ball& ball, double want,
+                                    AgentLedger& ledger) {
+    if (!n.alive) return 0.0;
+    if (ball.type != BallType::Resource) return 0.0;  // 只有资源球是仓库
+    if (!(want > 0.0)) return 0.0;
+    const double room = ball.cap > ball.energy ? ball.cap - ball.energy : 0.0;
+    if (!(room > 0.0)) return 0.0;                    // 球满了：存不进去
+    double amount = want < room ? want : room;
+    if (n.energy < amount) amount = n.energy > 0.0 ? n.energy : 0.0;
+    if (!(amount > 0.0)) return 0.0;
+    n.energy -= amount;                 // 唯一写点：行为层
+    ball.energy += amount;
+    ledger.transfer(n.id, ball.id, amount);           // 核 → 球，零和搬运
+    return amount;
+}
+
+double AgentBehavior::withdrawEnergy(Nucleus& n, Ball& ball, double rate,
+                                     AgentLedger& ledger) {
+    if (!n.alive) return 0.0;
+    if (ball.type != BallType::Resource) return 0.0;
+    if (!(ball.energy > 0.0)) return 0.0;
+    if (!(rate > 0.0)) return 0.0;
+    const double cap = rate > 1.0 ? 1.0 : rate;
+    double amount = ball.energy * cap;
+    if (amount > ball.energy) amount = ball.energy;
+    if (!(amount > 0.0)) return 0.0;
+    ball.energy -= amount;
+    n.energy += amount;
+    ledger.transfer(ball.id, n.id, amount);           // 球 → 核，零和搬运
+    return amount;
 }
 
 
@@ -960,26 +1096,19 @@ bool AgentBehavior::reassignBall(Nucleus& n, std::size_t idx, std::size_t best,
         static_cast<int>(population[best].balls.size()) >= kMaxBalls) {
         return false;
     }
-    const Ball snapshot = n.balls[idx];     // 摘除前快照（防引用失效）
-    Nucleus* prevOwnerPtr = nullptr;        // 原主存活判定与扣款用（摘除前抓取）
-    for (Nucleus& cand : population) {
-        if (cand.id == n.id) { prevOwnerPtr = &cand; break; }
-    }
-    const bool prevAlive = prevOwnerPtr != nullptr && prevOwnerPtr->alive;
-    // 任意摘除前先把球从 n.balls 拿走（所有权交接的硬前提），再结算惩罚与去向。
-    Ball b = snapshot;
+    // ---- 规则 v2（P2 / A10）：撤掉"仅仅因为换主就对原主追加固定罚款" ----
+    // 旧版在归属结算时对失去方扣 p.lossCost 并 dissipate("ball_loss")。
+    // 这笔罚款与球里到底有多少储备无关，也与实际发生的耗散无关——它只是
+    // 一个"你失去了归属"的固定税，让 A10 的"按步骤核对两只核和球的能量"
+    // 变得无法解释（差额里混着一笔凭空的税）。
+    // 规则 v2 起：失去球的原主只失去**球里实际存着的能量**（那才是真的损失），
+    // 新宿主接管的是球内的实际余量。真实发生的耗散只有自由球的自然衰减。
+    // 参数 p.lossCost 仍保留在结构里（存档/配置兼容），但不再被本函数消费。
+    (void)p.lossCost;
+    (void)ledger;   // 规则 v2：换主/失主不再有任何能量结算（无罚款、无耗散）
+    // 摘除前先把球从 n.balls 拿走（所有权交接的硬前提），再决定去向。
+    Ball b = n.balls[idx];
     n.balls.erase(n.balls.begin() + static_cast<std::ptrdiff_t>(idx));
-    // 失球惩罚（v231:417-422：上一帧有主、本帧换主/变自由，对失去方扣能量）。
-    // 限额支出：原主能量永不为负（本项目账实相等的数值前提，余额不足按余额扣）。
-    if (p.lossCost > 0.0 && prevAlive) {
-        const double take = p.lossCost < prevOwnerPtr->energy ? p.lossCost
-                                                              : prevOwnerPtr->energy;
-        if (take > 0.0) {
-            Nucleus& prev = *prevOwnerPtr;
-            prev.energy -= take;
-            ledger.dissipate("ball_loss", take);
-        }
-    }
     if (best < population.size()) {
         // 换主：直接交接（不经 detached_/自由池，新宿主当帧立即持有）。
         Ball moved = b;

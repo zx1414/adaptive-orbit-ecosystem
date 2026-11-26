@@ -1,13 +1,13 @@
-﻿// agentsim - decision/HysteresisPolicy.cpp
+// agentsim - decision/HysteresisPolicy.cpp
 // 打分（候选级，与 RulePolicy 同源的信号，缺紧迫项 —— 本策略只解决抖动）：
 //   proximity = s[6+i]      归一化接近度，越近分越高。
 //   alignment = 候选方向·当前航向（[-1,1]），速度近零时取 0（对齐项失效）。
 //   score_i   = wProximity*proximity_i + wAlignment*alignment_i
-// 滞回规则（decide 无 RNG、不读世界，只动自身状态 lastChoice_）：
+// 滞回规则（decide 无 RNG、不读世界，只动**传入的个体记忆** memory.hysteresisLastChoice）：
 //   · 无候选（s[6..8] 全 <= 0）-> 输出 {0,0} 且**不改**滞回记忆：食物只是暂时
 //     离开视野，回来时优先延续旧选择，进一步抑制抖动。
 //   · 现任候选仍有效 -> 只有 bestScore > score(现任) + gap 才切换，否则保持现任。
-//   · 现任失效（其槽位 <= 0）或首帧（lastChoice_ == -1）-> 直接选当帧最高分；
+//   · 现任失效（其槽位 <= 0）或首帧（memory.hysteresisLastChoice == -1）-> 直接选当帧最高分；
 //     并列时先到先得（下标小者优先），确定且稳定。
 // 方向输出 = 选中候选的 (s[2i], s[2i+1]) 重新归一化；长度近 0（如全 NaN 输入）
 // 时输出 {0,0}，绝不产生 NaN。boost = 选中候选的接近度（越近越值得冲刺）。
@@ -68,7 +68,8 @@ double HysteresisPolicy::candidateScore(const SensorVector& s, int i) const {
     return p_.wProximity * proximity + p_.wAlignment * alignment;
 }
 
-ActionVector HysteresisPolicy::decide(const SensorVector& s, const TargetList& /*targets*/) {
+ActionVector HysteresisPolicy::decide(const SensorVector& s, const TargetList& /*targets*/,
+                                    PolicyMemory& memory) {
     ActionVector a;
     // (1) 找当帧最高分候选（空槽位跳过；并列先到先得）。
     double bestScore = 0.0;
@@ -87,11 +88,12 @@ ActionVector HysteresisPolicy::decide(const SensorVector& s, const TargetList& /
         return a;
     }
     // (2) 滞回：现任仍有效且挑战者优势不足 gap 时保持现任。
-    const int cur = lastChoice_;
+    //     P0-4：现任下标来自本个体的记忆（每个核一份），不再来自策略实例。
+    const int cur = memory.hysteresisLastChoice;
     if (cur >= 0 && cur <= 2 && clean(s[6 + cur]) > 0.0) {
         if (bestScore <= candidateScore(s, cur) + p_.hysteresisGap) best = cur;
     }
-    lastChoice_ = best;
+    memory.hysteresisLastChoice = best;
     // (3) 输出：选中候选方向重新归一化；boost 与其接近度挂钩。
     const double dx = clean(s[2 * best]);
     const double dy = clean(s[2 * best + 1]);

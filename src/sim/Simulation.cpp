@@ -1,4 +1,4 @@
-﻿// agentsim - sim/Simulation.cpp
+// agentsim - sim/Simulation.cpp
 // 组合根实现：构造装配 + 主循环 step/runTo + 统计与哈希。
 // R1-B（蓝细菌取代食物）：Food 全链路删除；核的唯一食物 = 蓝细菌节点，
 // 捕食改为确定性"最近节点 + 转化率"语义（本段不消耗 rng，见 step() 内 R1-B 注释）；
@@ -54,7 +54,11 @@ constexpr EntityId kCyanoPoolId = 0; // = kFoodPoolId（AgentBehavior.h）
 // 需要把系数提到 N* 落回护栏下方，消费端才由食物稀缺真实调节。
 // R2-A：核死亡 30% 遗产分配给最近蓝细菌的搜索半径（ECOLOGY-DESIGN §三.2 营养循环；
 // 找不到分解者时全额耗散——能量绝不滞留）。
-constexpr double kCarrionSearchRadius = 200.0;
+// 规则 v2（P0-3）：单核每帧的摄食处理能力上限（组织量）。
+// 这是"处理食物依旧花时间"的另一个落点：一口不能吞下无限多的组织。
+// 取值参照 maxMaterial（120）的 1/4——一次咬掉活组织的一小部分，
+// 配合消化冷却构成"吃一口要等一会儿"的节奏。
+constexpr double kGrazeAbilityPerTick = 30.0;
 // 蓝细菌源自由球 id 下界（与 Simulation::nextFreeBallId_ 初值同基，区分球来源）。
 constexpr EntityId kCyanoBallIdBase = 0x40000000ULL;
 // 自由球回收上限：蓝细菌源自由球几乎不会被拾取（核拾取受 kMaxBalls=3 硬上限，
@@ -88,7 +92,7 @@ std::uint64_t sunHashMix(std::uint64_t x) {
     return x;
 }
 
-double sunHash01(std::uint64_t a, std::uint64_t b, std::uint64_t c) {
+double hashUnit(std::uint64_t a, std::uint64_t b, std::uint64_t c) {
     std::uint64_t h = sunHashMix(a);
     h ^= sunHashMix(b + 0x517cc1b727220a95ULL);
     h ^= sunHashMix(c + 0x2545f4914f6cdd1dULL);
@@ -117,7 +121,7 @@ double sunLevelAt(const SunConfig& sun, std::uint64_t tick, double y, double wor
             tCell = std::floor(static_cast<double>(tick) / sun.noiseSpeed);
         }
         const long long gt = static_cast<long long>(tCell);
-        noise = sun.noiseAmplitude * (sunHash01(static_cast<std::uint64_t>(gt),
+        noise = sun.noiseAmplitude * (hashUnit(static_cast<std::uint64_t>(gt),
                                                 static_cast<std::uint64_t>(gx), 0ULL) - 0.5);
     }
     double v = base + day + noise;
@@ -168,25 +172,12 @@ Simulation::Simulation(const SimConfig& cfg)
         cp.reproductionProbability = ct.reproductionProbability;
         cp.reproductionOffset = ct.reproductionOffset;
         cp.minSeparation = ct.minSeparation;
-        cp.ballSpawnCost = ct.ballSpawnCost;
-        cp.ballSpawnProbability = ct.ballSpawnProbability;
-        cp.ballRadius = ct.ballRadius;
-        cp.ballSpawnMinDist = ct.ballSpawnMinDist;
-        cp.ballSpawnMaxDist = ct.ballSpawnMaxDist;
         cp.linkRadius = ct.linkRadius;
         cp.linkMaxNeighbors = ct.linkMaxNeighbors;
         cp.linkTransferRate = ct.linkTransferRate;
         cp.linkDeadband = ct.linkDeadband;
         cp.linkCheckInterval = ct.linkCheckInterval;
-        cp.conversionMode = ct.conversionMode;
         cp.conversionRate = ct.conversionRate;
-        cp.conversionExponent = ct.conversionExponent;
-        cp.conversionSpeedRef = ct.conversionSpeedRef;
-        cp.conversionAccelRef = ct.conversionAccelRef;
-        cp.conversionWSpeed = ct.conversionWSpeed;
-        cp.conversionWAccel = ct.conversionWAccel;
-        cp.conversionMinRate = ct.conversionMinRate;
-        cp.conversionMaxRate = ct.conversionMaxRate;
         cp.hueJitterSigma = ct.hueJitterSigma;
         // R7-C：聚落播种形状镜像（seed() 消费；nodeSeedCount/maxNodes 仍由
         // cyanoNodeCount/cyanoMaxNodes 覆盖，见上方出生引导量注释）。
@@ -195,7 +186,18 @@ Simulation::Simulation(const SimConfig& cfg)
         cp.shadeK = ct.shadeK;
         cp.shadeRadius = ct.shadeRadius;
         cp.shadeSigma = ct.shadeSigma;
-        cp.grazeRefugeEnergy = ct.grazeRefugeEnergy;
+        // 规则 v2：组织/养分参数（白盒镜像同一份清单）。
+        cp.minStructure = ct.minStructure;
+        cp.maxMaterial = ct.maxMaterial;
+        cp.initialMaterial = ct.initialMaterial;
+        // 播种能量：配置键 cyano_initial_energy 一直是"存了但没人读"的死参数
+        // （RuntimeTuning 里有字段、注释写着"现固定 0，R4 消费"）。规则 v2
+        // 让它真正生效——播种能量为 0 会让整片菌落在第一帧饿死。
+        cp.seedEnergy = cfg_.runtime.cyanoInitialEnergy;
+        cp.growthPerTick = ct.growthPerTick;
+        cp.nutrientPerMaterial = ct.nutrientPerMaterial;
+        cp.growthEnergyCost = ct.growthEnergyCost;
+        cp.assimilation = ct.assimilation;
     }
     // R3-A：NucleusTuning 的三个 R3-B 同义键构造期镜像进 bp_（与 applyConfig 的
     // 行为层同步同一份清单）。此前 bp_ 全用行为层默认，CLI 默认运行从未消费
@@ -205,8 +207,6 @@ Simulation::Simulation(const SimConfig& cfg)
     bp_.respirationBase = cfg_.nucleus.respirationBase;
     bp_.locomotionCost = cfg_.nucleus.locomotionCost;
     bp_.cyanoPredationRadius = cfg_.nucleus.cyanoPredationRadius;
-    bp_.migrationBonus = cfg_.nucleus.migrationBonus;     // R9-A 迁移回报镜像
-    bp_.migrationRadius = cfg_.nucleus.migrationRadius;
     bp_.speedCostExponent = cfg_.nucleus.speedCostExponent; // R11-P1-3 接线镜像
     bp_.damping = cfg_.nucleus.damping;
     bp_.reproductionCostRatio = cfg_.nucleus.reproductionCostRatio;
@@ -233,6 +233,31 @@ Simulation::Simulation(const SimConfig& cfg)
     cyano_.seed(static_cast<int>(cp.nodeSeedCount), cfg_.world.width,
                 cfg_.world.height, rng_);
     ledger_.injectPrimary(kCyanoPoolId, cyano_.totalEnergy());
+    // ---- 规则 v2（P1）：物质场初始化 ----
+    // 开局存量必须能被解释（A7）：播种出来的组织（nodeSeedCount × initialMaterial）
+    // 与核的身体都是**外部投入**，所以养分场的初始存量按"够重建一次全图组织"
+    // 标定，并把这几笔记进 matterExternalIn_。之后新组织只能从养分场取，
+    // 养分只能从残骸分解回来。
+    // 初始养分总量 = 开局组织总量 × nutrientBudgetRatio（按面积均摊到各区域）。
+    // 这样"每区域多少养分"随世界尺寸自动缩放，不存在"小世界必然饿死"的隐患。
+    const double seedingMass = static_cast<double>(cyano_.nodes().size()) *
+                               cfg_.cyanoTuning.initialMaterial;
+    const double nutrientBudget = seedingMass * cfg_.cyanoTuning.nutrientBudgetRatio;
+    // 先用 0 建场拿到区域数，再按区域数反算每区存量（configure 是幂等的）。
+    nutrients_.configure(cfg_.world.width, cfg_.world.height,
+                         cfg_.cyanoTuning.nutrientRegionSize, 0.0);
+    const double perRegion = nutrients_.cellCount() > 0
+                                 ? nutrientBudget / static_cast<double>(nutrients_.cellCount())
+                                 : 0.0;
+    nutrients_.configure(cfg_.world.width, cfg_.world.height,
+                         cfg_.cyanoTuning.nutrientRegionSize, perRegion);
+    matterExternalIn_ = nutrients_.total();   // 地表初始养分 = 开局注入
+    for (const CyanoNode& node : cyano_.nodes()) {
+        matterExternalIn_ += node.material;   // 播种出来的身体也是外部投入
+    }
+    for (const Nucleus& n : nuclei_) {
+        matterExternalIn_ += n.bodyMass;      // 创始核的身体同理
+    }
     // F2：按配置装配策略（此前无条件 RulePolicy，--policy stub 曾静默失效）。
     if (cfg_.policy.usePerceptron || cfg_.policy.name == "perceptron") {
         policy_ = std::make_unique<PerceptronPolicy>(cfg_.policy.perceptronSeed,
@@ -336,6 +361,8 @@ void Simulation::step() {
     // C2: 繁殖接线——循环内收集待繁殖亲代下标，循环后统一执行并按出生数预留容量，
     // 避免 reproduce 内部 push_back 扩容搬运元素使 nuclei_[i] 引用失效（UB）。
     std::vector<std::size_t> reproParents;
+    // 规则 v2（P0-3）：本帧的摄食请求（循环内只登记，循环后统一分配）。
+    std::vector<GrazeRequest> pendingGraze;
     for (std::size_t i = 0; i < nuclei_.size(); ++i) {
         Nucleus& n = nuclei_[i];
         if (!n.alive) continue;
@@ -416,10 +443,52 @@ void Simulation::step() {
             }
         }
         const double energyRatio = (n.cap > 0.0) ? (n.energy / n.cap) : 0.0;
+        // ---- 规则 v2（P2 / A9）：侦察球从自己的世界坐标采样 ----
+        // 只有同时满足两条的球才进入采样表：
+        //   1) 它是本核的受控球（ownerId == 本核 id）；
+        //   2) 它与宿主的环面最短距离 <= scoutControlRadius（有效控制距离）。
+        // 超出控制范围的球探到的东西回不来——"探得更远更容易失控"的代价因此
+        // 是真实的，而不是注释里的一句话。
+        // 资源球/护盾球在结构上无法进入这张表（按 type 过滤），所以"资源球
+        // 不提供视野"是构造性成立，不靠调用方自觉。
+        std::vector<ScoutSample> scoutSamples;
+        if (scoutCount > 0) {
+            const double controlR = cfg_.ball.scoutControlRadius;
+            scoutSamples.reserve(static_cast<std::size_t>(scoutCount));
+            for (const Ball& sb : n.balls) {
+                if (sb.type != BallType::Scout) continue;
+                if (sb.ownerId != n.id) continue;
+                // 环面最短距离：跨接缝时直线距离会误判为"太远"。
+                const double dScout = env_.torusDistance(n.pos, sb.pos);
+                if (!(dScout <= controlR)) continue;   // 超出控制距离：回不来
+                ScoutSample sample;
+                sample.pos = sb.pos;                   // 球的真实世界坐标
+                sample.radius = cfg_.ball.scoutSenseRadius;
+                scoutSamples.push_back(sample);
+            }
+        }
+        // 可食量口径：把环境层的定义包成回调传进感知层——
+        // 感知、选目标、请求、扣库存因此共用同一份定义（A3）。
+        const CyanoParams& cparForSense = cyano_.params();
+        EdibleFn edibleOf = [&cparForSense](const CyanoNode& node) {
+            return CyanoField::edibleOf(node, cparForSense);
+        };
         SensorVector sv = sense(env_, n.pos, n.vel, n.speed, cfg_.policy, &rng_,
-                                cyano_.nodes(), temp_, &terrain_, scoutCount,
-                                nearest, energyRatio, targets);
-        ActionVector act = policy_->decide(sv, targets);
+                                cyano_.nodes(), temp_, &terrain_, 0,
+                                nearest, energyRatio, targets, scoutSamples, edibleOf);
+        // ---- 规则 v2（P0-4）：把**本核自己的**记忆传进决策层 ----
+        // 旧版这里调 decide(sv, targets)：策略实例里存着上一个个体的状态。
+        // 现在记忆随核走：A 核的觅食经历不会被 B 核读写。
+        ActionVector act = policy_->decide(sv, targets, n.memory);
+        if (cfg_.policy.name == "rule" && act.dirX == 0.0 && act.dirY == 0.0) {
+            // 默认核在失去局部目标后转入慢速搜索。每只核在一段时间内
+            // 保持方向，避免每帧乱转或原地等到饿死。
+            const auto leg = (tick_ + n.id % 48u) / 48u;
+            const double angle = kTwoPi * hashUnit(cfg_.world.seed, n.id, leg);
+            act.dirX = std::cos(angle);
+            act.dirY = std::sin(angle);
+            act.speedScale = 0.10;
+        }
         // GOAL 呼吸温度接线：取核所在点的温度失真度（与 sense 的 s[16] 同源，
         // 同为 temp.distortion(n.pos)），作为末位实参喂给呼吸耗能温度因子。
         // R2-A §5 两阶段积分：先对全体核算社会加速度（本 pass，只读全种群），
@@ -475,63 +544,68 @@ void Simulation::step() {
         // 捕食需求 ≈ 核数 × (核能 × 0.04 × 转化率)。转化率公式把快速/高机动的核
         // 自动打折（mode 1/2/3），配合 maxNodes 护栏，第一营养级不被吃绝
         //（wiring_cyano_grows_with_sun / 20k 审计双闸把守）。
+        // ---- 规则 v2（P0-3）：这里**只登记请求**，不吃 ----
+        // 关键变化：旧版在核循环里直接吃（"谁先被遍历谁先吃"），于是同一帧里
+        // 后遍历的核可能发现节点已被前一个吃光——同时争食的结果依赖于核数组
+        // 的排列顺序，这是本轮要消灭的行为（验收 A2）。
+        // 现在本循环只收集 (nucleusId, nodeId, wantMaterial, efficiency)：
+        // 目标选择仍在本核的局部信息下做（感知半径内、可食量 > 0 的最近节点），
+        // 但**分配**推迟到循环结束后由 CyanoField::grazeBatch 统一结算。
         if (n.alive && n.genome.cyanoPreference > 0.0 && n.digestCooldown == 0) {
-            // ---- R2-A：基因驱动捕食（替换 R1-B 的"按核能量百分比"旧口径）----
-            // 1) 意愿闸：cyanoPreference == 0 的核**绝不**捕食（严格哨兵，卡面红线）。
-            // 2) 处理时间闸：digestCooldown > 0 期间不捕食（吃一口消化一轮）。
-            // 3) 目标：predationRadius 内最近存活节点（确定性扫描，无 rng）。
-            // 4) 每口量 want = cyanoPreference * 0.15 * prey.energy（与核能量无关）。
-            // 5) 转化率 = cyanoConversionRate(公式) × cyanoDigestion（消化基因）。
-            // 6) 冷却 = ceil(1/(0.5 + cyanoDigestion))：消化快 -> 冷却短。
-            // RNG：本段不消耗 rng（确定性扫描 + graze 确定性扣款，声明同 R1-B）。
             EntityId preyId = 0;
-            double preyEnergy = 0.0;
+            double bestD2 = 0.0;
+            double preyEdible = 0.0;
+            double preyEnergyDensity = 0.0;
             const double preyR = bp_.cyanoPredationRadius;
-            // 性能（R2-A，数学等价）：平方距离扫描，只对最近候选开方一次。
-            double bestD2 = preyR * preyR;
+            const CyanoParams& cpar = cyano_.params();
+            bestD2 = preyR * preyR;
+            // 目标选择与感知/感知层使用**同一份**可食量定义（CyanoField::edibleOf）：
+            // 已无可食组织的节点不再是候选，所以最近的"吃空的"节点不会挡住
+            // 旁边还能吃的那个（验收 A3）。
             for (const CyanoNode& c : cyano_.nodes()) {
                 if (!c.alive) continue;
+                const double edible = CyanoField::edibleOf(c, cpar);
+                if (!(edible > 0.0)) continue;   // 吃空的节点：跳过（不再是候选）
                 const Vec2 dv = env_.torusDelta(n.pos, c.pos);
                 const double d2 = dv.x * dv.x + dv.y * dv.y;
-                if (d2 < bestD2) { bestD2 = d2; preyId = c.id; preyEnergy = c.energy; }
+                if (d2 < bestD2) {
+                    bestD2 = d2;
+                    preyId = c.id;
+                    preyEdible = edible;
+                    preyEnergyDensity = c.energy / c.material;
+                }
             }
             if (preyId != 0) {
-                const CyanoParams& cpar = cyano_.params();
-                // 速度输入 = genome.maxSpeed（基因化），加速度输入 = genome.maxAccel
-                //（基因化，主代理 R2-A 复核：卡面要求 maxAccel "同时用于捕食转化率公式"）。
-                // 默认 conversionMode=1 只消费速度项（CyanoNode.h 公式），此改动对默认
-                // 模式输出零影响；mode 2/3（加速度惩罚/混合）自此按基因分化。
-                const double rate = CyanoField::cyanoConversionRate(
-                    cpar.conversionMode, cpar.conversionRate * n.genome.cyanoDigestion,
-                    cpar.conversionExponent, cpar.conversionSpeedRef,
-                    cpar.conversionAccelRef, cpar.conversionWSpeed,
-                    cpar.conversionWAccel, cpar.conversionMinRate,
-                    cpar.conversionMaxRate, n.genome.maxSpeed, n.genome.maxAccel);
-                // 每口量与核能量无关（卡面口径）：want = preference * 0.15 * 猎物能量。
-                // graze(preyId, want, rate) 内部做 taken = min(want*rate, node.energy)。
-                // R9-A 迁移回报：本口猎物距上口 > migrationRadius（环面距离）时，
-                // 转化率补偿 (1 + migrationBonus)（钳 ≤1.0）。零和不变：taken 仍全部
-                // 从节点搬到核，补偿的是转化率公式对快核的折扣份额，不注入新能量。
-                // 无 rng（距离判定确定性），双跑确定性不受影响。
-                double effRate = rate;
-                if (bp_.migrationBonus > 0.0) {
-                    const Vec2 dm = env_.torusDelta(n.pos,
-                        n.hasMealPos ? n.lastMealPos : n.pos);
-                    const double dMeal = std::sqrt(dm.x * dm.x + dm.y * dm.y);
-                    if (dMeal > bp_.migrationRadius)
-                        effRate = std::min(1.0, rate * (1.0 + bp_.migrationBonus));
-                }
-                const double want = n.genome.cyanoPreference *
-                                     cfg_.nucleus.grazeBiteFraction * preyEnergy;
-                const double taken = cyano_.graze(preyId, want, effRate);
-                if (taken > 0.0) {
-                    AgentBehavior::absorbPrey(n, preyId, taken, ledger_);
-                    n.lastMealPos = n.pos;    // R9-A：进食点登记
-                    n.hasMealPos = true;
-                    // 处理时间（ECOLOGY-DESIGN §三.3）：吃一口进入消化冷却；
-                    // 消化基因高 -> 冷却短。"快跑少吃 vs 慢爬猛吃"分化的另一半。
-                    n.digestCooldown =
-                        static_cast<int>(std::ceil(1.0 / (0.5 + n.genome.cyanoDigestion)));
+                // 每口量：基因意愿 × 口粮系数 × **可食量**（不是节点的全部能量）。
+                // 与核自身能量、核的速度/加速度、上一次进食位置都无关——
+                // 这就是 A1 要求的"同一摄食条件"。
+                const double proportionalBite = n.genome.cyanoPreference *
+                                                cfg_.nucleus.grazeBiteFraction * preyEdible;
+                const double want = proportionalBite > 0.0
+                    ? std::min(preyEdible, std::max(1.0, proportionalBite)) : 0.0;
+                // 同化率：**唯一**一条，只由基率与消化基因决定（规则 v2 删除
+                // 了按最高速度/加速度折减与迁移回报两条修正）。
+                double efficiency = cpar.conversionRate * n.genome.cyanoDigestion;
+                if (!(efficiency > 0.0)) efficiency = 0.0;
+                if (efficiency > 1.0) efficiency = 1.0;
+                // 摄食能力上限：一口能处理的量受"消化能力"约束，与储量余量
+                // 一起构成 want 的上限（请求本身不能超过能咽下的量）。
+                const double capacityNow = static_cast<double>(kGrazeAbilityPerTick);
+                double wantCapped = want < capacityNow ? want : capacityNow;
+                // 实际储存余量：核体容量满了以后再吃也装不下（多出来的物质
+                // 会浪费掉），所以请求量也要受余量限制。
+                const double room = AgentBehavior::availableEnergyStorage(n);
+                const double absorbedPerMaterial = efficiency * preyEnergyDensity;
+                if (!(efficiency > 0.0)) wantCapped = 0.0;
+                else if (absorbedPerMaterial > 0.0)
+                    wantCapped = std::min(wantCapped, room / absorbedPerMaterial);
+                if (wantCapped > 0.0) {
+                    GrazeRequest req;
+                    req.nucleusId = n.id;
+                    req.nodeId = preyId;
+                    req.wantMaterial = wantCapped;
+                    req.efficiency = efficiency;
+                    pendingGraze.push_back(req);
                 }
             }
         }
@@ -550,6 +624,46 @@ void Simulation::step() {
             reproParents.push_back(i);
         }
     }
+    // ==================== 规则 v2（P0-3）：摄食批结算 ====================
+    // 循环已结束，全部请求都登记完毕。这里一次性交给环境层分配：
+    //   同一节点的总需求超过可食量时按请求占比分配，且结算顺序与核的遍历
+    //   顺序无关（grazeBatch 内部按 (nodeId, nucleusId) 排序）——A2 的判据。
+    // 然后把每份配额回填到个体（行为层是唯一写点：absorbGraze）。
+    if (!pendingGraze.empty()) {
+        const std::vector<GrazeGrant> grants = cyano_.grazeBatch(pendingGraze);
+        // grants 的顺序与 pendingGraze **不同**（内部排过序），所以按
+        // (nucleusId, nodeId) 建索引回填，而不是按下标配对。
+        for (const GrazeGrant& g : grants) {
+            if (!(g.material > 0.0)) continue;
+            Nucleus* eater = nullptr;
+            for (Nucleus& cand : nuclei_) {
+                if (cand.id == g.nucleusId && cand.alive) { eater = &cand; break; }
+            }
+            if (eater == nullptr) continue;
+            const AgentBehavior::GrazeResult res = AgentBehavior::absorbGraze(
+                *eater, g.material, g.energyTransferred, g.efficiency, ledger_);
+            grazeTaken_ += res.materialTaken;
+            grazeAbsorbed_ += res.materialAbsorbed;
+            grazeRejected_ += res.materialRejected;
+            // 未同化的组织回到环境：这是"取走量"与"吸收量"之间的差额的
+            // 明确去向（不是凭空消失）。放进当地残骸 → 局部分解 → 养分。
+            if (res.materialRejected > 0.0) {
+                nutrients_.addDebris(eater->pos, res.materialRejected);
+            }
+            // 处理时间：吃到了就进入消化冷却（吃一口消化一轮）。
+            // 消化基因高 → 冷却短。"快跑少吃 vs 慢爬猛吃"分化的另一半，
+            // 它不是摄食量折扣，而是"多久能吃下一口"。
+            eater->digestCooldown =
+                static_cast<int>(std::ceil(1.0 / (0.5 + eater->genome.cyanoDigestion)));
+        }
+        // 被吃空的节点：环境层已标记死亡，这里把它们的组织放进当地残骸。
+        const std::vector<CyanoField::DeadNode> eaten = cyano_.takeDeadNodes();
+        for (const CyanoField::DeadNode& d : eaten) {
+            if (d.material > 0.0) nutrients_.addDebris(d.pos, d.material);
+            if (d.energy > 0.0) ledger_.dissipate("cyanoGrazeDeath", d.energy);
+        }
+    }
+
     if (!reproParents.empty()) {
         nuclei_.reserve(nuclei_.size() + reproParents.size());
         for (std::size_t i : reproParents) {
@@ -581,12 +695,13 @@ void Simulation::step() {
                 for (const Ball& b : n.detached_) freeBalls_.push_back(b);
                 n.detached_.clear();
             }
-            // R2-A §8：死核的尸体营养包转入组合根 carrion_（当帧末分配给蓝细菌）。
-            // 死核会在下方被压缩，能量必须先搬出来，否则凭空消失。
-            if (!n.alive && n.carrion_.energy > 0.0) {
-                carrion_.push_back(n.carrion_);
-                carrionEnergyIn_ += n.carrion_.energy; // R3-A：流水入账（审计用）
-                n.carrion_ = Carrion{};
+            // 规则 v2（P1）：死核的身体物质转入当地残骸。
+            // 死核会在下方被压缩，物质必须在这里搬出来，否则跟着尸体一起消失。
+            // 注意这是**物质**：它不改变任何能量账，只改变物质的分布（A7）。
+            if (!n.alive && n.remains_.debris > 0.0) {
+                nutrients_.addDebris(n.remains_.pos, n.remains_.debris);
+                lastDeadMaterial_ += n.remains_.debris;
+                n.remains_ = Remains{};
             }
         }
     }
@@ -645,50 +760,13 @@ void Simulation::step() {
             }
         }
     }
-    // ---- R2-A §8：尸体营养分配（营养循环：尸体 → 分解者 → 生产者）----
-    // 把本帧产生的 carrion_（核死亡 30% 遗产）分配给死亡位置最近的存活蓝细菌节点：
-    // ledger.transfer(carrionId -> node.id) 零和搬运（能量已在账，只换持有者）。
-    // 找不到 kCarrionSearchRadius 内的分解者时全额 dissipate("death")（能量绝不滞留）。
-    // 确定性：节点按下标序取第一个最近者（平距取小下标），无 rng。
-    if (!carrion_.empty()) {
-        for (const Carrion& cr : carrion_) {
-            if (!(cr.energy > 0.0)) continue;
-            EntityId best = 0;
-            double bestD = kCarrionSearchRadius;
-            for (const CyanoNode& c : cyano_.nodes()) {
-                if (!c.alive) continue;
-                const double d = env_.torusDistance(cr.pos, c.pos);
-                if (d < bestD) { bestD = d; best = c.id; }
-            }
-            // R3-A（营养循环真实转移）：CyanoField::fertilize 是环境层的唯一
-            // 合法写点——节点能量写入只能走 CyanoField（R2-A 方案 A 的能力缺口
-            // 由本卡补上）。账目必须审计平衡：
-            //   transfer(0, best, accepted)   零和搬运（能量已在账，只换持有者），
-            //                                 与 fertilize 的实际入账量严格一致；
-            //   dissipate("death", overflow)  只对溢出部分耗散（energyCap 装不下
-            //                                 的残量 + 找不到分解者的全额）。
-            // 恒等式：fertilize 接受量 == transfer 量（两侧同源），溢出量全额入
-            // dissipate——能量绝不滞留在模块内，绝不凭空出现/消失。逐包流水
-            // carrionEnergyIn_/Out_ 供 step() 审计段做闭合断言（1e-9 相对容差）。
-            if (best != 0) {
-                const double accepted = cyano_.fertilize(best, cr.energy);
-                if (accepted > 0.0) {
-                    ledger_.transfer(0, best, accepted);
-                    carrionEnergyOut_ += accepted; // R3-A：流水出账（转移侧）
-                }
-                if (cr.energy > accepted) {
-                    const double overflow = cr.energy - accepted;
-                    ledger_.dissipate("death", overflow);
-                    carrionEnergyOut_ += overflow; // R3-A：流水出账（溢出侧）
-                }
-            } else {
-                // 半径内无分解者：全额耗散（能量绝不滞留，R2-A 语义保留）。
-                ledger_.dissipate("death", cr.energy);
-                carrionEnergyOut_ += cr.energy; // R3-A：流水出账（无分解者全额）
-            }
-        }
-        carrion_.clear();
-    }
+    // ---- 规则 v2（P1）：死亡残骸已在上面直接放进养分场 ----
+    // 旧版这里是"尸体营养包 → 最近的蓝细菌节点"的能量搬运，并且对找不到
+    // 分解者的部分全额耗散。规则 v2 不再有这条通道：
+    //   · 死亡的产物是**物质**（残骸），放进死亡位置的区域，按局部分解变成
+    //     可吸收养分——没有任何一步要把能量塞给生产者；
+    //   · 因此"一具尸体替代阳光"在结构上不可能（A7/A8）。
+    // 残骸→养分的分解在下面的养分场推进里做（decompose），与模拟时间同步。
     env_.tick();
     // ---- S22 接线：蓝细菌推进（先于 env_.tick() 调用者感知，顺序固定，影响 rng 流）----
     // R1-B：阳光模型参数化（SunConfig）。sunLevel = base - gradient*(y/H)
@@ -699,43 +777,43 @@ void Simulation::step() {
     // 同形（同基线/同幅值/同量级周期），太阳相位不改变生态量级。
     // 取"世界最暗点"（y=H）光照驱动全局 step：节点级光照由垂直梯度在前端
     // 呈现（R1-B：梯度不改变第一营养级的全局收支口径，只改视觉分布）。
-    const double sunLevel = sunLevelAt(cfg_.sun, tick_, cfg_.world.height,
+    const double sunLevel = sunLevelAt(effectiveSun(), tick_, cfg_.world.height,
                                        cfg_.world.height);
     const double cyanoBefore = cyano_.totalEnergy();
+    // 规则 v2：把养分场传进环境层——新组织必须有养分才能形成（A8）。
     const CyanoStepReport rep =
-        cyano_.step(sunLevel, cfg_.world.width, cfg_.world.height, rng_);
+        cyano_.step(sunLevel, cfg_.world.width, cfg_.world.height, rng_, &nutrients_);
     if (rep.photosynthesisGain > 0.0) ledger_.injectPrimary(kCyanoPoolId, rep.photosynthesisGain);
     if (rep.metabolismLoss > 0.0) ledger_.dissipate("cyanoMetabolism", rep.metabolismLoss);
+    if (rep.capacityLoss > 0.0) ledger_.dissipate("cyanoCapacity", rep.capacityLoss);
     if (rep.reproductionLoss > 0.0) ledger_.dissipate("cyanoReproduction", rep.reproductionLoss);
-    // 蓝细菌产出的自由球：模块内部已从节点扣款（节点实测差含 -ballSpawnCost），
-    // 这批能量以自由球实体形式重新出现在存活实体里，必须 injectPrimary 入账。
-    // 坐标取模块 lastBallSpawns()（本模块为组合根预留的出生点，不额外耗 rng）。
-    if (rep.ballsProduced > 0 && rep.ballEnergyTotal > 0.0) {
-        // 【红队 R8-P0 修正 2026-10-31】这里**绝不能** injectPrimary。
-        //
-        // 能量流向其实很简单：模块内部 node.energy -= ballSpawnCost 把能量从节点
-        // 拿出来，report.ballEnergyTotal 只是"这笔能量去哪了"的备忘——它现在
-        // 以自由球实体（下方 push 的 fb）的形式继续存在于 sumLiving 里。
-        // 账本视角：总能量没离开存活实体集合，零操作即守恒。
-        //
-        // 旧写法 injectPrimary(ballEnergyTotal) 是凭空注入一份幻影能量：
-        // cyanoDelta 没包含它（节点已扣、球是新建的），resid 通道每帧把它对销掉
-        // ——实测 20k tick resid 非零 19983/20000、累计 -417,156（红队 R8 报 P0，
-        // 主代理独立复现一致）。审计恒等式表面 ok，实际整条账被幻影注入污染。
-        const double per = rep.ballEnergyTotal / static_cast<double>(rep.ballsProduced);
-        const std::vector<Vec2>& spawns = cyano_.lastBallSpawns();
-        for (int k = 0; k < rep.ballsProduced; ++k) {
-            Ball fb; // 变量名避开守卫 1c 的 n.energy/n.pos 直写模式
-            fb.id = nextFreeBallId_++;
-            fb.ownerId = 0;
-            fb.pos = static_cast<std::size_t>(k) < spawns.size()
-                         ? spawns[static_cast<std::size_t>(k)]
-                         : Vec2{0.0, 0.0};
-            fb.vel = Vec2{0.0, 0.0};
-            fb.energy = per;
-            freeBalls_.push_back(fb);
+    // 规则 v2：形成新组织花的能量——它没有凭空消失，而是变成了物质，所以
+    // 从能量账上看确实是耗散（能量不再以可用形式存在）。这条单独记账，
+    // 便于回答"为什么总能量比上一帧少了"。
+    if (rep.growthEnergySpent > 0.0) {
+        ledger_.dissipate("cyanoGrowth", rep.growthEnergySpent);
+    }
+    // 规则 v2：饿死的节点留下的组织 → 当地残骸（A6 的另一条路径：
+    // 不是被吃掉，而是自己耗尽了可用能量）。
+    if (rep.deadMaterial > 0.0) {
+        // deadMaterial 是总量，按存活节点位置逐一放到残骸里更准确，但
+        // CyanoField 没暴露逐节点死亡位置（饿死发生在它内部）。这里用
+        // "本帧饿死节点的组织总量" 均摊到它们死亡前所在的区域不可行，
+        // 因此改为：CyanoField::step 内部把饿死节点的残骸位置记录到
+        // pendingDeath_，由 takeDeadNodes() 统一取出（下面那段）。
+        lastDeadMaterial_ += rep.deadMaterial;
+    }
+    {
+        const std::vector<CyanoField::DeadNode> starved = cyano_.takeDeadNodes();
+        for (const CyanoField::DeadNode& d : starved) {
+            if (d.material > 0.0) nutrients_.addDebris(d.pos, d.material);
         }
-        // 注：不调用任何 ledger 函数——能量只是换了实体持有者。
+    }
+    // ---- 规则 v2（P1）：残骸 → 可吸收养分的局部分解 ----
+    // 一个随模拟时间推进的局部过程，不需要独立分解者物种。
+    // 残骸只会变成养分，不会变成能量——所以它替代不了阳光（A7/A8）。
+    if (cfg_.cyanoTuning.decomposeRate > 0.0) {
+        nutrients_.decompose(cfg_.cyanoTuning.decomposeRate);
     }
     // S22：自由球回收（见 kFreeBallCap 注释）。
     if (freeBalls_.size() >= kFreeBallCap) { // >=：稳态下 > 永不触发（红队 R8 P1）
@@ -773,29 +851,29 @@ void Simulation::step() {
     if (auditEnabled_) {
         const double cyanoDelta = cyano_.totalEnergy() - cyanoBefore;
         const double accounted = rep.photosynthesisGain - rep.metabolismLoss
-                               - rep.reproductionLoss;
+                               - rep.reproductionLoss - rep.growthEnergySpent - rep.capacityLoss;
         // 防御：若残差超出浮点噪声量级（远大于 1e-6），这是真 bug，必须让它被看见。
         if (std::fabs(cyanoDelta - accounted) > 1e-6 * std::max(1.0, std::fabs(cyanoBefore))) {
             auditOk_ = false;
         }
     }
 
-    // R3-A（营养循环）审计断言：fertilize 实际转进节点的能量必须与
-    // ledger_.transfer(0, best, accepted) 的记账量严格一致（同源变量，理论上
-    // 恒等；此处防未来两条路径被独立改动后漂移）。不平衡 = 真 bug，让审计失败。
-    //（本帧 carrion 已在上方清空，计数器差值 = 本帧处理的包数。）
-    // 流水闭合：carrion_ 已清空，入队能量必须全部出账（逐包浮点尾数 ≤1 ulp，
-    // 1e-9 相对容差内必等；真漏账会在对称方向上越积越大，当场暴露）。
+    // ---- 规则 v2（P1）：摄食流水闭合（取代旧 carrion 流水的角色）----
+    // 取走量必须恰好等于"吸收进身体" + "未同化回到环境"两部分之和。
+    // 不平衡意味着有物质在账外消失或凭空出现——当场审计失败，绝不静默补平。
     if (auditEnabled_ &&
-        std::fabs(carrionEnergyIn_ - carrionEnergyOut_) >
-            1e-9 * std::max(1.0, carrionEnergyIn_)) {
+        std::fabs(grazeTaken_ - (grazeAbsorbed_ + grazeRejected_)) >
+            1e-12 * std::max(1.0, std::fabs(grazeTaken_))) {
         auditOk_ = false;
     }
+    grazeTaken_ = 0.0;
+    grazeAbsorbed_ = 0.0;
+    grazeRejected_ = 0.0;
 
     ++tick_;
     if (auditEnabled_) {
         const double tol = 1e-9 * std::max(1.0, ledger_.totalInjected());
-        auditOk_ = ledger_.audit(tol, totalEnergy());
+        auditOk_ = auditOk_ && ledger_.audit(tol, totalEnergy());
     }
 }
 
@@ -991,12 +1069,35 @@ void Simulation::ballOwnership() {
     }
 }
 
+SunConfig Simulation::effectiveSun() const {
+    SunConfig sun = cfg_.sun;
+    if (tick_ < lightEffect_.end) {
+        sun.baseLevel = std::max(0.0, sun.baseLevel + lightEffect_.offset);
+    }
+    return sun;
+}
+
 bool Simulation::runTo(std::uint64_t endTick) {
     while (tick_ < endTick) {
         step();
         if (!auditOk_) return false;
     }
     return true;
+}
+
+// 规则 v2（P1）：物质账视图。刻意**不**含能量：物质与能量是两本独立账，
+// 混在一起会让"残骸替代阳光"这类错误无法被发现（A7 的判据就是这两本账
+// 各自独立闭合）。
+Simulation::MatterLedger Simulation::matter() const {
+    MatterLedger m;
+    m.nodeMaterial = cyano_.totalMaterial();
+    for (const Nucleus& n : nuclei_) {
+        if (n.alive) m.nucleusMass += n.bodyMass;
+    }
+    m.debris = nutrients_.totalDebris();
+    m.nutrient = nutrients_.totalNutrient();
+    m.externalIn = matterExternalIn_;
+    return m;
 }
 
 std::size_t Simulation::nucleusCount() const {
@@ -1020,8 +1121,8 @@ double Simulation::totalEnergy() const {
     }
     // S19/S20：已脱离的自由球（ownerId==0）仍是存活实体，能量必须计入。
     for (const Ball& b : freeBalls_) sum += b.energy;
-    // R2-A §8：待分配尸体营养包能量仍在账（尚未 transfer 给蓝细菌）。
-    for (const Carrion& cr : carrion_) sum += cr.energy;
+    // 规则 v2（P1）：死亡残骸是**物质**不是能量，因此不进 sumLiving。
+    // 能量在死亡瞬间已经全额 dissipate("death")——恒等式右侧只剩真实可用的能量。
     // R1-B：蓝细菌是唯一食物、也是存活实体，能量必须计入 sumLiving（审计恒等式右侧）。
     sum += cyano_.totalEnergy();
     return sum;
@@ -1048,12 +1149,20 @@ void hashU64(std::uint64_t& h, std::uint64_t v) {
         hashMix(h, static_cast<std::uint8_t>(v >> (i * 8)));
     }
 }
+void hashI32Mix(std::uint64_t& h, int v) {
+    hashU64(h, static_cast<std::uint64_t>(static_cast<std::int64_t>(v)));
+}
 } // namespace
 
 std::uint64_t Simulation::stateHash() const {
     const std::uint64_t kOffset = 0xcbf29ce484222325ULL;
     std::uint64_t h = kOffset;
     hashU64(h, static_cast<std::uint64_t>(tick_));
+    if (tick_ < lightEffect_.end) {
+        hashDouble(h, lightEffect_.offset);
+        hashU64(h, lightEffect_.duration);
+        hashU64(h, lightEffect_.end);
+    }
     for (const Nucleus& n : nuclei_) {
         hashDouble(h, n.pos.x);
         hashDouble(h, n.pos.y);
@@ -1063,6 +1172,17 @@ std::uint64_t Simulation::stateHash() const {
         // 修复：补齐 n.speed / n.alive（此前未覆盖，可构造同哈希不同未来）。
         hashDouble(h, n.speed);
         hashU64(h, n.alive ? 1ULL : 0ULL);
+        // 规则 v2：身体物质与个体记忆也决定未来（"同哈希不同未来"的红线）。
+        // 记忆尤其关键：它直接影响下一次 decide() 的输出。
+        hashDouble(h, n.bodyMass);
+        hashU64(h, n.ballSerial);
+        hashI32Mix(h, n.memory.forageForaging);
+        hashI32Mix(h, n.memory.hysteresisLastChoice);
+        hashDouble(h, n.memory.riskEroi);
+        hashDouble(h, n.memory.riskPrevProx);
+        hashDouble(h, n.memory.banditLogW[0]);
+        hashDouble(h, n.memory.banditLogW[1]);
+        hashI32Mix(h, n.memory.banditHasPrev);
         for (const Ball& b : n.balls) {
             hashDouble(h, b.angle);
             hashDouble(h, b.radius);
@@ -1078,9 +1198,18 @@ std::uint64_t Simulation::stateHash() const {
         hashDouble(h, c.pos.x);
         hashDouble(h, c.pos.y);
         hashDouble(h, c.energy);
+        // 规则 v2：可食组织是摄食口径的唯一来源，不入哈希就无法发现"同哈希不同未来"。
+        hashDouble(h, c.material);
         hashU64(h, c.alive ? 1ULL : 0ULL);
         hashDouble(h, c.hue);
     }
+    // 规则 v2（P1）：物质场（残骸/养分）与外部投入累计必须进哈希——
+    // 来源是 A13/A12 的"检查点回放与续跑逐帧一致"判据。
+    for (const NutrientCell& cell : nutrients_.cells()) {
+        hashDouble(h, cell.debris);
+        hashDouble(h, cell.nutrient);
+    }
+    hashDouble(h, matterExternalIn_);
     // 【红队 R8-P1 修正 2026-10-31】自由球必须入哈希。
     // 旧问题：终局 84.2% 能量在 freeBalls_ 里，其 pos/vel/energy 完全不改变指纹
     // —— "同哈希不同未来"的注释自相矛盾。按容器序混入 id/pos/vel/energy。
@@ -1116,8 +1245,6 @@ void Simulation::applyConfig(const SimConfig& next) {
     bp_.respirationBase = cfg_.nucleus.respirationBase;
     bp_.locomotionCost = cfg_.nucleus.locomotionCost;
     bp_.cyanoPredationRadius = cfg_.nucleus.cyanoPredationRadius;
-    bp_.migrationBonus = cfg_.nucleus.migrationBonus;     // R9-A 迁移回报镜像
-    bp_.migrationRadius = cfg_.nucleus.migrationRadius;
     bp_.speedCostExponent = cfg_.nucleus.speedCostExponent; // R11-P1-3 接线镜像
     bp_.damping = cfg_.nucleus.damping;
     bp_.reproductionCostRatio = cfg_.nucleus.reproductionCostRatio;
@@ -1159,25 +1286,12 @@ void Simulation::applyConfig(const SimConfig& next) {
         p.reproductionProbability = t.reproductionProbability;
         p.reproductionOffset = t.reproductionOffset;
         p.minSeparation = t.minSeparation;
-        p.ballSpawnCost = t.ballSpawnCost;
-        p.ballSpawnProbability = t.ballSpawnProbability;
-        p.ballRadius = t.ballRadius;
-        p.ballSpawnMinDist = t.ballSpawnMinDist;
-        p.ballSpawnMaxDist = t.ballSpawnMaxDist;
         p.linkRadius = t.linkRadius;
         p.linkMaxNeighbors = t.linkMaxNeighbors;
         p.linkTransferRate = t.linkTransferRate;
         p.linkDeadband = t.linkDeadband;
         p.linkCheckInterval = t.linkCheckInterval;
-        p.conversionMode = t.conversionMode;
         p.conversionRate = t.conversionRate;
-        p.conversionExponent = t.conversionExponent;
-        p.conversionSpeedRef = t.conversionSpeedRef;
-        p.conversionAccelRef = t.conversionAccelRef;
-        p.conversionWSpeed = t.conversionWSpeed;
-        p.conversionWAccel = t.conversionWAccel;
-        p.conversionMinRate = t.conversionMinRate;
-        p.conversionMaxRate = t.conversionMaxRate;
         p.hueJitterSigma = t.hueJitterSigma;
         // R7-C：聚落播种形状镜像。注意 seed() 只在构造期调用，热改这两个值
         // 不重撒已有节点——落点存在是为了镜像完整性（未来事件播种/重播种
@@ -1189,7 +1303,15 @@ void Simulation::applyConfig(const SimConfig& next) {
         p.shadeK = t.shadeK;
         p.shadeRadius = t.shadeRadius;
         p.shadeSigma = t.shadeSigma;
-        p.grazeRefugeEnergy = t.grazeRefugeEnergy;
+        // 规则 v2：组织/养分参数热改同步（同一份白盒镜像清单）。
+        p.minStructure = t.minStructure;
+        p.maxMaterial = t.maxMaterial;
+        p.initialMaterial = t.initialMaterial;
+        p.seedEnergy = cfg_.runtime.cyanoInitialEnergy;
+        p.growthPerTick = t.growthPerTick;
+        p.nutrientPerMaterial = t.nutrientPerMaterial;
+        p.growthEnergyCost = t.growthEnergyCost;
+        p.assimilation = t.assimilation;
     }
 }
 
@@ -1203,7 +1325,26 @@ int Simulation::addCyanoNodes(int n) {
     // 能量账：追加节点以 0 能量播种（构造期播种同口径），账面零操作——
     // 节点能量从光合长出来时才由 step() 的 injectPrimary 入账，恒等式两侧
     // 同增，审计自证。因此本函数不碰 ledger_。
+    //
+    // 物质账：新增节点带着 initialMaterial 的组织，这是**外部投入**，
+    // 必须单列（A7 的对照项：显式施肥/播种造成的总量变化要等于外部投入）。
+    // 能量账：新节点还带着 seedEnergy 的启动储备——它同样是**外部注入**，
+    // 必须走 injectPrimary。漏掉这一步能量就会凭空出现：实测播种 100 个节点
+    // 让总能量无因上涨 4000（= 100 × 40），审计恒等式当场破。
+    if (added > 0) {
+        const double mass = static_cast<double>(added) * cyano_.params().initialMaterial;
+        matterExternalIn_ += mass;
+        const double energy = static_cast<double>(added) * cyano_.params().seedEnergy;
+        if (energy > 0.0) ledger_.injectPrimary(kCyanoPoolId, energy);
+    }
     return added;
+}
+
+double Simulation::fertilize(Vec2 pos, double amount) {
+    if (!(amount > 0.0)) return 0.0;
+    nutrients_.addNutrient(pos, amount);
+    matterExternalIn_ += amount;   // 外部投入单列（A7 的对照项）
+    return amount;
 }
 
 
@@ -1213,7 +1354,10 @@ namespace {
 constexpr std::uint32_t kSerMagic = 0x41534153u;    // "ASAV"（小端字节序视角）
 // R7-B：v2 = v1 + Ball.r7Lane 尾部字段（serWriteBall/serReadBall）。旧 v1 档
 // 读入会在 ball 车道字节处失败（格式校验从严，报错含版本号）。
-constexpr std::uint32_t kSerVersion = 3u;   // R9-A：v3 = v2 + 核迁移状态（lastMealPos/hasMealPos）
+// 规则 v2 使用 v4 实体格式。v5 增加临时光照的偏移、持续时间和到期帧。
+// 旧的 v3 档（规则 v1）在读取时被明确拒绝：缺养分与行为记忆，没有可解释的
+// 初始分配方式可以转换，因此不做静默转换、也绝不改写原件（A13 的数据保护）。
+constexpr std::uint32_t kSerVersion = 5u;
 constexpr std::size_t kSerMaxCount = 1u << 31;      // 计数护栏：防损坏流 reserve 爆炸
 constexpr std::size_t kSerNameLimit = 64;           // ledger reason 长度护栏
 
@@ -1338,6 +1482,73 @@ bool serToSize(std::uint64_t v, std::size_t& out) {
     return true;
 }
 
+// ---- 规则 v2（P0-4）：个体决策记忆的逐字段序列化 ----
+// 按字段写，不整块写 sizeof(PolicyMemory)：结构体里可能有 padding，
+// padding 字节是未定义值，整块写会让"同样状态存两次得到不同字节"。
+// 读侧先比 schemaVersion，不符就报错拒绝（不做静默迁移）。
+bool serWritePolicyMemory(std::ostream& os, const PolicyMemory& m) {
+    serWriteI32(os, m.schemaVersion);
+    serWriteI32(os, m.forageForaging);
+    serWriteI32(os, m.hysteresisLastChoice);
+    serWriteF64(os, m.riskEroi);
+    serWriteF64(os, m.riskPrevProx);
+    for (int k = 0; k < 2; ++k) serWriteF64(os, m.riskLastDir[k]);
+    for (int k = 0; k < 2; ++k) serWriteF64(os, m.riskCachedDir[k]);
+    serWriteI32(os, m.riskHasCachedDir);
+    serWriteI32(os, m.riskMode);
+    serWriteI32(os, m.riskFrameInMode);
+    serWriteI32(os, m.riskFrameInModeMode);
+    for (int k = 0; k < 2; ++k) serWriteF64(os, m.banditLogW[k]);
+    for (int k = 0; k < 2; ++k) serWriteF64(os, m.banditW[k]);
+    serWriteI32(os, m.banditHasPrev);
+    for (int k = 0; k < SensorVector::kDim; ++k) serWriteF64(os, m.banditPrevS[k]);
+    for (int a = 0; a < 2; ++a) {
+        for (int k = 0; k < 2; ++k) serWriteF64(os, m.banditPrevArm[a][k]);
+    }
+    for (int k = 0; k < 2; ++k) serWriteF64(os, m.banditPrevOut[k]);
+    return os.good();
+}
+
+bool serReadPolicyMemory(std::istream& is, PolicyMemory& m) {
+    std::int32_t schema = 0;
+    if (!serReadI32(is, schema)) return false;
+    if (schema != PolicyMemory::kSchemaVersion) return false; // 记忆布局不符：拒绝
+    m.schemaVersion = schema;
+    if (!serReadI32(is, m.forageForaging)) return false;
+    if (!serReadI32(is, m.hysteresisLastChoice)) return false;
+    if (!serReadF64(is, m.riskEroi)) return false;
+    if (!serReadF64(is, m.riskPrevProx)) return false;
+    for (int k = 0; k < 2; ++k) {
+        if (!serReadF64(is, m.riskLastDir[k])) return false;
+    }
+    for (int k = 0; k < 2; ++k) {
+        if (!serReadF64(is, m.riskCachedDir[k])) return false;
+    }
+    if (!serReadI32(is, m.riskHasCachedDir)) return false;
+    if (!serReadI32(is, m.riskMode)) return false;
+    if (!serReadI32(is, m.riskFrameInMode)) return false;
+    if (!serReadI32(is, m.riskFrameInModeMode)) return false;
+    for (int k = 0; k < 2; ++k) {
+        if (!serReadF64(is, m.banditLogW[k])) return false;
+    }
+    for (int k = 0; k < 2; ++k) {
+        if (!serReadF64(is, m.banditW[k])) return false;
+    }
+    if (!serReadI32(is, m.banditHasPrev)) return false;
+    for (int k = 0; k < SensorVector::kDim; ++k) {
+        if (!serReadF64(is, m.banditPrevS[k])) return false;
+    }
+    for (int a = 0; a < 2; ++a) {
+        for (int k = 0; k < 2; ++k) {
+            if (!serReadF64(is, m.banditPrevArm[a][k])) return false;
+        }
+    }
+    for (int k = 0; k < 2; ++k) {
+        if (!serReadF64(is, m.banditPrevOut[k])) return false;
+    }
+    return true;
+}
+
 bool serWriteBall(std::ostream& os, const Ball& b) {
     serWriteU64(os, b.id);
     serWriteF64(os, b.angle);
@@ -1432,7 +1643,13 @@ bool Simulation::serializeState(std::ostream& os) const {
     // ---- Header + 标量区 ----
     serWriteU32(os, kSerMagic);
     serWriteU32(os, kSerVersion);
+    // 规则版本：存档必须能辨别"这份数据是哪套生态规则跑出来的"（kRulesVersion）。
+    // 语义版本（VERSION 文件的产品版本号）与之无关——规则版本描述生态语义。
+    serWriteI32(os, kRulesVersion);
     serWriteU64(os, tick_);
+    serWriteF64(os, lightEffect_.offset);
+    serWriteU64(os, lightEffect_.duration);
+    serWriteU64(os, lightEffect_.end);
     serWriteBool(os, auditOk_);
     serWritePad(os, 7);
     std::uint64_t rs = 0;
@@ -1486,26 +1703,35 @@ bool Simulation::serializeState(std::ostream& os) const {
         for (const Ball& b : n.detached_) {
             if (!serWriteBall(os, b)) return false;
         }
-        serWriteF64(os, n.carrion_.pos.x);
-        serWriteF64(os, n.carrion_.pos.y);
-        serWriteF64(os, n.carrion_.energy);
-        // R9-A：迁移回报状态（v3 追加字段）
-        serWriteF64(os, n.lastMealPos.x);
-        serWriteF64(os, n.lastMealPos.y);
-        serWriteBool(os, n.hasMealPos);
+        // 规则 v2：身体物质（与能量严格分开）与死亡产物。
+        serWriteF64(os, n.bodyMass);
+        // 规则 v2（A13）：器官序号随档走——否则读档后新球的 id 与原世界不同。
+        serWriteU64(os, n.ballSerial);
+        serWriteF64(os, n.remains_.pos.x);
+        serWriteF64(os, n.remains_.pos.y);
+        serWriteF64(os, n.remains_.debris);
+        // 规则 v2（P0-4）：本核自己的决策记忆——读档必须恢复已存在个体的
+        // 实际记忆，否则续跑第一步的决策就与原世界分叉（A4/A13）。
+        if (!serWritePolicyMemory(os, n.memory)) return false;
     }
     // ---- 自由球 ----
     serWriteU64(os, freeBalls_.size());
     for (const Ball& fb : freeBalls_) {
         if (!serWriteBall(os, fb)) return false;
     }
-    // ---- 组合根尸体容器 ----
-    serWriteU64(os, carrion_.size());
-    for (const Carrion& cr : carrion_) {
-        serWriteF64(os, cr.pos.x);
-        serWriteF64(os, cr.pos.y);
-        serWriteF64(os, cr.energy);
+    // ---- 规则 v2（P1）：物质场（残骸/养分网格）----
+    // 存几何 + 逐区域两个量。几何不进档的话，读档后区域划分可能与原世界不同，
+    // 于是同一份物质会被算到别的区域上（外观上"养分凭空搬家"）。
+    serWriteF64(os, nutrients_.worldWidth());
+    serWriteF64(os, nutrients_.worldHeight());
+    serWriteF64(os, nutrients_.regionSize());
+    serWriteU64(os, nutrients_.cellCount());
+    for (const NutrientCell& cell : nutrients_.cells()) {
+        serWriteF64(os, cell.debris);
+        serWriteF64(os, cell.nutrient);
     }
+    // 外部物质投入累计：不恢复它就没法在新世界上做物质守恒对账（A7）。
+    serWriteF64(os, matterExternalIn_);
     // ---- 蓝细菌场（节点 + id 计数 + 连线节流相位）----
     const std::vector<CyanoNode>& nodes = cyano_.nodes();
     serWriteU64(os, nodes.size());
@@ -1514,6 +1740,7 @@ bool Simulation::serializeState(std::ostream& os) const {
         serWriteF64(os, c.pos.x);
         serWriteF64(os, c.pos.y);
         serWriteF64(os, c.energy);
+        serWriteF64(os, c.material);   // 规则 v2：可食组织（唯一摄食口径）
         serWriteBool(os, c.alive);
         serWritePad(os, 7);
         serWriteF64(os, c.hue);
@@ -1535,14 +1762,44 @@ bool Simulation::deserializeState(std::istream& is, std::string& err) {
         err = "cannot read header"; return false;
     }
     if (magic != kSerMagic) { err = "bad magic (not ASAV)"; return false; }
-    if (version != kSerVersion) {
-        err = "unsupported save version: " + std::to_string(version) +
-              " (expected " + std::to_string(kSerVersion) + ")";
+    if (version > kSerVersion) {
+        err = "save format v" + std::to_string(version) + " requires a newer agentsim build";
+        return false;
+    }
+    if (version < 4u) {
+        // 规则 v2 的数据保护：旧档（v3 及更早）来自规则 v1，缺少养分存量、
+        // 身体物质与个体行为记忆。这些量**没有可解释的初始分配方式**
+        //（凭空补一个养分总量就等于伪造外部投入，A7 的物质守恒会立刻失真），
+        // 所以这里明确提示版本并拒绝，绝不静默转换、绝不改写原件。
+        err = "save was written by an older rules version (save format v" +
+              std::to_string(version) + ", this build expects v" +
+              std::to_string(kSerVersion) + " / " + kRulesVersionName +
+              "). This build cannot open it: the file has no nutrient stock, "
+              "no body mass and no per-individual policy memory, and there is "
+              "no honest way to invent them. The original file has not been "
+              "modified. Open it with agentsim 3.0.0 (rules v1), or start a new "
+              "run with this build.";
+        return false;
+    }
+    std::int32_t rulesVersion = 0;
+    if (!serReadI32(is, rulesVersion)) { err = "cannot read rules version"; return false; }
+    if (rulesVersion != kRulesVersion) {
+        err = "save rules version mismatch: file says " + std::to_string(rulesVersion) +
+              ", this build implements " + std::to_string(kRulesVersion) + " (" +
+              kRulesVersionName + "). Original file left untouched.";
         return false;
     }
     std::uint64_t tick = 0;
     bool auditOk = true;
     if (!serReadU64(is, tick)) { err = "cannot read tick"; return false; }
+    LightEffect lightEffect;
+    if (version >= 5u &&
+        (!serReadF64(is, lightEffect.offset) || !serReadU64(is, lightEffect.duration) ||
+         !serReadU64(is, lightEffect.end) || !std::isfinite(lightEffect.offset) ||
+         lightEffect.duration > 1000000u ||
+         (lightEffect.end > tick && lightEffect.end - tick > lightEffect.duration))) {
+        err = "invalid saved light effect"; return false;
+    }
     if (!serReadBool(is, auditOk)) { err = "cannot read audit flag"; return false; }
     if (!serReadPad(is, 7)) { err = "corrupt header padding"; return false; }
     std::uint64_t rngState = 0;
@@ -1620,14 +1877,15 @@ bool Simulation::deserializeState(std::istream& is, std::string& err) {
         for (std::size_t k = 0; k < detSz; ++k) {
             if (!serReadBall(is, n.detached_[k])) { err = "cannot read detached ball"; return false; }
         }
-        if (!serReadF64(is, n.carrion_.pos.x) || !serReadF64(is, n.carrion_.pos.y) ||
-            !serReadF64(is, n.carrion_.energy)) {
-            err = "cannot read nucleus carrion"; return false;
+        // 规则 v2：身体物质、死亡产物、个体记忆。
+        if (!serReadF64(is, n.bodyMass)) { err = "cannot read nucleus bodyMass"; return false; }
+        if (!serReadU64(is, n.ballSerial)) { err = "cannot read nucleus ballSerial"; return false; }
+        if (!serReadF64(is, n.remains_.pos.x) || !serReadF64(is, n.remains_.pos.y) ||
+            !serReadF64(is, n.remains_.debris)) {
+            err = "cannot read nucleus remains"; return false;
         }
-        // R9-A：迁移回报状态（v3 追加字段）
-        if (!serReadF64(is, n.lastMealPos.x) || !serReadF64(is, n.lastMealPos.y) ||
-            !serReadBool(is, n.hasMealPos)) {
-            err = "cannot read nucleus migration state"; return false;
+        if (!serReadPolicyMemory(is, n.memory)) {
+            err = "cannot read nucleus policy memory (schema mismatch?)"; return false;
         }
         if (n.alive) ++aliveTally;
         nuclei.push_back(std::move(n));
@@ -1641,18 +1899,29 @@ bool Simulation::deserializeState(std::istream& is, std::string& err) {
     for (std::size_t k = 0; k < freeSz; ++k) {
         if (!serReadBall(is, freeBalls[k])) { err = "cannot read free ball"; return false; }
     }
-    // ---- 组合根尸体容器 ----
-    std::uint64_t nCarr = 0;
-    if (!serReadCount(is, nCarr)) { err = "bad carrion count"; return false; }
-    std::size_t carrSz = 0;
-    if (!serToSize(nCarr, carrSz)) { err = "carrion count overflow"; return false; }
-    std::vector<Carrion> carrion(carrSz);
-    for (std::size_t k = 0; k < carrSz; ++k) {
-        if (!serReadF64(is, carrion[k].pos.x) || !serReadF64(is, carrion[k].pos.y) ||
-            !serReadF64(is, carrion[k].energy)) {
-            err = "cannot read carrion"; return false;
+    // ---- 规则 v2（P1）：物质场 ----
+    double nfW = 0.0, nfH = 0.0, nfRegion = 0.0;
+    if (!serReadF64(is, nfW) || !serReadF64(is, nfH) || !serReadF64(is, nfRegion)) {
+        err = "cannot read nutrient field geometry"; return false;
+    }
+    if (!(nfW > 0.0) || !(nfH > 0.0) || !(nfRegion > 0.0)) {
+        err = "corrupt nutrient field geometry"; return false;
+    }
+    std::uint64_t nCells = 0;
+    if (!serReadCount(is, nCells)) { err = "bad nutrient cell count"; return false; }
+    std::size_t cellSz = 0;
+    if (!serToSize(nCells, cellSz)) { err = "nutrient cell count overflow"; return false; }
+    std::vector<NutrientCell> cells(cellSz);
+    for (std::size_t k = 0; k < cellSz; ++k) {
+        if (!serReadF64(is, cells[k].debris) || !serReadF64(is, cells[k].nutrient)) {
+            err = "cannot read nutrient cell"; return false;
+        }
+        if (!(cells[k].debris >= 0.0) || !(cells[k].nutrient >= 0.0)) {
+            err = "negative nutrient cell stock"; return false;
         }
     }
+    double matterExternal = 0.0;
+    if (!serReadF64(is, matterExternal)) { err = "cannot read matter external"; return false; }
     // ---- 蓝细菌场 ----
     std::uint64_t nNodes = 0;
     if (!serReadCount(is, nNodes)) { err = "bad cyano count"; return false; }
@@ -1665,6 +1934,7 @@ bool Simulation::deserializeState(std::istream& is, std::string& err) {
         if (!serReadU64(is, c.id)) { err = "cannot read cyano id"; return false; }
         if (!serReadF64(is, c.pos.x) || !serReadF64(is, c.pos.y)) { err = "cannot read cyano pos"; return false; }
         if (!serReadF64(is, c.energy)) { err = "cannot read cyano energy"; return false; }
+        if (!serReadF64(is, c.material)) { err = "cannot read cyano material"; return false; }
         if (!serReadBool(is, c.alive)) { err = "cannot read cyano alive"; return false; }
         if (!serReadPad(is, 7)) { err = "corrupt cyano padding"; return false; }
         if (!serReadF64(is, c.hue)) { err = "cannot read cyano hue"; return false; }
@@ -1685,6 +1955,7 @@ bool Simulation::deserializeState(std::istream& is, std::string& err) {
     }
     // ---- 原子提交 ----
     tick_ = tick;
+    lightEffect_ = lightEffect;
     auditOk_ = auditOk;
     rng_.setState(rngState, rngInc);
     nextNucleusId_ = nextNucleusId;
@@ -1693,7 +1964,13 @@ bool Simulation::deserializeState(std::istream& is, std::string& err) {
     aliveCount_ = static_cast<std::size_t>(aliveCount);
     nuclei_ = std::move(nuclei);
     freeBalls_ = std::move(freeBalls);
-    carrion_ = std::move(carrion);
+    // 物质场：几何先对齐再回填（restoreCells 要求 size == cellCount()）。
+    nutrients_.configure(nfW, nfH, nfRegion, 0.0);
+    if (!nutrients_.restoreCells(cells)) {
+        err = "nutrient field restore rejected (geometry/size mismatch)";
+        return false;
+    }
+    matterExternalIn_ = matterExternal;
     cyano_.restoreForSaveLoad(std::move(nodes), cyanoNextId, cyanoFrame);
     // R5-C 补丁：shade_ 是"上一结算帧"派生快照，未入档（逐帧重算态）。
     // 读档后不刷新 → 第一帧光合与原世界分叉（save_resume 用例根因）。

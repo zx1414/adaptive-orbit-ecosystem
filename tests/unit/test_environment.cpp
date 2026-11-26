@@ -29,7 +29,6 @@ agentsim::CyanoField makeField(int count, double w = 100.0, double h = 100.0) {
     p.nodeSeedCount = static_cast<std::size_t>(count > 0 ? count : 0);
     p.maxNodes = 1024;      // 等价旧 food.max=1024 的容量面
     p.metabolismRate = 0.0; // 隔离代谢：统计断言不被每帧耗散污染
-    p.ballSpawnProbability = 0.0;
     p.reproductionProbability = 0.0;
     p.linkRadius = 0.0;     // 隔离连线
     agentsim::CyanoField f(p);
@@ -97,33 +96,55 @@ TEST(env_cyano_query_across_edge) {
 }
 
 // ---- 等价断言 3：消耗（graze）与统计（旧 env_consume_food_and_stats）----
-// graze 语义 = 旧 consumeFood 的转化版：taken = min(rawEnergy*rate, node.energy)，
-// 部分消耗节点存活、抽干节点死亡、已死/不存在 id 返回 0、负请求防御不反向注能。
+// 规则 v2 迁移：graze 咬的是**组织** material（不是 energy）。
+// 口径：taken = min(rawEnergy * rate, edible)，edible = max(0, material - minStructure)。
+// 部分消耗节点存活；咬到只剩结构核心（material <= minStructure）即死亡，
+// 残留组织进 takeDeadNodes() 交组合根放进残骸。
+// 旧版本条用例断言"抽干节点 energy"——那条规则已被 minStructure 取代，
+// 保护意图（"取走量不能超过库存 / 取空必须留下可解释的去向"）原样保留。
 TEST(env_cyano_graze_and_stats) {
     agentsim::CyanoField f = makeField(32, 100.0, 100.0);
     for (std::size_t i = 0; i < f.nodes().size(); ++i) {
         // 测试夹具直改（实体状态归行为层所有，生产代码不得效仿）。
         const_cast<agentsim::CyanoNode&>(f.nodes()[i]).energy = 10.0;
+        const_cast<agentsim::CyanoNode&>(f.nodes()[i]).material = 20.0;
     }
     CHECK_NEAR(f.totalEnergy(), 320.0, 1e-9);
+    CHECK_NEAR(f.totalMaterial(), 32.0 * 20.0, 1e-9);
     const agentsim::EntityId target = f.nodes().front().id;
-    CHECK_NEAR(f.graze(target, 4.0, 1.0), 4.0, 1e-12);  // 部分消耗：仍存活
+    CHECK_NEAR(agentsim::CyanoField::edibleOf(f.nodes().front(), f.params()), 12.0, 1e-12);
+    // 第一口：要 4 -> 咬下 4，material 20 -> 16，节点仍存活（16 > minStructure）。
+    CHECK_NEAR(f.graze(target, 4.0, 1.0), 4.0, 1e-12);
     CHECK(f.aliveCount() == 32);
-    CHECK_NEAR(f.graze(target, 100.0, 1.0), 6.0, 1e-12); // 剩余 6 全取
-    CHECK(f.aliveCount() == 31);                          // 抽干：不再存活
+    CHECK_NEAR(f.nodes().front().material, 16.0, 1e-12);
+    // 随组织走的可用能量按比例：4/20 = 0.2 -> 能量 10 -> 8。
+    CHECK_NEAR(f.nodes().front().energy, 8.0, 1e-12);
+    // 第二口：要 100，但只剩 16-8 = 8 可食 -> 咬下 8，material 落到 8 = minStructure。
+    CHECK_NEAR(f.graze(target, 100.0, 1.0), 8.0, 1e-12);
+    CHECK(f.aliveCount() == 31);                          // 吃空：不再存活
+    CHECK(f.nodes().front().material == 0.0);             // 节点侧清空
+    const std::vector<agentsim::CyanoField::DeadNode> dead = f.takeDeadNodes();
+    CHECK(dead.size() == 1);
+    if (!dead.empty()) CHECK_NEAR(dead[0].material, 8.0, 1e-12); // 结构核心成为残骸
     CHECK(f.graze(target, 1.0, 1.0) == 0.0);              // 已耗尽再吃为 0
     CHECK(f.graze(999999, 1.0, 1.0) == 0.0);              // 不存在 id
-    CHECK_NEAR(f.totalEnergy(), 31.0 * 10.0, 1e-9);       // 总能量口径只算存活
-    // 转化率 < 1：rawEnergy*rate 是期望抽取量上限（R1-B 捕食语义）。
+    // 总能量口径只算存活节点：死节点那一份已随死亡归零（4 = 8 * 8/16 也被清掉）。
+    CHECK_NEAR(f.totalEnergy(), 31.0 * 10.0, 1e-9);
+    CHECK_NEAR(f.totalMaterial(), 31.0 * 20.0, 1e-9);     // 死节点组织已不在存活集合里
+    // 转化率 < 1：rawEnergy*rate 是期望抽取量上限。
     agentsim::CyanoField g = makeField(1, 100.0, 100.0);
     const_cast<agentsim::CyanoNode&>(g.nodes()[0]).energy = 50.0;
+    const_cast<agentsim::CyanoNode&>(g.nodes()[0]).material = 120.0;
     const agentsim::EntityId gid = g.nodes()[0].id;
     CHECK_NEAR(g.graze(gid, 5.0, 0.5), 2.5, 1e-12);
-    CHECK_NEAR(g.nodes()[0].energy, 47.5, 1e-12);
+    CHECK_NEAR(g.nodes()[0].material, 117.5, 1e-12);
+    // 能量按 2.5/120 的同一比例流出：50 - 50*(2.5/120) = 48.958...
+    CHECK_NEAR(g.nodes()[0].energy, 50.0 - 50.0 * (2.5 / 120.0), 1e-12);
     CHECK(g.nodes()[0].alive);
-    // 负请求防御：不反向注能。
+    // 负请求防御：不反向注物、不反向注能。
     CHECK(g.graze(gid, -5.0, 1.0) == 0.0);
-    CHECK_NEAR(g.nodes()[0].energy, 47.5, 1e-15);
+    CHECK_NEAR(g.nodes()[0].material, 117.5, 1e-15);
+    CHECK_NEAR(g.nodes()[0].energy, 50.0 - 50.0 * (2.5 / 120.0), 1e-15);
 }
 
 // ---- AgentEnvironment 与 CyanoField 的组合根形态：SimConfig 传递世界尺寸 ----
@@ -133,7 +154,6 @@ TEST(env_cyano_uses_world_dims_from_config) {
     p.nodeSeedCount = 16;
     p.maxNodes = 1024;
     p.metabolismRate = 0.0;
-    p.ballSpawnProbability = 0.0;
     p.reproductionProbability = 0.0;
     agentsim::CyanoField f(p);
     agentsim::PCG32 rng(9);

@@ -29,13 +29,21 @@ int g_tempCounter = 0;
 std::string makeTempRoot() {
     const std::string base = fs::temp_directory_path().string() + "/agentsim_rp_test_";
     std::error_code ec;
-    for (;;) {
+    // 有界重试：旧实现是无上限 for(;;)，一旦 create_directories 持续失败
+    //（杀软拦截 / 临时目录只读 / 句柄残留），整套单测就静默死循环——
+    // 表现为"跑到 resourcepack 段日志不再前进"，会被误判成挂起或崩溃。
+    // 现在最多试 kMaxAttempts 次，失败返回空串，由用例的 CHECK(!root.empty()) 暴露。
+    constexpr int kMaxAttempts = 4096;
+    for (int attempt = 0; attempt < kMaxAttempts; ++attempt) {
         ++g_tempCounter;
         const std::string root = base + std::to_string(g_tempCounter);
+        ec.clear();
         if (fs::exists(root, ec)) continue;   // 残留占用：换下一个编号
+        ec.clear();
         if (!fs::create_directories(root, ec)) continue;
         return root;
     }
+    return std::string();
 }
 void writeFile(const std::string& path, const std::string& content) {
     std::ofstream f(path.c_str(), std::ios::binary | std::ios::trunc);

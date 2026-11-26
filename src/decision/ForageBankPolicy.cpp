@@ -1,9 +1,9 @@
-﻿// agentsim - decision/ForageBankPolicy.cpp
-// 两态 + 滞回实现（decide 无 RNG、不读世界，只动自身状态 foraging_）：
+// agentsim - decision/ForageBankPolicy.cpp
+// 两态 + 滞回实现（decide 无 RNG、不读世界，只动**传入的个体记忆** memory.forageForaging）：
 //   e = energyProxy(s)（构造与选维理由见头文件）
-//   e < forageBelow  -> foraging_ = true  （全力觅食）
-//   e > bankAbove    -> foraging_ = false （蓄能）
-//   中间带            -> 保持 foraging_   （滞回，防阈值附近抖动）
+//   e < forageBelow  -> memory.forageForaging = 1（全力觅食）
+//   e > bankAbove    -> memory.forageForaging = 0（蓄能）
+//   中间带            -> 保持 memory.forageForaging（滞回，防阈值附近抖动）
 // 觅食态输出：方向 = 最近食物候选方向 (s[0], s[1]) 归一化（感知契约：候选 0 即
 // 最近食物，s[9] 由 cand[0] 算出）；boost = 1.0 冲刺。方向零向量（无候选/全 NaN）
 // 时输出 {0,0}，boost 仍为 1.0（觅食意图保留，等待感知恢复）。
@@ -70,16 +70,18 @@ double ForageBankPolicy::energyProxy(const SensorVector& s) const {
     return p_.wMargin * margin + (1.0 - p_.wMargin) * thrift;
 }
 
-ActionVector ForageBankPolicy::decide(const SensorVector& s, const TargetList& targets) {
+ActionVector ForageBankPolicy::decide(const SensorVector& s, const TargetList& targets,
+                                    PolicyMemory& memory) {
     ActionVector a;
     // (1) 两态滞回：只有跨过阈值才换态，中间带保持上帧状态。
+    //     P0-4：状态从实例成员搬进个体记忆（每个核一份，互不影响）。
     const double e = energyProxy(s);
     if (e < p_.forageBelow) {
-        foraging_ = true;
+        memory.forageForaging = 1;
     } else if (e > p_.bankAbove) {
-        foraging_ = false;
+        memory.forageForaging = 0;
     }
-    if (foraging_) {
+    if (memory.forageForaging != 0) {
         // (2) 觅食态：直奔最近食物（候选 0），boost=1.0 冲刺。
         const double dx = clean(s[0]);
         const double dy = clean(s[1]);
@@ -131,7 +133,7 @@ ActionVector ForageBankPolicy::decide(const SensorVector& s, const TargetList& t
         // 【修法】速度近零时**强制转入觅食态**：策略必须保证"能靠自己动起来"。
         // 这不是绕过滞回——滞回在速度非零后照常生效；这只是给两态机制一个
         // 可达的自举（bootstrap）。静止的核既存不了能也吃不到食，比乱动更糟。
-        foraging_ = true;
+        memory.forageForaging = 1;
         const double fdx = clean(s[0]);
         const double fdy = clean(s[1]);
         const double dlen = std::sqrt(fdx * fdx + fdy * fdy);

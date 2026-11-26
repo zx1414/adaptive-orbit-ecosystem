@@ -1,4 +1,4 @@
-﻿// agentsim - core/Config.h
+// agentsim - core/Config.h
 // 仿真配置聚合（POD 风格）。数值均为初版占位默认值，可由 CLI 覆盖。
 //
 // 【R1-B 2026-11-01：蓝细菌取代食物】FoodConfig / SimConfig::food 已整体删除：
@@ -191,13 +191,10 @@ struct NucleusTuning {
     // R3-A 标定：0.05 -> 0.15（sweep 实测：单口效率提高三倍使核在食物稀缺时
     // 攒能量更快，N* 进一步下降；配合避难所不再触发"吃绝"）。
     double grazeBiteFraction = 0.15;       // （R2-A 原值 0.05；R3-A 标定见使用点注释）
-    // R9-A（主代理代笔，无 spawn 会话；偏离已记 LOG）：迁移回报。
-    // 机制：捕食目标若距核**上一次进食点** > migrationRadius（环面距离），转化率
-    // 补偿 (1 + migrationBonus)（钳到 ≤1.0）——补偿的是转化率公式对快核的折扣，
-    // 不新增能量注入（transfer 仍零和：节点 -> 核）。慢核坐吃转化率不变。
-    // 零值 = 关闭，全程逐位回归（对拍门禁保证）。
-    double migrationBonus = 0.0;           // migration_bonus（R9-A；0=默认关闭。实验 0.6/r120：6000t 撞 600 护栏、hue 5.4° 更差——奖励太强反成"快=多吃"的新单调压，见 LOG）
-    double migrationRadius = 120.0;        // migration_radius（R9-A；距离阈值，环面单位）
+    // 规则 v2（P0-1）：migration_bonus / migration_radius 已整条删除。
+    // 那是一套"跑到远处吃饭给转化率加成"的修正，属于本轮明确要移除的两类
+    // 摄食折减之一（另一类是按遗传最高速度折减，见 CyanoTuning 注释）。
+    // 快核的优势现在只剩"更早到下一片食物"，代价是真实移动耗能。
 };
 
 // 球能量经济学 + 球力场参数（food 组的 ball_* 7 键 + ball 组 15 键）。
@@ -232,6 +229,13 @@ struct BallTuning {
     double followBoost = 1.5;              // follow_boost（R4）
     double bounceRestitution = 1.0;        // bounce_restitution（R4；wrap 优先时忽略）
     bool wrapBoundary = true;              // wrap_boundary（R4；当前实现恒 wrap）
+    // ---- 规则 v2（P2 侦察球重做）：有效控制距离 ----
+    // 侦察球从**自己所在的世界坐标**采样，但只有它与宿主的环面距离 <= 本值时
+    // 探到的信息才回得来。超出控制范围的球既不能采样也不能回传——"探得更远
+    // 更容易超出控制范围"这条代价因此是真实存在的（验收 A9）。
+    double scoutControlRadius = 220.0;
+    // 侦察球的探测半径（从球位置起算，环面最短距离）。
+    double scoutSenseRadius = 140.0;
 };
 
 // 蓝细菌参数白盒镜像（environment/CyanoParams 的 core 侧拷贝；逐字段同名同默认值）。
@@ -259,11 +263,8 @@ struct CyanoTuning {
     // ——回滚 125，机制层结论（需要空间异质性但偏移量不是正确旋钮）写进报告。
     double reproductionOffset = 125.0;     // cyano_reproduction_offset  // R10 实验 (c)：分裂散布 125→260（菌落前沿扩张加速，让"迁移"有市场）
     double minSeparation = 10.0;           // cyano_min_node_separation
-    double ballSpawnCost = 30.0;           // ball_spawn_cost（food 组）
-    double ballSpawnProbability = 0.02;    // cyano_ball_spawn_probability（EnvControl food 轴用键）
-    double ballRadius = 1.0;               // （产球能量倍数；与 BallTuning::radius 无关）
-    double ballSpawnMinDist = 10.0;        // ball_spawn_min_dist
-    double ballSpawnMaxDist = 30.0;        // ball_spawn_max_dist
+    // 规则 v2（P2）：ballSpawn* 五个字段已删除——蓝细菌不再产出成品球，
+    // 普通生态的器官只能由核自己建造（验收 A11）。
     double linkRadius = 60.0;              // cyano_link_distance
     int linkMaxNeighbors = 3;              // cyano_max_links
     double linkTransferRate = 0.1;         // cyano_transfer_rate
@@ -271,15 +272,11 @@ struct CyanoTuning {
     int linkCheckInterval = 1;             // cyano_link_check_interval
     std::size_t maxNodes = 4096;        // cyanoMaxNodes 的镜像（R10：1024→4096 随世界再 4 倍）
     std::size_t nodeSeedCount = 128;       // cyanoNodeCount 的镜像（R8-T53 同步 128）
-    int conversionMode = 1;                // cyano_conversion_mode
-    double conversionRate = 0.6;           // cyano_conversion_rate（实际值 0.6，非 schema 提案 1.0）
-    double conversionExponent = 1.0;       // cyano_conversion_exponent
-    double conversionSpeedRef = 40.0;      // cyano_conversion_speed_ref（实际 40，非提案 20）
-    double conversionAccelRef = 60.0;      // cyano_conversion_accel_ref（实际 60，非提案 6）
-    double conversionWSpeed = 1.0;         // cyano_conversion_w_speed
-    double conversionWAccel = 1.0;         // cyano_conversion_w_accel
-    double conversionMinRate = 0.05;       // cyano_conversion_min_rate（实际 0.05，非提案 0.1）
-    double conversionMaxRate = 1.0;        // cyano_conversion_max_rate
+    // 规则 v2（P0-1）：conversionMode / Exponent / SpeedRef / AccelRef / WSpeed /
+    // WAccel / MinRate / MaxRate 八个字段全部删除。它们构成了"按遗传最高速度或
+    // 加速度折减每口摄食量"的整条修正通道——包括那个可以在普通新局里把旧行为
+    // 重新打开的开关位。同化率现在只有一条：conversionRate × 消化基因。
+    double conversionRate = 0.6;           // cyano_conversion_rate（同化率基率）
     // R3-A 标定：8 -> 20（founder 瓶颈后 hue 圆标准差塌到 5.5°~16°；加大每次
     // 分裂的色相抖动加速谱系再发散。判据 4 阈值 30°）。
     double hueJitterSigma = 20.0;          // cyano_hue_jitter（原 8.0）
@@ -296,11 +293,51 @@ struct CyanoTuning {
     double shadeK = 0.20;                  // 遮蔽强度
     double shadeRadius = 60.0;             // 遮蔽半径
     double shadeSigma = 30.0;              // 高斯衰减宽度
-    // R3-A 捕食避难所标定：节点保留 15（=15% cap）不可捕食储备，生产者
-    // 不会被吃绝（捕食者-猎物稳定共存条件；CyanoParams 模块默认 0 逐位
-    // 保守，标定值经构造期/applyConfig 镜像生效）。
-    double grazeRefugeEnergy = 15.0;
+    // 规则 v2（P0-2）：grazeRefugeEnergy 已删除。
+    // 那是"每个节点固定保留 15 单位不可食储备"——它让节点永远吃不空，
+    // 核会盯着一个已无食物的最近节点而不去吃旁边还有食物的那一个。
+    // 现在"不可食的部分"改由 minStructure（最小存活结构量）表达，
+    // 吃空意味着把生产者吃掉（它会死并留下残骸），而不是把它冻结住。
+
+    // ---- 规则 v2：组织（material）与养分（nutrient）参数 ----
+    // 与 CyanoParams 同名同义（白盒镜像契约）。
+    double minStructure = 8.0;          // 最小存活结构量
+    double maxMaterial = 120.0;         // 单节点组织上限
+    // 播种/分裂的初始组织量。**必须显著低于 maxMaterial**：两者相等时
+    // roomMat = maxMaterial - material = 0，生长阶段对每个节点直接 continue，
+    // 于是"新组织必须有养分才能形成"在生产默认路径上根本没有执行机会
+    //（A8 变成只在单测里成立）。取 45 = maxMaterial 的 37%，给生长留出真实空间。
+    double initialMaterial = 45.0;
+    // 播种/分裂的初始可用能量 = cfg.runtime.cyanoInitialEnergy（默认 40）。
+    // 组合根在构造期镜像；非零是硬要求（见 CyanoParams::seedEnergy 注释）。
+    double seedEnergy = 40.0;
+    double growthPerTick = 0.6;         // 每帧最多新增组织
+    double nutrientPerMaterial = 1.0;   // 每单位新组织所需养分
+    double growthEnergyCost = 0.6;      // 每单位新组织消耗的节点能量
+    double assimilation = 0.7;          // 摄食同化率（取走量→吸收量的比例）
+    // 养分场（P1）。
+    // 区域边长固定（网格细分尺度），但**初始存量按总面积换算**——
+    // 这一点很关键：如果写成"每区域固定 960"，那么 256² 的小世界只会有
+    // 2×2=4 个区域 × 960 = 3840 的养分，而它开局要播 512×45 = 23040 的组织，
+    // 于是第一营养级必然在几百帧内崩掉；同一份参数在 1024² 世界却完全正常。
+    // 那种"参数看着一样、换个世界尺寸就崩"的标定是不可解释的。
+    // 现在：养分总量 = 开局组织总量 × nutrientBudgetRatio，再均摊到各区。
+    // 所以无论世界多大，开局都恰好够重建 nutrientBudgetRatio 倍的全图组织。
+    double nutrientRegionSize = 128.0;
+    // 2.6 由实测标定：1.0 时菌落没有任何扩张余地（开局养分一耗尽就停在原地）；
+    // 2.6 时既允许开局扩张，又会在几千帧内把养分压到接近 0（养分成为真实约束，
+    // A8 的"养分限制新组织"因此在生产默认路径上真的会发生）。
+    double nutrientBudgetRatio = 2.6;
+    double decomposeRate = 0.002;       // 每帧把残骸的 0.2% 转为可吸收养分
 };
+
+// ---- 规则版本（本轮 P0–P2 的生态规则）----
+// 存档必须能辨别"这份数据是哪套规则跑出来的"：v1 是旧版（P0 之前），
+// v2 是本轮。旧档在读取时提示版本并拒绝，绝不做静默转换、绝不改写原件。
+// 与 --version 的产品版本号（VERSION 文件）是两件事：规则版本描述生态语义。
+constexpr int kRulesVersion = 2;
+// 规则版本的名字，写进存档头与前端快照，便于人眼辨别。
+constexpr const char* kRulesVersionName = "ecology-v2";
 
 struct SimConfig {
     WorldConfig world;

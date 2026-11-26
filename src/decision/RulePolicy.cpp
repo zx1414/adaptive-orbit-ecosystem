@@ -1,4 +1,4 @@
-﻿// agentsim - decision/RulePolicy.cpp
+// agentsim - decision/RulePolicy.cpp
 // 打分机制（对传感器里 3 个食物候选逐个算分，取最高）：
 //   proximity = s[6+i]            归一化接近度 1-dist/R，越近分越高 —— 吃到食物的期望收益。
 //   alignment = 候选方向 · 当前速度方向（归一化后点积，[-1,1]）
@@ -20,12 +20,15 @@
 // 纯确定性算术，绝不使用任何 RNG（红队检查项）。
 #include "decision/RulePolicy.h"
 
+#include <algorithm>
+
 namespace agentsim {
 
 RulePolicy::RulePolicy(double wProximity, double wAlignment, double wUrgency)
     : wP_(wProximity), wA_(wAlignment), wU_(wUrgency) {}
 
-ActionVector RulePolicy::decide(const SensorVector& s, const TargetList& /*targets*/) {
+ActionVector RulePolicy::decide(const SensorVector& s, const TargetList& /*targets*/,
+                                PolicyMemory& /*memory*/) {
     ActionVector a;
 
     // 三个候选是否有效：s[6..8] 任一 > 0 表示该槽位有真实食物。
@@ -52,6 +55,7 @@ ActionVector RulePolicy::decide(const SensorVector& s, const TargetList& /*targe
     double bestScore = 0.0;
     double bestX = 0.0;
     double bestY = 0.0;
+    double bestProximity = 0.0;
     bool first = true;
 
     for (int i = 0; i < 3; ++i) {
@@ -73,11 +77,14 @@ ActionVector RulePolicy::decide(const SensorVector& s, const TargetList& /*targe
             bestScore = score;
             bestX = dx;
             bestY = dy;
+            bestProximity = proximity;
         }
     }
 
     a.dirX = bestX;
     a.dirY = bestY;
+    // 临近目标时降速，减少一步越过摄食半径的情况。
+    a.speedScale = 0.10 + 0.65 * (1.0 - std::clamp(bestProximity, 0.0, 1.0));
     // 冲刺意愿与紧迫度挂钩：越紧急越冲。
     a.boost = urgency;
 
@@ -96,7 +103,8 @@ ActionVector RulePolicy::decide(const SensorVector& s, const TargetList& /*targe
 
 // Stub：两参接口下依然是"绝对不作为"。默认保守（forceSlot=-1、mod 全 0）由
 // ActionVector 默认成员给出，构造临时对象即契约。
-ActionVector StubPolicy::decide(const SensorVector& /*sensors*/, const TargetList& /*targets*/) {
+ActionVector StubPolicy::decide(const SensorVector& /*sensors*/, const TargetList& /*targets*/,
+                                PolicyMemory& /*memory*/) {
     return {};
 }
 

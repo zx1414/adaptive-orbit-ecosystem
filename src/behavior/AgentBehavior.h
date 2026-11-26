@@ -1,4 +1,4 @@
-﻿// agentsim - behavior/AgentBehavior.h
+// agentsim - behavior/AgentBehavior.h
 // 行为层：唯一可写点。执行移动、球控制（球远失控）、能量结算与死亡（R1-B：吃食物
 // 分支已删除——核的唯一食物是蓝细菌，捕食记账接口只保留 absorbPrey），
 // 并实现 T08 三动作：产球 deploy / 回收 recycle / 繁殖 reproduce（全部走 ledger，
@@ -22,6 +22,7 @@
 
 #include "../core/Genome.h"
 #include "../core/PCG32.h"
+#include "../decision/PolicyMemory.h"
 #include "../core/Types.h"
 #include "../core/Vec2.h"
 #include "../environment/AgentEnvironment.h"
@@ -90,14 +91,19 @@ struct BallFieldParams {
     double lossCost = 5.0;               // ball_loss_cost（v231 5.0）
 };
 
-// ---- R2-A §8：尸体营养包（营养循环的地基）----
-// 核死亡时能量分两路：70% 当场 dissipate("death")（热力学损失），
-// 30% 装进 Carrion（位置 + 能量）暂存，由组合根分配给最近的蓝细菌节点
-//（分解者：尸体 → 植物）。能量始终在账（Carrion 计入 sumLiving 的责任在组合根
-// 的 totalEnergy），分配走 ledger.transfer（零和搬运）。
-struct Carrion {
-    Vec2 pos{};        // 死亡位置（环面坐标）
-    double energy = 0.0; // 待分配能量（30% 遗产）
+// ---- 规则 v2（P1）：残骸 / 死亡产物 ----
+// 旧版（R2-A §8）把"尸体"当成能量包：核死亡时从剩余**能量**里抽 30% 做成 Carrion
+// 交给最近的蓝细菌节点。问题是正常死亡分支要求 energy 已经耗尽——那 30% 恒为零，
+// 于是"饿死也留下东西"这件事在数值上根本没发生过。
+//
+// 规则 v2 把两件事分开：
+//   · 可支配能量 energy：驱动移动/维持/建造/繁殖。耗尽就是"生物体停止工作"。
+//   · 构成身体的物质 bodyMass：死亡时**留在原地**，成为残骸（debris），
+//     随后按局部过程分解成可吸收养分（P1 的 NutrientField）。
+// 残骸与养分是**物质**，不是能量：它们不能让生产者凭空多出可用能量（A7/A8）。
+struct Remains {
+    Vec2 pos{};          // 死亡位置（环面坐标）
+    double debris = 0.0; // 留下的身体物质（→ 当地残骸）
 };
 
 // 核：行为层所有的实体状态。
@@ -128,15 +134,28 @@ struct Nucleus {
     //（digestCooldown = ceil(1/(0.5+cyanoDigestion))，cyanoDigestion 越高冷却越短）。
     // 子代出生时清零。冷却值本身不耗能——它是"处理时间"约束，不是能量账。
     int digestCooldown = 0;
-    // R2-A §8：死亡营养包暂存。核死亡瞬间由 apply 填充（30% 核体能量 + 死亡位置），
-    // 组合根每帧取走并清空（分配给最近的蓝细菌节点，走 ledger.transfer 零和搬运）。
-    // 未取走期间能量记在此处，totalEnergy 口径必须把它计入（sumLiving 红线）。
-    Carrion carrion_{};
-    // R9-A：上次成功捕食的位置（世界坐标）。用于迁移回报的距离判定：
-    // 本口猎物距上口 > migrationRadius 时转化率获补偿。默认 = 出生位置；
-    // 未捕食过时与 pos 相同 → 距离 0 < 半径 → 无补偿（保守起点）。
-    Vec2 lastMealPos{};
-    bool hasMealPos = false;
+    // 规则 v2（P1）：死亡产物暂存。核死亡瞬间由 apply 填充（bodyMass + 死亡位置），
+    // 组合根每帧取走并清空（放进当地养分场的 debris，走局部分解过程）。
+    // 注意这是**物质**不是能量：totalEnergy 口径不含它（物质账与能量账独立）。
+    Remains remains_{};
+    // ---- 规则 v2（A13）：本核的器官序号（决定新球 id 的低位）----
+    // 旧实现用函数内 static 计数器：进程内全局单调，**不随存档走**。于是
+    // "存档 → 读档 → 续跑"与"一口气跑到底"拿到不同的球 id，进而让按 id 的
+    // 归属/拾取判定分叉——A13 的检查点回放一致性当场失败（实测 509.14 vs 509.15）。
+    // 现在计数随个体走：id 仍由 (n.id << 16) 保证跨核唯一，低位由本核自己递增，
+    // 且随存档序列化，读档后续跑逐位一致。
+    std::uint64_t ballSerial = 0;
+    // ---- 规则 v2：身体物质（与活动储备 energy 严格分开）----
+    // energy 是可支配的化学能，用于移动/维持/建造/繁殖；bodyMass 是构成身体的
+    // 物质，死亡时留在原地成为残骸（P1 养分循环的入口）。
+    // 旧版把两者混在 energy 里，于是"饿死"意味着"身体也没了"——正常死亡分支
+    // 要求 energy 已耗尽，从剩余能量里抽 30% 做尸体，那笔量恒为零。
+    // 现在：饿死也留下 nonzero 残骸（验收 A6）。
+    double bodyMass = 20.0;
+    // ---- 规则 v2（P0-4）：本核自己的决策记忆 ----
+    // 由决策层定义（decision/PolicyMemory.h）；组合根每帧传进来，行为层只持有。
+    // 新生核默认构造（不继承亲代记忆），读档时逐个恢复已存在个体的记忆。
+    PolicyMemory memory{};
 };
 
 
@@ -164,10 +183,9 @@ struct BehaviorParams {
     double handoffRadius = 60.0;
     // ---- R1-B：捕食参数（唯一食物 = 蓝细菌节点）----
     // cyanoPredationRadius：核每帧在其内找**最近**蓝细菌节点（确定性，无随机门槛）。
-    // R9-A：迁移回报（见 Nucleus::lastMealPos 注释）。0 = 关闭（逐位回归）。
-    double migrationBonus = 0.0;
-    double migrationRadius = 120.0;
     // 取值沿用旧 eatRadius 的生态标定（14，25→14 的 D2 调参结论直接平移）。
+    // 规则 v2：本半径是**核的近身摄食/感知**范围。它不再受侦察球数量放大——
+    // 侦察球改为从自己的世界坐标采样（perception/ScoutSample）。
     double cyanoPredationRadius = 14.0;
     // R2-A：cyanoDigestion 已由 genome.cyanoDigestion 接管（遗传 0.1~1.0，且同时
     // 决定消化冷却时长）。本字段退役为 fallback（genome 值非法时兜底），正常不消费。
@@ -362,6 +380,47 @@ public:
                              std::vector<Ball>& freeBalls, AgentLedger& ledger,
                              const BallFieldParams& p);
 
+    // ---- 规则 v2：摄食结算（一个模拟步内的批结果 → 个体的物质与能量）----
+    // 环境层（CyanoField::grazeBatch）已经决定了"每个请求实际咬下多少组织"
+    // ——那是共享资源的分配，必须在收集完所有请求之后统一做（验收 A2）。
+    // 本函数只负责把这份既定结果记到个体账上（行为层是唯一写点）：
+    //   · 咬下的组织 materialTaken 按同化率 efficiency 分成两部分：
+    //       assimilated = materialTaken * efficiency   → 进入核体（bodyMass）
+    //       rejected    = materialTaken - assimilated  → 未同化，回到环境（残骸/养分）
+    //   · 能量 energyTransferred 是按组织比例从节点转移出来的可用能量，
+    //     同样按 efficiency 吸收，未同化的部分 dissipate("grazeReject")。
+    // 这是 A1 的关键：两个核在食物、空余容量、消化条件都相同时，只要
+    // efficiency 相同，取走量与吸收量就完全一致——遗传最高速度不参与这里。
+    // 返回实际吸收的物质与能量（供测试与观测；不读任何别的状态）。
+    struct GrazeResult {
+        double materialTaken = 0.0;   // 取走量（组织）
+        double materialAbsorbed = 0.0;// 吸收量（进入身体）
+        double materialRejected = 0.0;// 未同化（回环境）
+        double energyAbsorbed = 0.0;
+        double energyLost = 0.0;
+    };
+    static GrazeResult absorbGraze(Nucleus& n, double materialTaken,
+                                   double energyTransferred, double efficiency,
+                                   AgentLedger& ledger);
+
+    // ---- 规则 v2（P2）：资源球存取 ----
+    // 核吃饱后把富余能量存进有空位的资源球；缺粮时按有限速率取回。
+    // 两处都走账本（零和搬运：核 ↔ 球），且球是**独立持有者**——同一份能量
+    // 不会同时记在核与球上。
+    //   depositEnergy:  从核能量取出（受球的空位 cap-energy 限制），转入球。
+    //                   返回实际存入量。无资源球/无空位/核能量不足 → 0。
+    //   withdrawEnergy: 从球取出（受 rate 限制），转入核。返回实际取回量。
+    //                   rate = 每帧最多取回的比例（球的存量 × rate），保证
+    //                   "缺粮时能慢慢回血"而不是瞬间搬空（验收 A10 的有限速率）。
+    static double depositEnergy(Nucleus& n, Ball& ball, double want, AgentLedger& ledger);
+    static double withdrawEnergy(Nucleus& n, Ball& ball, double rate, AgentLedger& ledger);
+    static double availableEnergyStorage(const Nucleus& n);
+    // 富余判据：核能量超过阈值比例 × cap 时视为"吃饱了"，可以往球里存。
+    // 缺粮判据：核能量低于该比例 × cap 时开始从球里取。两个阈值之间是滞回带，
+    // 避免在边界上反复存取（每帧来回搬运既无意义又费账）。
+    static constexpr double kDepositFrac = 0.75;
+    static constexpr double kWithdrawFrac = 0.35;
+
     // ---- S22 捕食接线：核吃掉蓝细菌的肉 ----
     // 为什么需要这个包装：CyanoField::graze() 是环境层的东西，行为层不能 include
     // environment 的实体类（分层红线），而"把猎物能量加到自己身上"必须由行为层做
@@ -371,7 +430,7 @@ public:
 // R1-B：旧的"queryFood/consumeFood 进食分支"已从 apply() 删除，本函数是核
 // 唯一的外部能量入口（除 ledger 注入）。
     // 能量流向：蓝细菌 → 核，零和搬运（ledger.transfer），不产生也不消耗。
-    static void absorbPrey(Nucleus& n, EntityId preyId, double amount, AgentLedger& ledger);
+
 };
 
 } // namespace agentsim

@@ -1,4 +1,4 @@
-﻿// agentsim - environment/CyanoNode.h
+// agentsim - environment/CyanoNode.h
 // 蓝细菌节点场（S22 上半，R1-B 补全）：环境层第一营养级的生产者实体，
 // 也是核的唯一食物（R1-B：Food 实体已删除）。数据模型 + 光合 + 代谢 + 分裂繁殖
 // + 产球 + 遗传色相 + 转化率公式 + 连线拓扑对外可见。独立可测：不依赖
@@ -43,6 +43,8 @@
 
 namespace agentsim {
 
+class NutrientField;   // 规则 v2：物质场（残骸/养分），只读取用养分，不持有能量
+
 struct CyanoParams {
     double photosynthesisRate = 1.0;    // 最大光合速率
     double lightHalfSaturation = 0.5;   // 半饱和光强（Michaelis-Menten）
@@ -52,11 +54,8 @@ struct CyanoParams {
     double reproductionProbability = 0.01;
     double reproductionOffset = 125.0;  // 子节点与亲代的最大偏移
     double minSeparation = 10.0;        // 分裂时与最近同类的最小间距，不满足则放弃本次分裂
-    double ballSpawnCost = 30.0;
-    double ballSpawnProbability = 0.02;
-    double ballRadius = 1.0;            // 产出的自由球初始能量倍数（见下）
-    double ballSpawnMinDist = 10.0;     // R8/P2-1：产球出生点距产者的最小环面距离
-    double ballSpawnMaxDist = 30.0;     // R8/P2-1：产球出生点距产者的最大环面距离
+    // P2：产球参数（ballSpawnCost/Probability/Radius/MinDist/MaxDist）已于规则 v2 删除——
+    // 普通生态的器官由核自建，蓝细菌只负责生长与分裂（验收 A11）。
     double linkRadius = 60.0;           // S22 下半：连线的最大环距
     int linkMaxNeighbors = 3;           // 每个节点最多连几个邻居
     double linkTransferRate = 0.1;      // 每帧从高能流向低能的比例
@@ -89,25 +88,16 @@ struct CyanoParams {
     int cyanoColonies = 0;
     double clusterSpread = 45.0;
 
-    // ---- R1-B：捕食转化率公式（v2.3.1 语义：mode 0/1/2/3，最后 clamp 到
-    // [conversionMinRate, conversionMaxRate]）----
-    //   cyanoConversionRate(mode, maxSpeed, maxAccel, digestion)：
-    //     mode 0：常数 rate（maxSpeed/maxAccel 不参与）
-    //     mode 1：速度惩罚   rate = base * (speedRef / (speedRef + maxSpeed))
-    //     mode 2：加速度惩罚 rate = base * (accelRef / (accelRef + maxAccel))
-    //     mode 3：混合       rate = base * wSpeed * speedRef/(speedRef + maxSpeed)
-    //                              * wAccel * accelRef/(accelRef + maxAccel)
-    //   maxSpeed <= 0（或 maxAccel <= 0）时对应惩罚项取 1（无速度/无机动 = 不受罚）。
-    //   base = conversionRate * digestion（基因 cyanoPreference/消化率在此生效）。
-    int conversionMode = 1;             // 0 常数 / 1 速度惩罚 / 2 加速度惩罚 / 3 混合
-    double conversionRate = 0.6;        // 基础转化率（与旧组合根 kGrazeConversion 同值）
-    double conversionExponent = 1.0;    // 惩罚指数（R1-B 占位：预留非线性形状；=1 即 v2.3.1 线性比式）
-    double conversionSpeedRef = 40.0;   // 速度参考值（= 行为层默认 maxSpeed 同量级）
-    double conversionAccelRef = 60.0;   // 加速度参考值（= 行为层默认 moveK 同量级）
-    double conversionWSpeed = 1.0;      // mode 3 的速度惩罚权重
-    double conversionWAccel = 1.0;      // mode 3 的加速度惩罚权重
-    double conversionMinRate = 0.05;    // 转化率下限（clamp）
-    double conversionMaxRate = 1.0;     // 转化率上限（clamp）
+    // ---- 规则 v2：同化率（**唯一**的摄食效率口径）----
+    // 旧版有两类修正，规则 v2 全部删除：
+    //   1) 按遗传最高速度/加速度折减每口转化率（conversionMode 0/1/2/3 及
+    //      conversionExponent/SpeedRef/AccelRef/WSpeed/WAccel/MinRate/MaxRate）；
+    //   2) 按两次进食距离给"迁移回报"。
+    // 现在只有一条：同化率 = conversionRate * genome.cyanoDigestion，与速度、
+    // 加速度、进食距离、核能量都无关。快核的优势只剩"更早到下一片食物"，
+    // 代价是实际移动耗能（验收 A1：同等条件下快慢核当步取食完全一致）。
+    // 处理时间仍由消化冷却（digestCooldown）承担，不是转化率折扣。
+    double conversionRate = 0.6;        // 同化率基率（× 消化基因 cyanoDigestion）
 
     // ---- R1-B：遗传色相（seed 随机 0~360，分裂 = 父 + 高斯抖动环绕）----
     double hueJitterSigma = 8.0;        // 分裂色相高斯抖动 σ（度）
@@ -124,35 +114,82 @@ struct CyanoParams {
     double shadeRadius = 60.0;   // 遮蔽半径
     double shadeSigma = 30.0;    // 高斯衰减宽度
 
-    // ---- R3-A：捕食避难所（graze refuge）----
-    // graze() 只能抽到 (energy - grazeRefugeEnergy) 为止：节点保留一份不可
-    // 捕食的储备，被捕食**永远不会**把节点抽死。生态学依据：猎物避难所
-    // （refuge）是捕食者-猎物系统稳定共存的标准条件——没有避难所时过度
-    // 捕食会把生产者吃绝（实测 seed42 photo=0.7：cyano 27 -> 0 -> 食物链
-    // 断裂 -> 全生态崩溃，捕食只在构造期播种，灭绝不可逆）。代谢饿死通道
-    // 不受影响（负反馈仍在：遮蔽过密时节点照常饿死）。
-    // 模块默认 0.0 = 旧语义逐位（既有单测钉死 graze 抽干致死路径）；标定值
-    // 由 Simulation 构造期/applyConfig 从 CyanoTuning 镜像（默认 15）。
-    double grazeRefugeEnergy = 0.0;
+    // ---- 规则 v2：组织（material）与养分（nutrient）----
+    // 旧版"每节点固定 15 单位不可食保底"已删除（验收 A2/A3：一片菌落必须能
+    // 被吃空）。取而代之的是**可解释的最小存活结构量**：
+    //   可食量 edible = max(0, material - minStructure)
+    //   material <= minStructure 时节点死亡，剩余结构成为残骸（P1）。
+    // 也就是说保底不再是"永远吃不动的能量"，而是"吃掉活组织本身会让它死"——
+    // 吃空 = 杀死生产者，而不是把它冻结在一个不可食余额上。
+    double minStructure = 8.0;          // 最小存活结构量（= 不可食的活组织核心）
+    double maxMaterial = 120.0;         // 单节点组织上限（自遮光之外的第二重密度约束）
+    double initialMaterial = 45.0;      // 播种/分裂时节点的初始组织量
+    // 播种/分裂时节点的初始可用能量。
+    // 规则 v2 起必须非零：播种能量恒 0 时，第一帧"光合 − 维持"只要不为正
+    // 就会立刻饿死——默认光强(0.5)与满组织维持开销恰好收支相抵，于是整片
+    // 菌落在第 1 帧团灭（实测 512 → 2）。这不是调参问题，是"新个体没有
+    // 启动储备"的建模错误：任何细胞都有起始储备。
+    // 值由 cfg.runtime.cyanoInitialEnergy 经组合根镜像（默认 40）。
+    double seedEnergy = 40.0;
+    // 形成新组织：必须有养分，也必须付出能量。
+    //   n = min(growthPerTick, 区域可用养分/nutrientPerMaterial,
+    //           maxMaterial - material, energy/growthEnergyCost)
+    // 所以无光无储备的节点即使被施肥也长不出新组织（验收 A8）。
+    double growthPerTick = 0.6;         // 每帧最多新增的组织量
+    double nutrientPerMaterial = 1.0;   // 每单位新组织需要的可吸收养分
+    double growthEnergyCost = 0.6;      // 每单位新组织消耗的节点可用能量
+    // 摄食同化率：咬下的组织里 assimilated 部分进入核体（物质）与核能量，
+    // 其余回到环境（残骸/养分，P1 接线）。A2 的"取走量"与"吸收量"分开结算。
+    double assimilation = 0.7;
 };
 
 struct CyanoNode {
     EntityId id = 0;
     Vec2 pos{};
+    // energy = 可支配的光合产物（"活动储备"）：核吃不到它，它只在节点内部驱动
+    // 代谢与生长；被细胞分裂带走一半。
     double energy = 0.0;
+    // material = 构成身体的物质（"可食组织"）。核摄食咬下的是它，不是 energy。
+    // 规则 v2 起这是唯一决定"这个节点还能被吃多少"的量：edible = material - minStructure。
+    // 物质来源只有养分（P1 接线），不是光照——所以一具尸体无法替代阳光。
+    // 默认值非 0：一个存在的节点就是一具身体（构造即有组织），"没有物质"必须
+    // 显式写 0 才是异常态。这样直接把 CyanoNode 摆进夹具的既有单测不会因为
+    // 新字段默认 0 而批量变成"不可食"。
+    double material = 120.0;
     bool alive = true;
     double hue = 0.0;   // R1-B：遗传色相 ∈ [0,360)（seed 均匀采样；分裂 = 父 + 高斯抖动）
 };
 
 // 一帧的收支报告：本模块不碰账本，只报数字，由组合根记账。
 struct CyanoStepReport {
+    double capacityLoss = 0.0; // 降低储能上限后排出的超额储备
     double photosynthesisGain = 0.0;  // 本帧光合总得（需 injectPrimary）
     double metabolismLoss = 0.0;      // 本帧代谢总耗（需 dissipate）
     double reproductionLoss = 0.0;    // 本帧分裂总耗散（子代没拿到的那部分）
     int births = 0;                   // 新增蓝细菌数
-    int ballsProduced = 0;            // 产出的自由球数
-    double ballEnergyTotal = 0.0;     // 产出球带走的能量总额
     double linkTransferred = 0.0;     // 本帧连线转移总量（仅观测；零和不影响账本）
+    // ---- 规则 v2：物质流（P1）。本模块不碰账本，只报数字 ----
+    double tissueGrowth = 0.0;        // 本帧光合能量转成的新组织量（material 增加）
+    double nutrientConsumed = 0.0;    // 本帧生长消耗的可吸收养分量
+    double growthEnergySpent = 0.0;   // 本帧生长花掉的节点能量（需 dissipate 或留账）
+    double deadMaterial = 0.0;        // 本帧饿死节点留下的组织量（→ 残骸）
+    double deadEnergy = 0.0;          // 本帧饿死节点残留的可用能量（→ 耗散）
+};
+
+// ---- 规则 v2：摄食请求 / 结算（一个模拟步内统一分配，验收 A2）----
+struct GrazeRequest {
+    EntityId nucleusId = 0;
+    EntityId nodeId = 0;
+    double wantMaterial = 0.0;   // 想咬下的组织量（受摄食能力与实际储存余量限制）
+    double efficiency = 1.0;     // 同化率（= conversionRate * cyanoDigestion），仅回传给调用方
+};
+
+struct GrazeGrant {
+    EntityId nucleusId = 0;
+    EntityId nodeId = 0;
+    double material = 0.0;           // 实际咬下的组织量（从节点扣掉的量）
+    double energyTransferred = 0.0;  // 随该组织一起从节点转移出的可用能量
+    double efficiency = 1.0;
 };
 
 class CyanoField {
@@ -184,35 +221,51 @@ public:
     // -> 产球判定 -> 产球位置（产者附近随机，GOAL §2.2.1 ③）
     // -> 分裂判定 -> 分裂色相抖动 -> 分裂位置
     //（rng 细序与放弃语义见文件头与 CyanoNode.cpp 注释）。sunLevel ∈ [0,1] 全局光强。
-    CyanoStepReport step(double sunLevel, double worldW, double worldH, PCG32& rng);
+    // 规则 v2：nutrients 为可吸收养分来源（nullptr = 无养分场，生长被完全限制）。
+    // 生长从所在区域取养分、从自身能量付出代价——所以"只施肥不给光"长不出新组织。
+    CyanoStepReport step(double sunLevel, double worldW, double worldH, PCG32& rng,
+                         NutrientField* nutrients = nullptr);
 
-    // 被核捕食：taken = min(rawEnergy * conversionRate, energy - grazeRefugeEnergy)
-    //（refuge <= 0 时退化为旧式 min(want, node.energy)）。refuge > 0 时被捕食
-    // 不会把节点抽死（储备不可食）；仅当节点能量本来就 <= refuge 时 taken=0。
-    // want*rate 仍可能耗尽 (energy - refuge) 以下？不会：taken 上限 = 余量，
-    // energy 恒 >= refuge（本函数内）；抽干到 refuge 后 alive 恒保持。
-    // 例外：refuge <= 0 且节点被抽干到 0 时 alive=false（旧语义，回归逐位）。
-    // id 不存在或节点已死返回 0。
+    // ---- 规则 v2：可食量（感知、选目标、请求、扣库存共用这一份定义）----
+    // edible = max(0, material - minStructure)。这是**唯一**的可食量口径：
+    // 感知层用它判断"这个节点还值不值得去"，行为层用它算请求量，本模块用它
+    // 扣库存。三处若各算一套，"盯着一片吃不动的节点"的旧 bug 就会回来。
+    static double edibleOf(const CyanoNode& n, const CyanoParams& p);
+    double edibleOf(EntityId id) const;
+
+    // ---- 规则 v2：一个模拟步内的摄食批结算（验收 A2）----
+    // 调用方（组合根）先把**全部**核的摄食请求收集完，再一次性交给本方法：
+    // 先按 (nodeId, nucleusId) 排序（与请求遍历顺序无关 ⇒ 颠倒核遍历序结果
+    // 相同），再按节点结算。每节点：
+    //   available = Σ edible；totalWant = Σ want
+    //   totalWant <= available → 全给；否则 share_i = available * want_i / totalWant
+    // 扣的是 material（不是 energy）。返回每个请求实际拿到的组织量，调用方
+    // 据此再决定吸收/损失去向（行为的"唯一写点"仍在行为层）。
+    std::vector<GrazeGrant> grazeBatch(const std::vector<GrazeRequest>& requests);
+    // 本帧被吃空的节点（material <= minStructure）在这里统一死亡：material 归零、
+    // alive=false。调用方取走 deadMaterial 作为残骸（P1）。
+    // 由 grazeBatch 内部的 pendingDeath_ 记录；本方法消费并清空它们。
+    // 单独成方法是为了让"被吃空 → 死亡 → 残骸"成为显式的、可审计的一步。
+    struct DeadNode {
+        EntityId id = 0;
+        Vec2 pos{};
+        double material = 0.0;   // 留下的组织（→ 残骸）
+        double energy = 0.0;     // 残留可用能量（→ 耗散）
+        double hue = 0.0;
+    };
+    std::vector<DeadNode> takeDeadNodes();
+
+    // 旧的单节点摄食接口（规则 v2 语义，保留给既有单测/独立使用）：
+    // 直接咬下 want 的组织，返回实际取走量；不涉及同化/能量（那是行为层）。
+    // 兼容旧签名：第二参仍叫 rawEnergy，语义改为"想咬下的组织量"。
     double graze(EntityId id, double rawEnergy, double conversionRate);
-
-    // ---- R3-A（营养循环）：尸体能量真实转移 ----
-    // 把 amount 能量给 id 指定的存活节点（受 energyCap 限制，溢出部分返回给
-    // 调用方耗散）。返回实际接受量；找不到 / 已死 / amount 非正返回 0。
-    // 进账口径与光合的 credited 一致：绝不入负账、绝不越限。组合根按接受量
-    // 记 ledger.transfer（零和），溢出量记 dissipate——能量绝不滞留在模块内。
-    double fertilize(EntityId nodeId, double amount);
 
     const std::vector<CyanoNode>& nodes() const { return nodes_; }
     std::size_t aliveCount() const;
     double totalEnergy() const;
+    // 规则 v2：全图存活节点的组织总量（物质账审计用；与能量账完全独立）。
+    double totalMaterial() const;
     const CyanoParams& params() const { return params_; }
-
-    // ---- R1-B：捕食转化率公式（纯函数，无 rng；公式见 CyanoParams 注释）----
-    static double cyanoConversionRate(int mode, double baseRate, double exponent,
-                                      double speedRef, double accelRef,
-                                      double wSpeed, double wAccel,
-                                      double minRate, double maxRate,
-                                      double maxSpeed, double maxAccel);
 
     // 连线能量再分配（S22 下半，v2.3.1 语义）：双向互选成边 + 高能向低能传输
     //（(hi-lo)*linkTransferRate，差 <= linkDeadband 跳过）。零和、确定性、
@@ -249,11 +302,8 @@ public:
     // 最近一次 linkTransfer() 实际成交的边数（观测/调试用；防抖跳过的不计）。
     int lastLinkEdgeCount() const { return linkEdges_; }
 
-    // 最近一次 step() 产出的自由球出生点（环面内坐标；每次 step() 清空重建）。
-    // 供组合根实际投放自由球实体；本模块只定坐标，不持有球实体。
-    // R8/P2-1：出生点在产者附近随机（距产者 [ballSpawnMinDist, ballSpawnMaxDist]
-    // 的环面距离，方向均匀随机后 wrap 回环面内）。
-    const std::vector<Vec2>& lastBallSpawns() const { return ballSpawns_; }
+    // 注：规则 v2（P2）起本模块**不再产出自由球**。旧 lastBallSpawns()/
+    // report.ballsProduced 整条通道已删除——普通生态的器官由核自建（验收 A11）。
 
 
     // ---- R5-C（存档系统）追加：白盒存取通道（唯一消费者：Simulation 序列化）----
@@ -272,7 +322,7 @@ public:
     private:
     CyanoParams params_{};
     std::vector<CyanoNode> nodes_;
-    std::vector<Vec2> ballSpawns_;
+    std::vector<DeadNode> pendingDeath_; // 规则 v2：本帧被吃空、待组合根取走的死亡节点
     std::vector<std::pair<EntityId, EntityId>> links_; // R1-B：最近一次成交拓扑
     std::vector<double> shade_;  // R3-A：最近一次结算的遮蔽量缓存（下标 = nodes_ 下标）
     double worldW_ = 0.0;    // 最近一次 seed()/step() 的环面尺寸（linkTransfer 用）

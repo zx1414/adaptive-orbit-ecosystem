@@ -72,6 +72,53 @@ TEST(save_roundtrip_state_hash_identical) {
     CHECK(is.peek() == std::istringstream::traits_type::eof());
 }
 
+TEST(save_and_timeline_restore_active_winter_and_live_tuning) {
+    Scratch scratch("unit_winter_tuning");
+    const auto initial = smallCfg();
+    agentsim::Simulation live(initial);
+    agentsim::app::Timeline timeline(initial);
+    CHECK(live.runTo(17u));
+    auto tuned = initial;
+    tuned.sun.baseLevel = 0.72;
+    tuned.nucleus.respirationBase = 0.09;
+    tuned.cyanoTuning.photosynthesisRate = 1.42;
+    tuned.ball.scoutSenseRadius = 61.0;
+    live.applyConfig(tuned);
+    live.setLightEffect({-0.35, 23u, 40u});
+    timeline.checkpoint(live);
+    CHECK(live.runTo(23u));
+    const auto savedHash = live.stateHash();
+    std::string error;
+    CHECK(agentsim::app::SaveStore::save(scratch.name, live, tuned, "rule", error));
+    const std::string timelineFile = "saves/" + scratch.name + "/timeline.bin";
+    CHECK(timeline.exportTo(timelineFile, error));
+
+    agentsim::SimConfig loadedConfig;
+    std::string policy;
+    CHECK(agentsim::app::SaveStore::loadHeader(scratch.name, loadedConfig, policy, error));
+    CHECK_NEAR(loadedConfig.nucleus.respirationBase, 0.09, 1e-12);
+    CHECK_NEAR(loadedConfig.cyanoTuning.photosynthesisRate, 1.42, 1e-12);
+    CHECK_NEAR(loadedConfig.ball.scoutSenseRadius, 61.0, 1e-12);
+    agentsim::Simulation loaded(loadedConfig);
+    CHECK(agentsim::app::SaveStore::load(scratch.name, loaded, loadedConfig, policy, error));
+    CHECK(loaded.stateHash() == savedHash);
+    CHECK(loaded.lightEffect().end == 40u);
+    CHECK_NEAR(loaded.effectiveSun().baseLevel, 0.37, 1e-12);
+
+    agentsim::app::Timeline imported(initial);
+    CHECK(imported.importFrom(timelineFile, error));
+    agentsim::Simulation replayed(initial);
+    CHECK(imported.seek(23u, replayed, error));
+    CHECK(replayed.runTo(23u));
+    CHECK(replayed.stateHash() == savedHash);
+    CHECK(loaded.runTo(50u));
+    CHECK(replayed.runTo(50u));
+    CHECK(live.runTo(50u));
+    CHECK_NEAR(loaded.effectiveSun().baseLevel, 0.72, 1e-12);
+    CHECK(loaded.stateHash() == live.stateHash());
+    CHECK(replayed.stateHash() == live.stateHash());
+}
+
 // ================= 2) 读档后 auditOk() 立即成立 =================
 TEST(save_deserialize_audit_ok_immediately) {
     agentsim::Simulation sim(smallCfg());

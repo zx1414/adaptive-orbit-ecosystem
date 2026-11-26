@@ -24,12 +24,12 @@ window.Renderer = (function () {
   // main.js boot 时 GET /packs 拿 active 调 setPalette() 整体替换；离线/404
   // 保持本默认，file:// 双击不崩、正常渲染（本卡底线）。
   var DEFAULT_PALETTE = {
-    background: '10,14,26',
-    ball_shield: '255,207,94',
-    ball_worker: '69,224,216',
-    ball_scout: '183,139,255',
-    free_ball: '200,200,210',
-    nucleus: '255,255,255'
+    background: '233,228,211',
+    ball_shield: '169,119,70',
+    ball_worker: '71,125,109',
+    ball_scout: '109,125,139',
+    free_ball: '63,76,60',
+    nucleus: '77,92,70'
   };
   var palette = DEFAULT_PALETTE;
 
@@ -83,7 +83,7 @@ window.Renderer = (function () {
       if (cw < 2 || ch < 2) return false;
       dpr = Math.max(1, window.devicePixelRatio || 1);
       var w = Math.round(cw * dpr), h = Math.round(ch * dpr);
-      if (canvas.width !== w || canvas.height !== h) {
+      if (W !== w || H !== h || canvas.width !== w || canvas.height !== h) {
         canvas.width = w; canvas.height = h; W = w; H = h;
         if (trace) fitCamera();
       }
@@ -96,7 +96,7 @@ window.Renderer = (function () {
       if (!trace || W < 2) return;
       var b = trace.bounds;
       var ww = Math.max(1e-9, b.maxX - b.minX), wh = Math.max(1e-9, b.maxY - b.minY);
-      cam.fit = Math.min(W / ww, H / wh) * 0.92;
+      cam.fit = Math.min(W / ww, H / wh);
       cam.scale = cam.fit;
       cam.cx = (b.minX + b.maxX) / 2;
       cam.cy = (b.minY + b.maxY) / 2;
@@ -131,7 +131,7 @@ window.Renderer = (function () {
       var b = trace.bounds;
       var pad = Math.min(64, (b.maxX - b.minX) * 0.25);
       cam.cx = Math.min(b.maxX + pad, Math.max(b.minX - pad, cam.cx));
-      cam.cy = Math.min(b.maxX + pad, Math.max(b.minY - pad, cam.cy));
+      cam.cy = Math.min(b.maxY + pad, Math.max(b.minY - pad, cam.cy));
     }
 
     // ---------- 昼夜天空 ----------
@@ -163,7 +163,7 @@ window.Renderer = (function () {
         var bg = palette.background || '10,14,26';
         ctx.fillStyle = 'rgb(' + bg + ')';
         ctx.fillRect(0, 0, W, H);
-        var dEx = dayness - 0.5;                     // >0 白昼，<0 夜晚
+        var dEx = (dayness - 0.5) * 0.16;                     // >0 白昼，<0 夜晚
         if (dEx > 0.003) {
           ctx.fillStyle = 'rgba(255,240,200,' + (0.26 * dEx * 2).toFixed(3) + ')';
           ctx.fillRect(0, 0, W, H);
@@ -195,41 +195,51 @@ window.Renderer = (function () {
     // ---------- 主绘制 ----------
     // 上一帧的实体屏幕坐标（悬停命中 + 施力脉冲锚点复用；无 DOM/无历史轨迹）
     var nPos = { x: [], y: [], r: [] };   // nuclei
-    var bPos = { x: [], y: [], id: [] };  // balls
+    var bPos = { x: [], y: [], r: [], id: [] };  // balls
     var lastFrame = null;
     var pulses = [];                       // 施力脉冲池 {id, x, y, dx, dy, age}
     var PULSE_LIFE = 8;                    // 帧数：约 8 帧淡出
 
     function draw(frame, fixed) {
       // fixed（R7-D 缩略图路径）：直接采用调用方给的尺寸，跳过主画布 resize
-      if (fixed) { W = fixed.w; H = fixed.h; }
+      if (fixed) { W = fixed.w; H = fixed.h; fitCamera(); }
       else if (!resize()) return;
       var tick = frame && isFiniteNum(frame.tick) ? frame.tick : 0;
       ctx.clearRect(0, 0, W, H);
+      ctx.fillStyle = '#d8d2c1';
+      ctx.fillRect(0, 0, W, H);
+      if (!trace) return;
+      var b = trace.bounds;
+      // 地图铺满可用短边，长边余出的区域保留背景。镜头统一使用等比例缩放。
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(s2x(b.minX), s2y(b.maxY),
+        (b.maxX - b.minX) * cam.scale, (b.maxY - b.minY) * cam.scale);
+      ctx.clip();
       // R7-D：palette.background 只在关闭昼夜天空时作纯色底。昼夜渐变是 SKY_STOPS
       // 的时间函数，若再把包背景色混进天空，包颜色会被稀释到看不出（取舍：两条路径各司其职）。
       if (dayNight) drawSky(tick, frame && frame.live ? frame.live.sun : null);
       else { ctx.fillStyle = 'rgba(' + palette.background + ',0.9)'; ctx.fillRect(0, 0, W, H); }
-      if (!trace) return;
-      var b = trace.bounds;
       drawGrid(b);
-      if (!frame) return;
       var zoom = cam.scale / Math.max(1e-9, cam.fit);
+      if (frame) {
+        drawCyanoNetwork(frame, zoom);
+        detectInteractions(frame);
+        drawNuclei(frame, zoom);
+        drawBalls(frame, zoom);
+        updatePulses(frame);
+        drawPulses(zoom);
+        drawSeamHints(frame);
+      }
+      ctx.restore();
       drawBounds(b, zoom);
-      drawCyanoNetwork(frame, zoom);
-      drawBalls(frame, zoom);
-      detectInteractions(frame);   // R8-D：邻近判定先于核绘制（灰点闪烁数据源）
-      drawNuclei(frame, zoom);
-      updatePulses(frame);
-      drawPulses(zoom);
-      drawSeamHints(frame);
       lastFrame = frame;
     }
 
     function drawGrid(b) {
       var step = 32;
       var alpha = dayNight ? +(0.05 + 0.06 * (1 - skyDayness)).toFixed(3) : 0.07;
-      ctx.strokeStyle = 'rgba(122,152,220,' + alpha + ')';
+      ctx.strokeStyle = 'rgba(85,91,70,' + (alpha * 0.45) + ')';
       ctx.lineWidth = 1;
       ctx.beginPath();
       for (var gx = b.minX; gx <= b.maxX + 0.01; gx += step) {
@@ -242,7 +252,7 @@ window.Renderer = (function () {
     }
 
     function drawBounds(b, zoom) {
-      ctx.strokeStyle = 'rgba(90,209,255,' + (0.22 + 0.1 * Math.min(1, zoom)) + ')';
+      ctx.strokeStyle = 'rgba(77,88,68,' + (0.35 + 0.1 * Math.min(1, zoom)) + ')';
       ctx.lineWidth = 1.5 * dpr;
       ctx.strokeRect(s2x(b.minX), s2y(b.maxY),
         (b.maxX - b.minX) * cam.scale, (b.maxY - b.minY) * cam.scale);
@@ -250,19 +260,13 @@ window.Renderer = (function () {
 
     // ---------- 蓝细菌网络（v3：f=连线拓扑，节点色=遗传 hue，先线后点） ----------
     // v3 契约：frame.cyanoLinks=[[idA,idB],...]（TraceParser 已把 f 键归一化到这里）；
-    // 节点 hue 来自 c 元组第 6 项（B 链路遗传色相）；亮度/半径随 energy（按帧内最大能量归一，
-    // 兼容不同能量量纲的轨迹）。连线永远画在节点下层；节点必须在线的上层（用户验收点）。
+    // 节点色相来自遗传数据。显示尺度固定，使同一能量在不同帧的亮度保持一致。
     function drawCyanoNetwork(frame, zoom) {
       var list = frame.cyano;
       var n = list.length;
       if (!n) return;
       var sxArr = new Array(n), syArr = new Array(n), rArr = new Array(n);
-      var eMax = 0;
-      for (var e = 0; e < n; e++) {
-        var en0 = list[e].energy;
-        if (isFiniteNum(en0) && en0 > eMax) eMax = en0;
-      }
-      var eScale = Math.max(8, eMax);        // 帧内相对亮度归一（对不同量纲的轨迹都成立）
+      var eScale = 100; // 显示用参照值，悬停显示实际能量
       var rBase = Math.max(1.6, 3.0 * Math.pow(zoom, 0.32)) * dpr;
       for (var i = 0; i < n; i++) {
         var c = list[i];
@@ -282,7 +286,7 @@ window.Renderer = (function () {
         var bnd = trace.bounds;
         var ww2 = Math.max(1, bnd.maxX - bnd.minX), wh2 = Math.max(1, bnd.maxY - bnd.minY);
         var decStep = links.length > 4000 ? 4 : 1;
-        ctx.strokeStyle = 'rgba(72,220,128,' + (0.10 + 0.10 * Math.min(1.6, zoom)).toFixed(3) + ')';
+        ctx.strokeStyle = 'rgba(78,105,69,' + (0.12 + 0.10 * Math.min(1.6, zoom)).toFixed(3) + ')';
         ctx.lineWidth = Math.max(0.6, 1.0 * dpr * Math.pow(zoom, 0.2));
         ctx.beginPath();
         for (var li = 0; li < links.length; li += decStep) {
@@ -321,7 +325,7 @@ window.Renderer = (function () {
           var huem = ((isFiniteNum(cnm2.hue) ? cnm2.hue : 130) % 360 + 360) % 360;
           var enNm = Math.min(1, (isFiniteNum(cnm2.energy) ? Math.max(0, cnm2.energy) : 0) / eScale);
           ctx.beginPath();
-          ctx.fillStyle = 'hsl(' + huem.toFixed(0) + ',45%,' + (50 + 16 * enNm).toFixed(1) + '%)';
+          ctx.fillStyle = 'hsl(' + (95 + (huem % 60) * 0.45).toFixed(0) + ',25%,' + (69 - 37 * Math.sqrt(enNm)).toFixed(1) + '%)';
           ctx.arc(sxm, sym, Math.max(1.4, rArr[jm] * 0.8), 0, TAU);
           ctx.fill();
         }
@@ -337,7 +341,7 @@ window.Renderer = (function () {
         var enN2 = Math.min(1.35, en2 / eScale);
         var rr = rArr[j];
         ctx.shadowColor = 'hsla(' + hue.toFixed(0) + ',70%,55%,.8)';
-        ctx.fillStyle = 'hsl(' + hue.toFixed(0) + ',62%,' + (44 + 16 * enN2).toFixed(1) + '%)';
+        ctx.fillStyle = 'hsl(' + hue.toFixed(0) + ',62%,' + (27 + 46 * Math.sqrt(Math.min(1, enN2))).toFixed(1) + '%)';
         ctx.beginPath();
         ctx.moveTo(sx2 + rr, sy2);
         ctx.arc(sx2, sy2, rr, 0, TAU);
@@ -353,50 +357,51 @@ window.Renderer = (function () {
       ctx.shadowBlur = 0;
     }
 
-    // ---------- 球：Resource=实心圆 · Scout=菱形 · Shield=六边形（颜色全走调色板） ----------
-    // R7-D: 调色板改为 GET /packs 动态获取（本卡实现）。每帧从 palette 现拼颜色
-    // 字符串（3 类球 + 自由球虚线圈），换包后下一帧立即生效，无需刷新/重建缓存。
+    // 球以形状和描边区分类型，内部填充显示所存能量。
     function ballColors() {
       return {
         fill: ['rgb(' + palette.ball_worker + ')', 'rgb(' + palette.ball_scout + ')', 'rgb(' + palette.ball_shield + ')'],
-        glow: ['rgba(' + palette.ball_worker + ',.85)', 'rgba(' + palette.ball_scout + ',.9)', 'rgba(' + palette.ball_shield + ',.85)'],
         freeRing: 'rgba(' + palette.free_ball + ',.95)'
       };
     }
 
     function drawBalls(frame, zoom) {
-      var BC = ballColors();   // R7-D：本帧调色板颜色（下一帧重取 → 换包即时生效）
-      var rBase = Math.max(1.5, 2.6 * Math.pow(zoom, 0.3)) * dpr;
-      bPos.x.length = 0; bPos.y.length = 0; bPos.id.length = 0;
+      var BC = ballColors();
+      var r = Math.max(4.5, Math.min(12, 4.8 * Math.pow(zoom, 0.23))) * dpr;
+      bPos.x.length = 0; bPos.y.length = 0; bPos.r.length = 0; bPos.id.length = 0;
       for (var i = 0; i < frame.balls.length; i++) {
         var ball = frame.balls[i];
         var sx = s2x(ball.x), sy = s2y(ball.y);
-        bPos.x.push(sx); bPos.y.push(sy); bPos.id.push(ball.id);
-        if (sx < -14 || sx > W + 14 || sy < -14 || sy > H + 14) continue;
+        bPos.x.push(sx); bPos.y.push(sy); bPos.r.push(r); bPos.id.push(ball.id);
+        var outer = r * 1.25 + 4 * dpr;
+        if (sx < -outer || sx > W + outer || sy < -outer || sy > H + outer) continue;
         var type = ball.type === 1 ? 1 : (ball.type === 2 ? 2 : 0);
         var free = !ball.owner || ball.owner === 0;
-        // 体型随球能轻微缩放（energy 40 → 1.2×封顶）
-        var r = rBase * (0.85 + 0.35 * Math.min(1, (isFiniteNum(ball.energy) ? ball.energy : 0) / 40));
+        var fraction = isFiniteNum(ball.energy) ? Math.max(0, Math.min(1, ball.energy / 60)) : 0;
+        traceShape(sx, sy, r, type);
+        ctx.fillStyle = '#eeeadd';
+        ctx.fill();
+        if (fraction > 0) {
+          ctx.save();
+          ctx.clip();
+          var halfHeight = type === 1 ? r * 1.25 : r;
+          var height = 2 * halfHeight * fraction;
+          ctx.fillStyle = BC.fill[type];
+          ctx.fillRect(sx - r * 1.25, sy + halfHeight - height, 2.5 * r, height);
+          ctx.restore();
+        }
+        ctx.strokeStyle = '#f3efe3';
+        ctx.lineWidth = 4 * dpr;
+        ctx.stroke();
+        ctx.strokeStyle = BC.fill[type];
+        ctx.lineWidth = 1.35 * dpr;
+        ctx.stroke();
         if (free) {
-          // 自由球：空心形状 + 虚线外圈，无辉光，与从属球一眼区分
-          ctx.lineWidth = 1.1 * dpr;
-          ctx.strokeStyle = BC.fill[type];
-          traceShape(sx, sy, r, type); ctx.stroke();
+          ctx.lineWidth = 1.2 * dpr;
           ctx.setLineDash([2.5 * dpr, 2.5 * dpr]);
           ctx.strokeStyle = BC.freeRing;
-          ctx.beginPath(); ctx.arc(sx, sy, r + 2.8 * dpr, 0, TAU); ctx.stroke();
+          ctx.beginPath(); ctx.arc(sx, sy, r * 1.25 + 2 * dpr, 0, TAU); ctx.stroke();
           ctx.setLineDash([]);
-        } else if (MINIMAL) {
-          // R8-D 极简 + R10 修正（用户反馈：全白看不出类型）：平涂类型色，无辉光
-          ctx.beginPath();
-          ctx.fillStyle = BC.fill[type];
-          ctx.arc(sx, sy, r, 0, TAU); ctx.fill();
-        } else {
-          ctx.shadowBlur = 7 * dpr;
-          ctx.shadowColor = BC.glow[type];
-          ctx.fillStyle = BC.fill[type];
-          traceShape(sx, sy, r, type); ctx.fill();
-          ctx.shadowBlur = 0;
         }
       }
       ctx.shadowBlur = 0;
@@ -415,7 +420,7 @@ window.Renderer = (function () {
         ctx.closePath();
       } else {                    // Shield：六边形
         for (var k = 0; k < 6; k++) {
-          var a = TAU * k / 6 - Math.PI / 6;
+          var a = TAU * k / 6;
           var px = sx + Math.cos(a) * r * 1.15, py = sy + Math.sin(a) * r * 1.15;
           if (k === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
         }
@@ -469,27 +474,26 @@ window.Renderer = (function () {
         var sx = s2x(nu.x), sy = s2y(nu.y);
         nPos.x.push(sx); nPos.y.push(sy);
         if (sx < -30 || sx > W + 30 || sy < -30 || sy > H + 30) { nPos.r.push(0); continue; }
-        var ratio = (nu.cap > 0)
-          ? Math.max(0.12, Math.min(1, nu.energy / nu.cap))
-          : 0.5;
-        var r = (5.0 + 6.0 * ratio) * Math.pow(zoom, 0.28) * dpr;
-        if (MINIMAL) r *= 1.6;   // R8-D：核比球大（用户反馈 2.5 太大 → 1.6）
+        var ratio = (nu.cap > 0 && isFiniteNum(nu.energy))
+          ? Math.max(0, Math.min(1, nu.energy / nu.cap))
+          : null;
+        var r = Math.max(7, Math.min(24, (8 + 3 * (ratio || 0)) * Math.pow(zoom, 0.25))) * dpr;
         nPos.r.push(r);
         var hue = ((isFiniteNum(nu.hue) ? nu.hue : synthHue(nu.id)) % 360 + 360) % 360;
         if (MINIMAL) {
           // R8-D 极简核：平涂 hue 大圆 + 细描边；中央灰点 = 交互闪烁指示
           ctx.beginPath();
-          ctx.fillStyle = 'hsla(' + hue.toFixed(0) + ',52%,' + (42 + 14 * ratio).toFixed(1) + '%,0.92)';
+          ctx.fillStyle = 'hsla(' + hue.toFixed(0) + ',24%,' + (58 + 5 * ratio).toFixed(1) + '%,1)';
           ctx.arc(sx, sy, r, 0, TAU); ctx.fill();
           ctx.beginPath();
-          ctx.strokeStyle = 'hsla(' + hue.toFixed(0) + ',60%,70%,0.5)';
+          ctx.strokeStyle = '#405344';
           ctx.lineWidth = 1 * dpr;
           ctx.arc(sx, sy, r, 0, TAU); ctx.stroke();
           // 中央点：交互后 800ms 内灰↔白正弦闪，否则恒灰
           var nowMs = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
           var ts = lastInteract[nu.id] || 0;
           var dtMs = nowMs - ts;
-          var gray = '#808080';
+          var gray = '#3f5143';
           if (ts > 0 && dtMs < 800) {
             var ph = (Math.sin(dtMs / 800 * Math.PI * 6) + 1) / 2;  // ~3Hz
             var lv = Math.round(50 + 45 * ph);
@@ -498,7 +502,8 @@ window.Renderer = (function () {
           ctx.beginPath();
           ctx.fillStyle = gray;
           ctx.arc(sx, sy, Math.max(1.6, r * 0.30), 0, TAU); ctx.fill();
-          continue;   // 极简分支不吃能量环/亮斑
+          if (ratio !== null) drawEnergyRing(sx, sy, r + 3 * dpr, ratio);
+          continue;
         }
         // 外发光（同色）
         ctx.shadowBlur = 18 * dpr * glow;
@@ -511,16 +516,27 @@ window.Renderer = (function () {
         ctx.beginPath();
         ctx.fillStyle = 'hsla(' + hue.toFixed(0) + ',85%,' + (78 + 8 * ratio).toFixed(1) + '%,' + (0.55 + 0.4 * ratio).toFixed(3) + ')';
         ctx.arc(sx - r * 0.25, sy - r * 0.25, r * 0.42, 0, TAU); ctx.fill();
-        // 能量环（随 energy/cap 增长）。R7-D：描边用 palette.nucleus（包作者的风格层）；
-        // 核本体填充/外发光/亮斑仍走遗传 hue——hue 是"这是哪个谱系"的第一识别通道，
-        // 不交给材质包覆盖，否则谱系可分性（用户验收点）会被换包破坏。
-        ctx.beginPath();
-        ctx.strokeStyle = 'rgba(' + palette.nucleus + ',' + (0.35 + 0.3 * ratio).toFixed(3) + ')';
-        ctx.lineWidth = 1.2 * dpr;
-        ctx.arc(sx, sy, r + 3 * dpr, -Math.PI / 2, -Math.PI / 2 + TAU * ratio);
-        ctx.stroke();
+        if (ratio !== null) drawEnergyRing(sx, sy, r + 3 * dpr, ratio);
       }
       ctx.shadowBlur = 0;
+    }
+
+    function drawEnergyRing(x, y, radius, ratio) {
+      ctx.beginPath();
+      ctx.arc(x, y, radius, 0, TAU);
+      ctx.strokeStyle = '#f1ede0';
+      ctx.lineWidth = 4 * dpr;
+      ctx.stroke();
+      ctx.strokeStyle = 'rgba(' + palette.nucleus + ',0.30)';
+      ctx.lineWidth = 2 * dpr;
+      ctx.stroke();
+      if (ratio > 0) {
+        var start = -Math.PI / 2;
+        ctx.beginPath();
+        ctx.arc(x, y, radius, start, start + TAU * ratio);
+        ctx.strokeStyle = ratio < 0.2 ? '#a35e4d' : (ratio < 0.5 ? '#a67b49' : '#496d51');
+        ctx.stroke();
+      }
     }
 
     // ---------- 施力脉冲：被施力的球上画脉冲环 + 短箭头（≈8 帧淡出） ----------
@@ -621,43 +637,52 @@ window.Renderer = (function () {
     }
 
     // ---------- 悬停命中：O(n) 距离测试（用上一帧屏幕坐标） ----------
-    // 返回 { kind:'nucleus', index, data } 或 { kind:'none' }
     function hitTest(sxCss, syCss) {
       var sx = sxCss * dpr, sy = syCss * dpr;
-      var best = -1, bestD = 26 * dpr * dpr; // 命中半径 ~26 设备像素
-      for (var i = 0; i < nPos.x.length; i++) {
-        if (!nPos.r[i]) continue;
-        var dx = nPos.x[i] - sx, dy = nPos.y[i] - sy;
-        var d2 = dx * dx + dy * dy;
-        var lim = Math.max(26 * dpr, nPos.r[i] + 8 * dpr);
-        if (d2 <= lim * lim && d2 < bestD) { bestD = d2; best = i; }
+      if (!trace || !lastFrame) return { kind: 'none' };
+      var b = trace.bounds;
+      if (sx < s2x(b.minX) || sx > s2x(b.maxX) || sy < s2y(b.maxY) || sy > s2y(b.minY)) {
+        return { kind: 'none' };
       }
-      if (best >= 0 && lastFrame && lastFrame.nuclei[best]) {
-        return { kind: 'nucleus', index: best, data: lastFrame.nuclei[best] };
+      var hit = closestAt(bPos, sx, sy, 1.25, 2 * dpr);
+      if (hit >= 0) return { kind: 'ball', data: lastFrame.balls[hit] };
+      hit = closestAt(nPos, sx, sy, 1, 5 * dpr);
+      if (hit >= 0) return { kind: 'nucleus', data: lastFrame.nuclei[hit] };
+      var nearest = (5 * dpr) ** 2;
+      var cyano = lastFrame.cyano;
+      for (var i = 0; i < cyano.length; i++) {
+        var dx = s2x(cyano[i].x) - sx, dy = s2y(cyano[i].y) - sy;
+        var distance = dx * dx + dy * dy;
+        if (distance < nearest) { nearest = distance; hit = i; }
       }
+      if (hit >= 0) return { kind: 'cyano', data: cyano[hit] };
       return { kind: 'none' };
     }
 
-    // ---------- R7-D 存档缩略图：把某帧一次性画进 128x72 离屏画布 ----------
-    // 复用主渲染管线（调色板/天空/球/核/蓝细菌全部一致），换 ctx + 独立相机后
-    // 完整还原，主画布视角与状态不受影响。bPos/nPos/pulses/lastFrame 会被短暂
-    // 污染——一次性操作，下一次真实 draw 全量重建（悬停命中不受可感知影响）。
+    function closestAt(positions, x, y, scale, margin) {
+      var best = -1, nearest = Infinity;
+      for (var i = 0; i < positions.x.length; i++) {
+        if (!positions.r[i]) continue;
+        var dx = positions.x[i] - x, dy = positions.y[i] - y;
+        var distance = dx * dx + dy * dy;
+        var limit = positions.r[i] * scale + margin;
+        if (distance <= limit * limit && distance < nearest) {
+          nearest = distance;
+          best = i;
+        }
+      }
+      return best;
+    }
+
+    // 用独立的渲染器生成存档缩略图，避免缩略图改变当前取景和悬停坐标。
     function renderThumb(frame, tcanvas) {
       if (!trace || !frame || !tcanvas || !tcanvas.getContext) return false;
-      var saved = { ctx: ctx, W: W, H: H, dayNight: dayNight,
-        scale: cam.scale, cx: cam.cx, cy: cam.cy, fit: cam.fit };
-      ctx = tcanvas.getContext('2d');
-      W = tcanvas.width; H = tcanvas.height;
-      dayNight = true;
-      var b = trace.bounds;
-      var ww = Math.max(1e-9, b.maxX - b.minX), wh = Math.max(1e-9, b.maxY - b.minY);
-      cam.fit = Math.min(W / ww, H / wh) * 0.92;
-      cam.scale = cam.fit;
-      cam.cx = (b.minX + b.maxX) / 2;
-      cam.cy = (b.minY + b.maxY) / 2;
-      try { draw(frame, { w: W, h: H }); } catch (e) { return false; }   // 缩略图失败不拖垮主流程
-      ctx = saved.ctx; W = saved.W; H = saved.H; dayNight = saved.dayNight;
-      cam.scale = saved.scale; cam.cx = saved.cx; cam.cy = saved.cy; cam.fit = saved.fit;
+      try {
+        var thumb = create(tcanvas);
+        thumb.setTrace(trace);
+        thumb.setMinimal(MINIMAL);
+        thumb.draw(frame, { w: tcanvas.width, h: tcanvas.height });
+      } catch (e) { return false; }
       return true;
     }
 

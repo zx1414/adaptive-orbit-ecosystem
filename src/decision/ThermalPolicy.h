@@ -1,4 +1,4 @@
-﻿// agentsim - decision/ThermalPolicy.h
+// agentsim - decision/ThermalPolicy.h
 // 趋温策略（第三个可选策略，与 rule / perceptron 互补）：
 // 温度是资源品质的代理信号。RulePolicy 只看距离+对齐，PerceptronPolicy 是黑箱权重；
 // ThermalPolicy 显式消费 s[16]（温度失真度）与 s[17]（归一化温度采样）做可解释推理。
@@ -17,6 +17,7 @@
 // 红线：决策期绝不使用 RNG，不 include environment/ sim/ ledger/。
 #pragma once
 #include "decision/IDecisionPolicy.h"
+#include "decision/PolicyMemory.h"
 
 namespace agentsim {
 
@@ -37,8 +38,11 @@ public:
     explicit ThermalPolicy(const Params& p = {});
 
     // 纯确定性算术，绝不使用 RNG；全 NaN 输入也不产生 NaN 输出。
-    ActionVector decide(const SensorVector& s, const TargetList& targets) override;
-    using IDecisionPolicy::decide; // 旧单参调用面（基类非虚重载）
+    // P0-4：本策略无可变跨帧状态（每帧只读输入 + 不可变参数），memory 只按契约
+    // 占位、绝不写入 —— 因此它天然不会被"别的核的经历"影响。
+    ActionVector decide(const SensorVector& s, const TargetList& targets,
+                        PolicyMemory& memory) override;
+    using IDecisionPolicy::decide; // 基类两参/单参兼容重载（一次性无状态语义）
 
     const char* name() const override { return "thermal"; }
 

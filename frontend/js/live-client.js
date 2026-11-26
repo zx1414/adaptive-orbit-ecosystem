@@ -114,6 +114,7 @@ window.LiveClient = (function () {
         '（请更新前端或后端，两者必须同一版快照格式）');
     }
     var phase = dv.getUint8(2);                       // 0=运行 1=结束 2=暂停
+    var audit = dv.getUint8(3);                       // 0=未开启或旧后端 1=通过 2=失败
     var tick = dv.getInt32(4, LE);
     var worldW = dv.getFloat32(8, LE);
     var worldH = dv.getFloat32(12, LE);
@@ -125,6 +126,7 @@ window.LiveClient = (function () {
     var nL = dv.getInt32(36, LE);
     var cyanoAvgE = dv.getFloat32(40, LE);
     var sun = dv.getFloat32(44, LE);
+    var cyanoLimit = dv.getInt32(48, LE);
     // R11-P1-6：结束原因（头部 52..79 保留区，NUL 结尾 ASCII；v2.3.1 finishReason 对位）
     var reason = '';
     for (var rqi = 52; rqi < 80; ++rqi) {
@@ -285,9 +287,7 @@ window.LiveClient = (function () {
         cyanoAlive: (cyano.length || nC),
         cyanoEnergy: cyanoE,
         totalEnergy: totalE,
-        injected: 0,          // /state 无账本流量字段（审计权威在后端，恒等式不可见）
-        dissipated: 0,
-        auditOk: true
+        auditOk: audit === 1 ? true : (audit === 2 ? false : null)
       },
       live: {
         phase: phase,           // 0=运行 1=已结束 2=暂停
@@ -295,6 +295,7 @@ window.LiveClient = (function () {
         worldH: worldH,
         freeBalls: nFree,
         cyanoAvgEnergy: cyanoAvgE,
+        cyanoLimit: cyanoLimit,
         sun: sun,
         reason: reason,
         strideWarn: strideWarn,

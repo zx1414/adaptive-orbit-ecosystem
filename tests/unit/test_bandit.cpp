@@ -4,6 +4,11 @@
 // 确定性（无 RNG，重置后逐位一致）、单臂持续奖励下的双向学习、
 // NaN/Inf 极端输入不产生 NaN 输出、eta 构造夹取、reset 回初态、长跑稳定。
 // 红线：测试本身也绝不使用 RNG，全部手工构造确定性感知序列。
+//
+// P0-4（记忆归个体）：Hedge 权重与全部滚动历史住在 PolicyMemory 里，由调用方
+// （每个核）持有。需要跨帧学习的用例显式传**同一个** memory；状态查询改成
+// BanditPolicy::weightRule(mem) 等静态接口；reset(mem) 只清 bandit* 块。
+// 保护意图不变（"持续奖励某一臂时权重会分离"等语义继续被测到）。
 #include "test_framework.h"
 
 #include <cmath>
@@ -11,11 +16,13 @@
 
 #include "../../src/core/SensorTypes.h"
 #include "../../src/decision/BanditPolicy.h"
+#include "../../src/decision/PolicyMemory.h"
 
 namespace {
 
 using agentsim::ActionVector;
 using agentsim::BanditPolicy;
+using agentsim::PolicyMemory;
 using agentsim::SensorVector;
 using agentsim::ThermalPolicy;
 
@@ -35,8 +42,11 @@ SensorVector oneFood(double thetaDeg, double prox, double speed) {
 }
 
 // 前进一帧（单食物 + 指定速度），返回输出。
-ActionVector step(BanditPolicy& p, double thetaDeg, double prox, double speed) {
-    return p.decide(oneFood(thetaDeg, prox, speed));
+// P0-4：个体的学习历史在 PolicyMemory 里，由调用方持有并显式传入——同一个
+// BanditPolicy 实例可以服务很多个体，各自只动自己那份记忆。
+ActionVector step(BanditPolicy& p, PolicyMemory& mem, double thetaDeg, double prox,
+                  double speed) {
+    return p.decide(oneFood(thetaDeg, prox, speed), agentsim::TargetList{}, mem);
 }
 
 // ---- 奖励 rule 臂的场景（可解析验证，wThermal=3.0 配套）----
@@ -105,27 +115,27 @@ ThermalPolicy::Params thermalFavoredParams() {
 
 // ---- 1. 构造后初始权重严格等分 0.5/0.5。----
 TEST(bandit_initial_equal_weights) {
-    BanditPolicy p;
-    CHECK_NEAR(p.weightRule(), 0.5, 1e-12);
-    CHECK_NEAR(p.weightThermal(), 0.5, 1e-12);
-    CHECK_NEAR(p.weightRule() + p.weightThermal(), 1.0, 1e-9);
+    BanditPolicy p; PolicyMemory memp; // 一个个体一份记忆（P0-4）
+    CHECK_NEAR(BanditPolicy::weightRule(memp), 0.5, 1e-12);
+    CHECK_NEAR(BanditPolicy::weightThermal(memp), 0.5, 1e-12);
+    CHECK_NEAR(BanditPolicy::weightRule(memp) + BanditPolicy::weightThermal(memp), 1.0, 1e-9);
     // 默认学习率也暴露在接口里，便于文档化。
     CHECK_NEAR(p.eta(), 0.05, 1e-12);
 }
 
 // ---- 2. 连调 100 次（含极端场景）：和恒为 1，误差 < 1e-9。----
 TEST(bandit_weights_stay_normalized) {
-    BanditPolicy p;
+    BanditPolicy p; PolicyMemory memp; // 一个个体一份记忆（P0-4）
     // 混合多种场景：近/远、高速/静止、无目标，观察更新路径全覆盖。
     const double angles[] = {0.0, 90.0, 180.0, 270.0, 45.0};
     const double proxs[] = {0.9, 0.5, 0.1, 0.0};
     for (int i = 0; i < 100; ++i) {
         const double sp = (i % 3 == 0) ? 2.0 : 0.0;
-        step(p, angles[i % 5], proxs[i % 4], sp);
-        const double sum = p.weightRule() + p.weightThermal();
+        step(p, memp, angles[i % 5], proxs[i % 4], sp);
+        const double sum = BanditPolicy::weightRule(memp) + BanditPolicy::weightThermal(memp);
         CHECK(std::fabs(sum - 1.0) < 1e-9);
-        CHECK(p.weightRule() > 0.0);
-        CHECK(p.weightThermal() > 0.0);
+        CHECK(BanditPolicy::weightRule(memp) > 0.0);
+        CHECK(BanditPolicy::weightThermal(memp) > 0.0);
     }
 }
 
@@ -133,28 +143,28 @@ TEST(bandit_weights_stay_normalized) {
 // eta=10 最大学习率、持续强负回报差，对数权重被压到极深负值，
 // softmax 下臂 T 理论权重 ~e^-数百，但 kWeightFloor 地板保证恒有 w >= 1e-6。
 TEST(bandit_weights_stay_positive) {
-    BanditPolicy p(10.0);
+    BanditPolicy p(10.0); PolicyMemory memp; // 一个个体一份记忆（P0-4）
     for (int i = 0; i < 1000; ++i) {
-        step(p, 90.0, 0.05, 2.0); // 静止食物 + 高速冲刺：pot 差 + rEnv 双重压 T
-        CHECK(p.weightRule() > 0.0);
-        CHECK(p.weightThermal() > 0.0);
+        step(p, memp, 90.0, 0.05, 2.0); // 静止食物 + 高速冲刺：pot 差 + rEnv 双重压 T
+        CHECK(BanditPolicy::weightRule(memp) > 0.0);
+        CHECK(BanditPolicy::weightThermal(memp) > 0.0);
     }
-    CHECK(std::fabs(p.weightRule() + p.weightThermal() - 1.0) < 1e-9);
-    CHECK(p.weightRule() <= 1.0 && p.weightThermal() <= 1.0);
+    CHECK(std::fabs(BanditPolicy::weightRule(memp) + BanditPolicy::weightThermal(memp) - 1.0) < 1e-9);
+    CHECK(BanditPolicy::weightRule(memp) <= 1.0 && BanditPolicy::weightThermal(memp) <= 1.0);
 }
 
 // ---- 4. 输出方向长度 ∈ {0} ∪ [0.999, 1.001]，boost ∈ [0,1]。----
 TEST(bandit_output_unit_or_zero) {
-    BanditPolicy p;
+    BanditPolicy p; PolicyMemory memp; // 一个个体一份记忆（P0-4）
     // 无目标 -> 零向量。
-    const ActionVector z = p.decide(SensorVector{});
+    const ActionVector z = p.decide(SensorVector{}, agentsim::TargetList{}, memp);
     CHECK_NEAR(z.dirX, 0.0, 1e-12);
     CHECK_NEAR(z.dirY, 0.0, 1e-12);
     CHECK(z.boost >= 0.0 && z.boost <= 1.0);
     // 多帧、多方向：非零输出必为单位向量。
     const double angles[] = {10.0, 130.0, 250.0, 300.0};
     for (int i = 0; i < 200; ++i) {
-        const ActionVector a = step(p, angles[i % 4], 0.2 + 0.2 * (i % 3), 1.0 + (i % 2));
+        const ActionVector a = step(p, memp, angles[i % 4], 0.2 + 0.2 * (i % 3), 1.0 + (i % 2));
         const double len = std::sqrt(a.dirX * a.dirX + a.dirY * a.dirY);
         const bool zero = (len == 0.0);
         CHECK(zero || (len > 0.999 && len < 1.001));
@@ -165,33 +175,33 @@ TEST(bandit_output_unit_or_zero) {
 
 // ---- 5. 确定性：同输入序列、重置后两次调用逐位一致 —— 证明 decide 无 RNG。----
 TEST(bandit_deterministic) {
-    BanditPolicy p1;
-    BanditPolicy p2;
+    BanditPolicy p1; PolicyMemory memp1; // 一个个体一份记忆（P0-4）
+    BanditPolicy p2; PolicyMemory memp2; // 一个个体一份记忆（P0-4）
     const double angles[] = {0.0, 45.0, 90.0, 135.0, 180.0, 225.0, 270.0, 315.0};
     const double proxs[] = {0.8, 0.6, 0.4, 0.2};
     for (int i = 0; i < 50; ++i) {
         const double th = angles[i % 8];
         const double pr = proxs[i % 4];
         const double sp = 0.5 * (i % 4);
-        const ActionVector a1 = step(p1, th, pr, sp);
-        const ActionVector a2 = step(p2, th, pr, sp);
+        const ActionVector a1 = step(p1, memp1, th, pr, sp);
+        const ActionVector a2 = step(p2, memp2, th, pr, sp);
         CHECK_NEAR(a1.dirX, a2.dirX, 0.0);
         CHECK_NEAR(a1.dirY, a2.dirY, 0.0);
         CHECK_NEAR(a1.boost, a2.boost, 0.0);
         // 权重轨迹也逐位一致。
-        CHECK_NEAR(p1.weightRule(), p2.weightRule(), 0.0);
+        CHECK_NEAR(BanditPolicy::weightRule(memp1), BanditPolicy::weightRule(memp2), 0.0);
     }
     // 单实例 reset 后重放同一序列：输出逐位一致（状态完全可重置）。
-    BanditPolicy p3;
+    BanditPolicy p3; PolicyMemory memp3; // 一个个体一份记忆（P0-4）
     ActionVector first[50];
     for (int i = 0; i < 50; ++i) {
-        first[i] = step(p3, angles[i % 8], proxs[i % 4], 0.5 * (i % 4));
+        first[i] = step(p3, memp3, angles[i % 8], proxs[i % 4], 0.5 * (i % 4));
     }
-    p3.reset();
-    CHECK_NEAR(p3.weightRule(), 0.5, 1e-12);
-    CHECK_NEAR(p3.weightThermal(), 0.5, 1e-12);
+    BanditPolicy::reset(memp3);
+    CHECK_NEAR(BanditPolicy::weightRule(memp3), 0.5, 1e-12);
+    CHECK_NEAR(BanditPolicy::weightThermal(memp3), 0.5, 1e-12);
     for (int i = 0; i < 50; ++i) {
-        const ActionVector b = step(p3, angles[i % 8], proxs[i % 4], 0.5 * (i % 4));
+        const ActionVector b = step(p3, memp3, angles[i % 8], proxs[i % 4], 0.5 * (i % 4));
         CHECK_NEAR(b.dirX, first[i].dirX, 0.0);
         CHECK_NEAR(b.dirY, first[i].dirY, 0.0);
         CHECK_NEAR(b.boost, first[i].boost, 0.0);
@@ -202,42 +212,42 @@ TEST(bandit_deterministic) {
 // 场景 A（ruleFavoredScenario 注释含完整解析）：每帧 rR - rT >= 0.328 > 0，
 // 100 帧 eta=0.5 后对数权重差 > 30 → wRule_ 精确逼近 1（地板之上）。
 TEST(bandit_learns_toward_better_arm) {
-    BanditPolicy p(0.5, ruleFavoredParams());
+    BanditPolicy p(0.5, ruleFavoredParams()); PolicyMemory memp; // 一个个体一份记忆（P0-4）
     const SensorVector s = ruleFavoredScenario();
     for (int i = 0; i < 100; ++i) {
-        (void)p.decide(s);
+        (void)p.decide(s, agentsim::TargetList{}, memp);
     }
-    CHECK(p.weightRule() > p.weightThermal());
-    CHECK(p.weightRule() > 0.9);
-    CHECK(p.weightThermal() < 0.1);
-    CHECK(std::fabs(p.weightRule() + p.weightThermal() - 1.0) < 1e-9);
-    CHECK(p.weightRule() > 0.0 && p.weightThermal() > 0.0); // 地板仍托底
+    CHECK(BanditPolicy::weightRule(memp) > BanditPolicy::weightThermal(memp));
+    CHECK(BanditPolicy::weightRule(memp) > 0.9);
+    CHECK(BanditPolicy::weightThermal(memp) < 0.1);
+    CHECK(std::fabs(BanditPolicy::weightRule(memp) + BanditPolicy::weightThermal(memp) - 1.0) < 1e-9);
+    CHECK(BanditPolicy::weightRule(memp) > 0.0 && BanditPolicy::weightThermal(memp) > 0.0); // 地板仍托底
 }
 
 // ---- 6b. 反向：持续“奖励 thermal 侧”，wThermal_ 反超（权重可双向学习）。----
 // 场景 B（thermalFavoredScenario 注释含完整解析）：每帧 rT - rR >= 0.133 > 0，
 // 150 帧 eta=0.5 后对数权重差 >= 10 → wThermal_ > 0.99。
 TEST(bandit_learns_toward_thermal_arm_when_reversed) {
-    BanditPolicy p(0.5, thermalFavoredParams());
+    BanditPolicy p(0.5, thermalFavoredParams()); PolicyMemory memp; // 一个个体一份记忆（P0-4）
     const SensorVector s = thermalFavoredScenario();
     for (int i = 0; i < 150; ++i) {
-        (void)p.decide(s);
+        (void)p.decide(s, agentsim::TargetList{}, memp);
     }
-    CHECK(p.weightThermal() > p.weightRule());
-    CHECK(p.weightThermal() > 0.9);
-    CHECK(p.weightRule() < 0.1);
-    CHECK(std::fabs(p.weightRule() + p.weightThermal() - 1.0) < 1e-9);
-    CHECK(p.weightRule() > 0.0 && p.weightThermal() > 0.0);
+    CHECK(BanditPolicy::weightThermal(memp) > BanditPolicy::weightRule(memp));
+    CHECK(BanditPolicy::weightThermal(memp) > 0.9);
+    CHECK(BanditPolicy::weightRule(memp) < 0.1);
+    CHECK(std::fabs(BanditPolicy::weightRule(memp) + BanditPolicy::weightThermal(memp) - 1.0) < 1e-9);
+    CHECK(BanditPolicy::weightRule(memp) > 0.0 && BanditPolicy::weightThermal(memp) > 0.0);
 }
 
 // ---- 7. 全 NaN / 全 Inf 输入不产生 NaN 输出；极端混合输入也安全。----
 TEST(bandit_extreme_sensor_no_nan) {
     const double qnan = std::sqrt(-1.0); // 不引入 <random>，静默 NaN 常量
     // 全 NaN。
-    BanditPolicy p;
+    BanditPolicy p; PolicyMemory memp; // 一个个体一份记忆（P0-4）
     SensorVector sn{};
     for (int i = 0; i < SensorVector::kDim; ++i) sn[i] = qnan;
-    ActionVector a = p.decide(sn);
+    ActionVector a = p.decide(sn, agentsim::TargetList{}, memp);
     CHECK(!std::isnan(a.dirX) && !std::isnan(a.dirY) && !std::isnan(a.boost));
     CHECK(!std::isinf(a.dirX) && !std::isinf(a.dirY) && !std::isinf(a.boost));
     CHECK_NEAR(a.dirX, 0.0, 1e-12);
@@ -246,7 +256,7 @@ TEST(bandit_extreme_sensor_no_nan) {
     SensorVector si{};
     for (int i = 0; i < SensorVector::kDim; ++i) si[i] = HUGE_VAL;
     for (int i = 0; i < SensorVector::kDim; i += 2) si[i] = -HUGE_VAL;
-    a = p.decide(si);
+    a = p.decide(si, agentsim::TargetList{}, memp);
     CHECK(!std::isnan(a.dirX) && !std::isnan(a.dirY) && !std::isnan(a.boost));
     CHECK(!std::isinf(a.dirX) && !std::isinf(a.dirY) && !std::isinf(a.boost));
     // NaN/Inf 与正常值交替；再接正常帧确认权重状态机未被污染。
@@ -256,38 +266,38 @@ TEST(bandit_extreme_sensor_no_nan) {
         if (i % 3 == 0) sm[i] = qnan;
         if (i % 3 == 1) sm[i] = HUGE_VAL;
     }
-    a = p.decide(sm);
+    a = p.decide(sm, agentsim::TargetList{}, memp);
     CHECK(!std::isnan(a.dirX) && !std::isnan(a.dirY) && !std::isnan(a.boost));
-    for (int i = 0; i < 10; ++i) a = step(p, 30.0, 0.7, 1.0);
+    for (int i = 0; i < 10; ++i) a = step(p, memp, 30.0, 0.7, 1.0);
     CHECK(!std::isnan(a.dirX) && !std::isnan(a.dirY) && !std::isnan(a.boost));
-    const double sum = p.weightRule() + p.weightThermal();
+    const double sum = BanditPolicy::weightRule(memp) + BanditPolicy::weightThermal(memp);
     CHECK(std::fabs(sum - 1.0) < 1e-9);
-    CHECK(p.weightRule() > 0.0 && p.weightThermal() > 0.0);
+    CHECK(BanditPolicy::weightRule(memp) > 0.0 && BanditPolicy::weightThermal(memp) > 0.0);
     // 非 NaN 哨兵：权重仍有限。
-    CHECK(std::isfinite(p.weightRule()) && std::isfinite(p.weightThermal()));
+    CHECK(std::isfinite(BanditPolicy::weightRule(memp)) && std::isfinite(BanditPolicy::weightThermal(memp)));
 }
 
 // ---- 8. eta 构造夹取：NaN/负值/超大值均安全，且 eta=0 冻结权重。----
 TEST(bandit_eta_clamped_and_zero_freezes) {
     const double qnan = std::sqrt(-1.0);
-    BanditPolicy pNaN(qnan);
+    BanditPolicy pNaN(qnan); PolicyMemory mempNaN; // 一个个体一份记忆（P0-4）
     CHECK_NEAR(pNaN.eta(), 0.0, 1e-12);      // NaN -> 0（冻结）
-    BanditPolicy pNeg(-3.0);
+    BanditPolicy pNeg(-3.0); PolicyMemory mempNeg; // 一个个体一份记忆（P0-4）
     CHECK_NEAR(pNeg.eta(), 0.0, 1e-12);
-    BanditPolicy pHuge(1e9);
+    BanditPolicy pHuge(1e9); PolicyMemory mempHuge; // 一个个体一份记忆（P0-4）
     CHECK_NEAR(pHuge.eta(), 10.0, 1e-12);    // 上限 10
     // eta=0：任何输入序列后权重保持 0.5/0.5（不学习）。
-    BanditPolicy p0(0.0);
-    for (int i = 0; i < 20; ++i) step(p0, 45.0 * i, 0.3 + 0.01 * i, 1.0);
-    CHECK_NEAR(p0.weightRule(), 0.5, 1e-12);
-    CHECK_NEAR(p0.weightThermal(), 0.5, 1e-12);
+    BanditPolicy p0(0.0); PolicyMemory memp0; // 一个个体一份记忆（P0-4）
+    for (int i = 0; i < 20; ++i) step(p0, memp0, 45.0 * i, 0.3 + 0.01 * i, 1.0);
+    CHECK_NEAR(BanditPolicy::weightRule(memp0), 0.5, 1e-12);
+    CHECK_NEAR(BanditPolicy::weightThermal(memp0), 0.5, 1e-12);
 }
 
 // ---- 9. 两臂方向一致时混合输出与两臂相同（权重凸组合仍指向同一方向）。----
 TEST(bandit_mixed_direction_matches_arms_when_agree) {
-    BanditPolicy p;
+    BanditPolicy p; PolicyMemory memp; // 一个个体一份记忆（P0-4）
     // 单候选 (1,0)：rule 与 thermal 都会选它。
-    const ActionVector ar = step(p, 0.0, 0.8, 0.0);
+    const ActionVector ar = step(p, memp, 0.0, 0.8, 0.0);
     CHECK_NEAR(ar.dirX, 1.0, 1e-9);
     CHECK_NEAR(ar.dirY, 0.0, 1e-9);
     CHECK(ar.boost >= 0.0 && ar.boost <= 1.0);
@@ -297,32 +307,32 @@ TEST(bandit_mixed_direction_matches_arms_when_agree) {
 // 权重仍归一、恒正、有限，且确实离开过 0.5（权重机制在长程中真实运转）。
 // 注：首帧无历史不更新（权重恰为 0.5），故用 maxDev 而非 minDev 做哨兵。----
 TEST(bandit_long_run_stability) {
-    BanditPolicy p(0.5, ruleFavoredParams());
+    BanditPolicy p(0.5, ruleFavoredParams()); PolicyMemory memp; // 一个个体一份记忆（P0-4）
     const SensorVector fav = ruleFavoredScenario();
     const double angles[] = {0.0, 60.0, 120.0, 180.0, 240.0, 300.0};
     double maxDev = 0.0; // |wR - 0.5| 的最大值哨兵
     for (int i = 0; i < 2000; ++i) {
         if (i % 9 == 4) {
-            (void)p.decide(SensorVector{}); // 无目标帧
+            (void)p.decide(SensorVector{}, agentsim::TargetList{}, memp); // 无目标帧
         } else if (i % 9 == 6) {
-            (void)step(p, angles[i % 6], 0.0, 1.5); // 半径外（prox=0）帧
+            (void)step(p, memp, angles[i % 6], 0.0, 1.5); // 半径外（prox=0）帧
         } else {
-            (void)p.decide(fav); // 奖励 R 的帧 → 净漂移
+            (void)p.decide(fav, agentsim::TargetList{}, memp); // 奖励 R 的帧 → 净漂移
         }
-        const double dev = std::fabs(p.weightRule() - 0.5);
+        const double dev = std::fabs(BanditPolicy::weightRule(memp) - 0.5);
         if (dev > maxDev) maxDev = dev;
         if (i % 25 == 24) {
-            const double sum = p.weightRule() + p.weightThermal();
+            const double sum = BanditPolicy::weightRule(memp) + BanditPolicy::weightThermal(memp);
             CHECK(std::fabs(sum - 1.0) < 1e-9);
-            CHECK(p.weightRule() > 0.0 && p.weightThermal() > 0.0);
-            CHECK(std::isfinite(p.weightRule()) && std::isfinite(p.weightThermal()));
+            CHECK(BanditPolicy::weightRule(memp) > 0.0 && BanditPolicy::weightThermal(memp) > 0.0);
+            CHECK(std::isfinite(BanditPolicy::weightRule(memp)) && std::isfinite(BanditPolicy::weightThermal(memp)));
         }
     }
     // 权重确实动过（不是死权重）：一度偏离 0.5 超过 0.05。
     CHECK(maxDev > 0.05);
-    const double sum = p.weightRule() + p.weightThermal();
+    const double sum = BanditPolicy::weightRule(memp) + BanditPolicy::weightThermal(memp);
     CHECK(std::fabs(sum - 1.0) < 1e-9);
-    CHECK(p.weightRule() > 0.0 && p.weightThermal() > 0.0);
+    CHECK(BanditPolicy::weightRule(memp) > 0.0 && BanditPolicy::weightThermal(memp) > 0.0);
 }
 
 // ==================== T24 扩展组：混合公式 / 状态机 / 长程回归 ====================
@@ -340,12 +350,12 @@ TEST(bandit_boost_blends_arms_weights_frozen) {
     struct Case { double s12; double s16; double expect; };
     const Case cases[] = {{0.0, 0.0, 0.5}, {0.0, 1.0, 0.65}, {1.0, 1.0, 0.4}};
     for (const Case& c : cases) {
-        BanditPolicy p(0.0); // 冻结 0.5/0.5
+        BanditPolicy p(0.0); PolicyMemory memp; // 一个个体一份记忆（P0-4）：冻结 0.5/0.5
         SensorVector s = base;
         const double k = c.s12 / (1.0 + c.s12);
         s[10] = k; s[11] = 0.0; s[12] = k; // 速度沿 +x，模长一致
         s[16] = c.s16; s[17] = 0.5;
-        const ActionVector a = p.decide(s);
+        const ActionVector a = p.decide(s, agentsim::TargetList{}, memp);
         CHECK_NEAR(a.boost, c.expect, 1e-9);
         CHECK_NEAR(a.dirX, 1.0, 1e-9); // 两臂同向 (+1,0)
         CHECK_NEAR(a.dirY, 0.0, 1e-9);
@@ -355,14 +365,14 @@ TEST(bandit_boost_blends_arms_weights_frozen) {
 // ---- B2. 冻结权重下输出逐帧恒定，且方向 = normalize(0.5*uR + 0.5*uT) = 45°。----
 // ruleFavoredScenario：uR=(1,0)、uT=(0,1) -> 混合方向 (0.7071,0.7071)；boost=0.25。
 TEST(bandit_frozen_weights_constant_output_and_blend_direction) {
-    BanditPolicy p(0.0, ruleFavoredParams());
+    BanditPolicy p(0.0, ruleFavoredParams()); PolicyMemory memp; // 一个个体一份记忆（P0-4）
     const SensorVector s = ruleFavoredScenario();
-    const ActionVector first = p.decide(s);
+    const ActionVector first = p.decide(s, agentsim::TargetList{}, memp);
     CHECK_NEAR(first.dirX, 0.7071067811865476, 1e-9);
     CHECK_NEAR(first.dirY, 0.7071067811865476, 1e-9);
     CHECK_NEAR(first.boost, 0.25, 1e-9); // 0.5*urgency(0.5) + 0.5*0
     for (int i = 0; i < 10; ++i) {
-        const ActionVector a = p.decide(s);
+        const ActionVector a = p.decide(s, agentsim::TargetList{}, memp);
         CHECK_NEAR(a.dirX, first.dirX, 0.0); // 权重冻结 -> 逐位恒定
         CHECK_NEAR(a.dirY, first.dirY, 0.0);
         CHECK_NEAR(a.boost, first.boost, 0.0);
@@ -381,10 +391,10 @@ TEST(bandit_thermal_params_passthrough_changes_output) {
     ThermalPolicy::Params pb;
     pb.wThermal = 3.0;
     pb.preferredTemp = 0.5; // 全不适宜 -> 温度项归零
-    BanditPolicy pa0(0.0, pa);
-    BanditPolicy pb0(0.0, pb);
-    const ActionVector oa = pa0.decide(s);
-    const ActionVector ob = pb0.decide(s);
+    BanditPolicy pa0(0.0, pa); PolicyMemory mempa0; // 一个个体一份记忆（P0-4）
+    BanditPolicy pb0(0.0, pb); PolicyMemory mempb0; // 一个个体一份记忆（P0-4）
+    const ActionVector oa = pa0.decide(s, agentsim::TargetList{}, mempa0);
+    const ActionVector ob = pb0.decide(s, agentsim::TargetList{}, mempb0);
     const double diff = std::sqrt((oa.dirX - ob.dirX) * (oa.dirX - ob.dirX)
                                 + (oa.dirY - ob.dirY) * (oa.dirY - ob.dirY));
     CHECK(diff > 0.1); // 参数真生效（非死参数）
@@ -396,65 +406,65 @@ TEST(bandit_thermal_params_passthrough_changes_output) {
 TEST(bandit_reset_clears_history_bit_exact) {
     const SensorVector fav = ruleFavoredScenario();
     const double angles[] = {15.0, 75.0, 200.0};
-    BanditPolicy p1;
-    BanditPolicy p2;
-    for (int i = 0; i < 5; ++i) (void)p2.decide(fav); // 制造历史
-    p2.reset();
+    BanditPolicy p1; PolicyMemory memp1; // 一个个体一份记忆（P0-4）
+    BanditPolicy p2; PolicyMemory memp2; // 一个个体一份记忆（P0-4）
+    for (int i = 0; i < 5; ++i) (void)p2.decide(fav, agentsim::TargetList{}, memp2); // 制造历史
+    BanditPolicy::reset(memp2);
     for (int i = 0; i < 20; ++i) {
         ActionVector a1, a2;
         if (i % 4 == 3) {
-            a1 = p1.decide(SensorVector{});
-            a2 = p2.decide(SensorVector{});
+            a1 = p1.decide(SensorVector{}, agentsim::TargetList{}, memp1);
+            a2 = p2.decide(SensorVector{}, agentsim::TargetList{}, memp2);
         } else if (i % 4 == 1) {
-            a1 = p1.decide(oneFood(angles[i % 3], 0.0, 1.0));
-            a2 = p2.decide(oneFood(angles[i % 3], 0.0, 1.0));
+            a1 = p1.decide(oneFood(angles[i % 3], 0.0, 1.0), agentsim::TargetList{}, memp1);
+            a2 = p2.decide(oneFood(angles[i % 3], 0.0, 1.0), agentsim::TargetList{}, memp2);
         } else {
-            a1 = p1.decide(fav);
-            a2 = p2.decide(fav);
+            a1 = p1.decide(fav, agentsim::TargetList{}, memp1);
+            a2 = p2.decide(fav, agentsim::TargetList{}, memp2);
         }
         CHECK_NEAR(a1.dirX, a2.dirX, 0.0);
         CHECK_NEAR(a1.dirY, a2.dirY, 0.0);
         CHECK_NEAR(a1.boost, a2.boost, 0.0);
-        CHECK_NEAR(p1.weightRule(), p2.weightRule(), 0.0);
+        CHECK_NEAR(BanditPolicy::weightRule(memp1), BanditPolicy::weightRule(memp2), 0.0);
     }
 }
 
 // ---- B5. 首次更新就偏向被奖励的臂：第 1 帧无历史（0.5 不动），第 2 帧起 wR > 0.5。----
 TEST(bandit_first_update_already_favors_rewarded_arm) {
-    BanditPolicy p(0.5, ruleFavoredParams());
+    BanditPolicy p(0.5, ruleFavoredParams()); PolicyMemory memp; // 一个个体一份记忆（P0-4）
     const SensorVector s = ruleFavoredScenario();
-    (void)p.decide(s); // 首帧只建历史
-    CHECK_NEAR(p.weightRule(), 0.5, 1e-12);
-    (void)p.decide(s); // 首次更新：rR - rT = 0.428 > 0
-    CHECK(p.weightRule() > 0.5);
-    CHECK(p.weightThermal() < 0.5);
+    (void)p.decide(s, agentsim::TargetList{}, memp); // 首帧只建历史
+    CHECK_NEAR(BanditPolicy::weightRule(memp), 0.5, 1e-12);
+    (void)p.decide(s, agentsim::TargetList{}, memp); // 首次更新：rR - rT = 0.428 > 0
+    CHECK(BanditPolicy::weightRule(memp) > 0.5);
+    CHECK(BanditPolicy::weightThermal(memp) < 0.5);
     // 反向场景对称成立。
-    BanditPolicy q(0.5, thermalFavoredParams());
+    BanditPolicy q(0.5, thermalFavoredParams()); PolicyMemory memq; // 一个个体一份记忆（P0-4）
     const SensorVector t = thermalFavoredScenario();
-    (void)q.decide(t);
-    (void)q.decide(t);
-    CHECK(q.weightThermal() > 0.5);
+    (void)q.decide(t, agentsim::TargetList{}, memq);
+    (void)q.decide(t, agentsim::TargetList{}, memq);
+    CHECK(BanditPolicy::weightThermal(memq) > 0.5);
 }
 
 // ---- B6. 不变量：两臂方向恒相同时回报恒相等 -> 权重恒 0.5/0.5（对称性）。----
 // 单候选直行：uR == uT == uOut -> agreeR == agreeT、potR == potT -> rR == rT。
 TEST(bandit_symmetric_agreement_keeps_equal_weights) {
-    BanditPolicy p;
+    BanditPolicy p; PolicyMemory memp; // 一个个体一份记忆（P0-4）
     for (int i = 0; i < 50; ++i) {
-        (void)step(p, 25.0, 0.7, 1.0);
-        CHECK_NEAR(p.weightRule(), 0.5, 1e-12);
-        CHECK_NEAR(p.weightThermal(), 0.5, 1e-12);
+        (void)step(p, memp, 25.0, 0.7, 1.0);
+        CHECK_NEAR(BanditPolicy::weightRule(memp), 0.5, 1e-12);
+        CHECK_NEAR(BanditPolicy::weightThermal(memp), 0.5, 1e-12);
     }
 }
 
 // ---- B7. 两臂全部弃权 -> 输出精确零向量（候选存在但方向/门控排除）。----
 TEST(bandit_all_arms_abstain_outputs_zero) {
-    BanditPolicy p;
+    BanditPolicy p; PolicyMemory memp; // 一个个体一份记忆（P0-4）
     // 候选方向近零（1e-15 < 1e-12 阈值）-> 两臂都弃权。
     SensorVector s{};
     s[0] = 1e-15; s[1] = 0.0;
     s[6] = 0.8; s[9] = 0.2;
-    const ActionVector a = p.decide(s);
+    const ActionVector a = p.decide(s, agentsim::TargetList{}, memp);
     CHECK_NEAR(a.dirX, 0.0, 1e-12);
     CHECK_NEAR(a.dirY, 0.0, 1e-12);
     CHECK(a.boost >= 0.0 && a.boost <= 1.0); // boost 仍混合（rule urgency=1 的一半）
@@ -463,18 +473,18 @@ TEST(bandit_all_arms_abstain_outputs_zero) {
     SensorVector t{};
     t[0] = 1.0; t[1] = 0.0;
     t[9] = 0.0; // thermal 无目标
-    const ActionVector b = p.decide(t);
+    const ActionVector b = p.decide(t, agentsim::TargetList{}, memp);
     CHECK_NEAR(b.dirX, 0.0, 1e-12);
     CHECK_NEAR(b.dirY, 0.0, 1e-12);
 }
 
 // ---- B8. 负值输入一律被 clamp01/单位化吸收：无 NaN、输出合法、权重归一。----
 TEST(bandit_negative_sensor_values_are_clamped) {
-    BanditPolicy p;
+    BanditPolicy p; PolicyMemory memp; // 一个个体一份记忆（P0-4）
     // 全负：等价全零 -> 零向量。
     SensorVector sn{};
     for (int i = 0; i < SensorVector::kDim; ++i) sn[i] = -1.5;
-    const ActionVector a = p.decide(sn);
+    const ActionVector a = p.decide(sn, agentsim::TargetList{}, memp);
     CHECK(!std::isnan(a.dirX) && !std::isnan(a.dirY) && !std::isnan(a.boost));
     CHECK_NEAR(a.dirX, 0.0, 1e-12);
     // 负方向 + 有效接近度：正常指向负方向。
@@ -482,31 +492,31 @@ TEST(bandit_negative_sensor_values_are_clamped) {
     sd[0] = -1.0; sd[1] = 0.0;
     sd[6] = 0.7; sd[9] = 0.3;
     sd[12] = -2.0; // 负速度 -> clamp01 -> 0
-    const ActionVector b = p.decide(sd);
+    const ActionVector b = p.decide(sd, agentsim::TargetList{}, memp);
     CHECK(b.dirX < -0.999); // 指向 (-1,0)
     CHECK(!std::isnan(b.dirY) && !std::isnan(b.boost));
-    for (int i = 0; i < 20; ++i) (void)p.decide(sd);
-    CHECK(std::fabs(p.weightRule() + p.weightThermal() - 1.0) < 1e-9);
-    CHECK(p.weightRule() > 0.0 && p.weightThermal() > 0.0);
+    for (int i = 0; i < 20; ++i) (void)p.decide(sd, agentsim::TargetList{}, memp);
+    CHECK(std::fabs(BanditPolicy::weightRule(memp) + BanditPolicy::weightThermal(memp) - 1.0) < 1e-9);
+    CHECK(BanditPolicy::weightRule(memp) > 0.0 && BanditPolicy::weightThermal(memp) > 0.0);
 }
 
 // ---- B9. 地板数值：极端单边奖励后 wThermal_ 被钉在地板 ~1e-6，恒正、和为 1。----
 TEST(bandit_weight_floor_pins_thermal_near_floor) {
-    BanditPolicy p(10.0, ruleFavoredParams()); // eta=10，每帧 log 差 ~4.28
+    BanditPolicy p(10.0, ruleFavoredParams()); PolicyMemory memp; // 一个个体一份记忆（P0-4）：eta=10，每帧 log 差 ~4.28
     const SensorVector s = ruleFavoredScenario();
-    for (int i = 0; i < 200; ++i) (void)p.decide(s); // log 差 ~850 -> softmax 下溢
-    CHECK(p.weightThermal() > 0.0);           // 地板托底，恒正
-    CHECK(p.weightThermal() < 1e-4);          // 且确实被压到地板量级
-    CHECK(p.weightRule() > 0.9999);
-    CHECK(std::fabs(p.weightRule() + p.weightThermal() - 1.0) < 1e-9);
+    for (int i = 0; i < 200; ++i) (void)p.decide(s, agentsim::TargetList{}, memp); // log 差 ~850 -> softmax 下溢
+    CHECK(BanditPolicy::weightThermal(memp) > 0.0);           // 地板托底，恒正
+    CHECK(BanditPolicy::weightThermal(memp) < 1e-4);          // 且确实被压到地板量级
+    CHECK(BanditPolicy::weightRule(memp) > 0.9999);
+    CHECK(std::fabs(BanditPolicy::weightRule(memp) + BanditPolicy::weightThermal(memp) - 1.0) < 1e-9);
 }
 
 // ---- B10. 学成后输出对齐胜者臂：wR≈1 -> 输出 ≈ uR = (1,0)。----
 TEST(bandit_learned_direction_aligns_with_winner_arm) {
-    BanditPolicy p(10.0, ruleFavoredParams());
+    BanditPolicy p(10.0, ruleFavoredParams()); PolicyMemory memp; // 一个个体一份记忆（P0-4）
     const SensorVector s = ruleFavoredScenario();
-    for (int i = 0; i < 200; ++i) (void)p.decide(s);
-    const ActionVector a = p.decide(s);
+    for (int i = 0; i < 200; ++i) (void)p.decide(s, agentsim::TargetList{}, memp);
+    const ActionVector a = p.decide(s, agentsim::TargetList{}, memp);
     CHECK(a.dirX > 0.99);
     CHECK(std::fabs(a.dirY) < 0.1);
     CHECK(std::fabs(std::sqrt(a.dirX * a.dirX + a.dirY * a.dirY) - 1.0) < 1e-9);
@@ -514,71 +524,71 @@ TEST(bandit_learned_direction_aligns_with_winner_arm) {
 
 // ---- B11. 万帧马拉松：对数权重差 ~4e4 不溢出，输出/权重全程有限且归一。----
 TEST(bandit_10000_frame_marathon_finite_and_normalized) {
-    BanditPolicy p(10.0, ruleFavoredParams()); // 最大 eta 加速分离
+    BanditPolicy p(10.0, ruleFavoredParams()); PolicyMemory memp; // 一个个体一份记忆（P0-4）：最大 eta 加速分离
     const SensorVector fav = ruleFavoredScenario();
     const double angles[] = {0.0, 60.0, 120.0, 180.0, 240.0, 300.0};
     for (int i = 0; i < 10000; ++i) {
         ActionVector a;
-        if (i % 11 == 5) a = p.decide(SensorVector{});
-        else if (i % 11 == 7) a = p.decide(oneFood(angles[i % 6], 0.0, 1.5));
-        else a = p.decide(fav);
+        if (i % 11 == 5) a = p.decide(SensorVector{}, agentsim::TargetList{}, memp);
+        else if (i % 11 == 7) a = p.decide(oneFood(angles[i % 6], 0.0, 1.5), agentsim::TargetList{}, memp);
+        else a = p.decide(fav, agentsim::TargetList{}, memp);
         if (i % 999 == 0) {
             CHECK(!std::isnan(a.dirX) && !std::isnan(a.dirY) && !std::isnan(a.boost));
         }
     }
-    CHECK(std::isfinite(p.weightRule()) && std::isfinite(p.weightThermal()));
-    CHECK(std::fabs(p.weightRule() + p.weightThermal() - 1.0) < 1e-9);
-    CHECK(p.weightRule() > 0.0 && p.weightThermal() > 0.0);
-    CHECK(p.weightRule() > 0.999); // 单边奖励 1 万帧 -> 深度分离但不塌零
+    CHECK(std::isfinite(BanditPolicy::weightRule(memp)) && std::isfinite(BanditPolicy::weightThermal(memp)));
+    CHECK(std::fabs(BanditPolicy::weightRule(memp) + BanditPolicy::weightThermal(memp) - 1.0) < 1e-9);
+    CHECK(BanditPolicy::weightRule(memp) > 0.0 && BanditPolicy::weightThermal(memp) > 0.0);
+    CHECK(BanditPolicy::weightRule(memp) > 0.999); // 单边奖励 1 万帧 -> 深度分离但不塌零
 }
 
 // ---- B12. 无目标帧 -> 食物帧：历史含零输出不炸、下一帧正常。----
 TEST(bandit_no_target_frame_then_food_no_nan) {
-    BanditPolicy p;
-    const ActionVector z = p.decide(SensorVector{});
+    BanditPolicy p; PolicyMemory memp; // 一个个体一份记忆（P0-4）
+    const ActionVector z = p.decide(SensorVector{}, agentsim::TargetList{}, memp);
     CHECK_NEAR(z.dirX, 0.0, 1e-12);
-    const ActionVector a = p.decide(oneFood(30.0, 0.6, 1.0));
+    const ActionVector a = p.decide(oneFood(30.0, 0.6, 1.0), agentsim::TargetList{}, memp);
     CHECK(!std::isnan(a.dirX) && !std::isnan(a.dirY) && !std::isnan(a.boost));
     CHECK(std::fabs(std::sqrt(a.dirX * a.dirX + a.dirY * a.dirY) - 1.0) < 1e-9);
-    const ActionVector b = p.decide(oneFood(30.0, 0.6, 1.0));
+    const ActionVector b = p.decide(oneFood(30.0, 0.6, 1.0), agentsim::TargetList{}, memp);
     CHECK(!std::isnan(b.dirX) && !std::isnan(b.dirY) && !std::isnan(b.boost));
-    CHECK(std::fabs(p.weightRule() + p.weightThermal() - 1.0) < 1e-9);
+    CHECK(std::fabs(BanditPolicy::weightRule(memp) + BanditPolicy::weightThermal(memp) - 1.0) < 1e-9);
 }
 
 // ---- B13. 策略名："bandit"（与 rule/thermal/stub/perceptron 互异）。----
 TEST(bandit_name_is_bandit) {
-    BanditPolicy p;
+    BanditPolicy p; PolicyMemory memp; // 一个个体一份记忆（P0-4）
     CHECK(p.name() != nullptr);
     CHECK(std::strcmp(p.name(), "bandit") == 0);
 }
 
 // ---- B14. 默认构造 == 显式默认参数构造（逐位一致，20 帧混合序列）。----
 TEST(bandit_default_ctor_equals_explicit_default_params) {
-    BanditPolicy p1;
-    BanditPolicy p2(0.05, ThermalPolicy::Params());
+    BanditPolicy p1; PolicyMemory memp1; // 一个个体一份记忆（P0-4）
+    BanditPolicy p2(0.05, ThermalPolicy::Params()); PolicyMemory memp2; // 一个个体一份记忆（P0-4）
     const SensorVector fav = ruleFavoredScenario();
     for (int i = 0; i < 20; ++i) {
         ActionVector a1, a2;
         if (i % 5 == 2) {
-            a1 = p1.decide(oneFood(50.0 * i, 0.4, 0.5));
-            a2 = p2.decide(oneFood(50.0 * i, 0.4, 0.5));
+            a1 = p1.decide(oneFood(50.0 * i, 0.4, 0.5), agentsim::TargetList{}, memp1);
+            a2 = p2.decide(oneFood(50.0 * i, 0.4, 0.5), agentsim::TargetList{}, memp2);
         } else {
-            a1 = p1.decide(fav);
-            a2 = p2.decide(fav);
+            a1 = p1.decide(fav, agentsim::TargetList{}, memp1);
+            a2 = p2.decide(fav, agentsim::TargetList{}, memp2);
         }
         CHECK_NEAR(a1.dirX, a2.dirX, 0.0);
         CHECK_NEAR(a1.dirY, a2.dirY, 0.0);
         CHECK_NEAR(a1.boost, a2.boost, 0.0);
     }
-    CHECK_NEAR(p1.weightRule(), p2.weightRule(), 0.0);
+    CHECK_NEAR(BanditPolicy::weightRule(memp1), BanditPolicy::weightRule(memp2), 0.0);
 }
 
 // ---- B15. 两臂意见相左时输出介于两臂方向之间（凸组合几何）。----
 // 新鲜实例 0.5/0.5：uR=(1,0)、uT=(0,1) -> 输出 45°，与两臂点积均正且相等。
 TEST(bandit_arms_disagree_output_between_arm_directions) {
-    BanditPolicy p(0.0, ruleFavoredParams());
+    BanditPolicy p(0.0, ruleFavoredParams()); PolicyMemory memp; // 一个个体一份记忆（P0-4）
     const SensorVector s = ruleFavoredScenario();
-    const ActionVector a = p.decide(s);
+    const ActionVector a = p.decide(s, agentsim::TargetList{}, memp);
     const double dotR = a.dirX * 1.0 + a.dirY * 0.0;
     const double dotT = a.dirX * 0.0 + a.dirY * 1.0;
     CHECK(dotR > 0.0);
@@ -589,21 +599,21 @@ TEST(bandit_arms_disagree_output_between_arm_directions) {
 
 // ---- B16. 极端 eta=10 + 万帧单边奖励：对数空间更新不溢出为 Inf/NaN（回归）。----
 TEST(bandit_extreme_eta_log_overflow_safe) {
-    BanditPolicy p(10.0, ruleFavoredParams());
+    BanditPolicy p(10.0, ruleFavoredParams()); PolicyMemory memp; // 一个个体一份记忆（P0-4）
     const SensorVector s = ruleFavoredScenario();
-    for (int i = 0; i < 10000; ++i) (void)p.decide(s);
-    CHECK(std::isfinite(p.weightRule()) && std::isfinite(p.weightThermal()));
-    CHECK(!std::isnan(p.weightRule()) && !std::isnan(p.weightThermal()));
-    CHECK(std::fabs(p.weightRule() + p.weightThermal() - 1.0) < 1e-9);
-    CHECK(p.weightRule() > 0.0 && p.weightThermal() > 0.0);
-    const ActionVector a = p.decide(s);
+    for (int i = 0; i < 10000; ++i) (void)p.decide(s, agentsim::TargetList{}, memp);
+    CHECK(std::isfinite(BanditPolicy::weightRule(memp)) && std::isfinite(BanditPolicy::weightThermal(memp)));
+    CHECK(!std::isnan(BanditPolicy::weightRule(memp)) && !std::isnan(BanditPolicy::weightThermal(memp)));
+    CHECK(std::fabs(BanditPolicy::weightRule(memp) + BanditPolicy::weightThermal(memp) - 1.0) < 1e-9);
+    CHECK(BanditPolicy::weightRule(memp) > 0.0 && BanditPolicy::weightThermal(memp) > 0.0);
+    const ActionVector a = p.decide(s, agentsim::TargetList{}, memp);
     CHECK(!std::isnan(a.dirX) && !std::isnan(a.dirY) && !std::isnan(a.boost));
 }
 
 // ---- B17. 零速度：对齐项失效但接近度仍主导，boost 混合可解析（0.5）。----
 TEST(bandit_zero_speed_direction_and_boost) {
-    BanditPolicy p(0.0);
-    const ActionVector a = p.decide(oneFood(0.0, 0.8, 0.0));
+    BanditPolicy p(0.0); PolicyMemory memp; // 一个个体一份记忆（P0-4）
+    const ActionVector a = p.decide(oneFood(0.0, 0.8, 0.0), agentsim::TargetList{}, memp);
     CHECK_NEAR(a.dirX, 1.0, 1e-9);  // 单候选 (1,0)，两臂同向
     CHECK_NEAR(a.dirY, 0.0, 1e-9);
     CHECK_NEAR(a.boost, 0.5, 1e-9); // 0.5*urgency(1) + 0.5*thermal(0)
@@ -615,9 +625,9 @@ TEST(bandit_output_rotates_toward_winner_monotonically) {
     const SensorVector s = ruleFavoredScenario();
     double prevDot = -1.0;
     for (int depth = 0; depth < 4; ++depth) {
-        BanditPolicy p(0.5, ruleFavoredParams());
-        for (int i = 0; i < depth * 3; ++i) (void)p.decide(s);
-        const ActionVector a = p.decide(s);
+        BanditPolicy p(0.5, ruleFavoredParams()); PolicyMemory memp; // 一个个体一份记忆（P0-4）
+        for (int i = 0; i < depth * 3; ++i) (void)p.decide(s, agentsim::TargetList{}, memp);
+        const ActionVector a = p.decide(s, agentsim::TargetList{}, memp);
         const double dotR = a.dirX; // uR = (1,0)
         CHECK(dotR >= prevDot - 1e-12); // 单调不减
         prevDot = dotR;

@@ -92,7 +92,7 @@
       </div>
 
       <p class="menu-note mono">提示：滚轮缩放 · 拖拽平移 · 悬停核查看 24 个基因组参数 · 点按核可跟随 ·
-        空格播放/暂停 · ←/→ 单步 · R 复位视角 · F 影院模式 · H 折叠状态栏</p>
+        空格播放/暂停 · ←/→ 单步 · R 复位视角 · F 切换地图铺屏 · H 折叠状态栏</p>
     </div>
   </section>
 </main>
@@ -102,21 +102,27 @@
   <div class="runwrap">
     <div class="runmain">
       <section class="stage glass" id="stageWrap">
-        <canvas id="stage"></canvas>
-        <div class="hud mono" id="hud">等待轨迹…</div>
+        <canvas id="stage" aria-label="生态模拟地图"></canvas>
+        <div class="stage-readout">
+          <div class="hud mono" id="hud">等待轨迹…</div>
+          <div class="energy-overview" id="energyOverview" aria-label="地图能量分布"></div>
+        </div>
+        <div class="stage-actions">
+          <button class="btn btn-mini" id="btnMapPlay" type="button" title="播放（空格）" aria-label="播放">▶</button>
+          <button class="btn btn-mini" id="btnMapFit" type="button" title="复位到完整地图 (R)">全图</button>
+          <button class="btn btn-mini" id="btnMapCinema" type="button" title="切换地图铺屏 (F)" aria-expanded="false">展开面板</button>
+        </div>
         <div class="legend mono">
-          <span><i class="sw nuc"></i>核（色相=血统）</span>
+          <span><i class="sw nuc"></i>核 · 外环为能量</span>
           <span><i class="sw ball-res"></i>资源球</span>
           <span><i class="sw ball-scout"></i>侦察球</span>
           <span><i class="sw ball-shield"></i>护盾球</span>
           <span><i class="sw ball-free"></i>自由球</span>
-          <span><i class="sw cyano"></i>蓝细菌（=食物）</span>
+          <span><i class="sw cyano"></i>蓝细菌 · 越深能量越高</span>
           <span><i class="sw link"></i>能量连线</span>
-          <span><i class="sw force"></i>施力脉冲</span>
+          <span>球内填充 0–60 能量</span>
         </div>
-        <div class="viewhint mono">滚轮缩放 · 拖拽平移 · 悬停核看基因 · R 复位 · F 影院 · H 折叠状态栏</div>
         <div class="dropcover" id="dropCover"><div>松开以载入轨迹 JSON（schemaVersion 3，兼容 2）</div></div>
-        <div class="tip glass" id="tip"></div>
         <div class="replay-badge mono hidden" id="replayBadge"></div>
         <div class="analysis-panel glass" id="analysisPanel">
           <div class="analysis-head">
@@ -170,7 +176,7 @@
         </label>
         <ul class="keys">
           <li><kbd>空格</kbd> 播放/暂停　<kbd>←</kbd><kbd>→</kbd> 单步（Shift ×10）</li>
-          <li><kbd>R</kbd> 复位视角　<kbd>F</kbd> 影院　<kbd>H</kbd> 折叠本栏</li>
+          <li><kbd>R</kbd> 复位视角　<kbd>F</kbd> 地图铺屏　<kbd>H</kbd> 折叠本栏</li>
           <li><kbd>L</kbd> 循环　<kbd>Esc</kbd> 返回/退出</li>
         </ul>
       </aside>
@@ -207,11 +213,14 @@
     <div class="toolbar glass" id="envToolbar">
       <div class="env-axes" id="envAxes"><!-- 四轴五档由 main.js 生成 --></div>
       <div class="env-events">
-        <span class="ev-title mono">事件卡</span>
-        <button class="evbtn" id="btnWinter" type="button" title="光照骤降 · 代谢上升">❄ 寒冬</button>
-        <button class="evbtn" id="btnBloom" type="button" title="光合倍增 · 蓝细菌爆发">🌱 藻华</button>
-        <button class="evbtn" id="btnHarvest" type="button" title="立即注入一批能量">🌾 收获</button>
-        <button class="evbtn" id="btnPlague" type="button" title="蓝细菌批量凋亡">☠ 瘟疫</button>
+        <span class="ev-title mono">环境事件</span>
+        <!-- P0-5：普通玩法只剩"有持续时间的环境变化"。收获/瘟疫/藻华三个直接
+             加能量、直接扣余额、直接造菌的按钮已撤下（后端也拒绝这三个命令名）。 -->
+        <button class="evbtn" id="btnWinter" type="button"
+                title="光照基线 -0.35，持续 600 帧后自动恢复（不直接改任何核的能量）">❄ 寒冬</button>
+        <span class="ev-state mono" id="winterState">—</span>
+        <button class="btn btn-mini" id="btnSeedCyano" type="button"
+                title="外部输入：显式播种蓝细菌节点（不是自然生长，也不是事件奖励）">🌱 播种蓝细菌</button>
       </div>
       <div class="envside">
         <button class="btn btn-mini" id="btnPresetStable" type="button" title="四轴回中性">⚖ 稳定态</button>
@@ -268,6 +277,7 @@
   </section>
 </main>
 
+<div class="tip glass" id="tip"></div>
 <div class="toast mono" id="toast" role="status"></div>
 
 <script src="js/utils.js"></script>

@@ -1,4 +1,4 @@
-﻿// agentsim - perception/AgentSensors.h
+// agentsim - perception/AgentSensors.h
 // 感知层：把环境只读快照压缩成 24 维 SensorVector。纯函数，不写任何状态。
 // G1 修复：向量类型来自中立头 core/SensorTypes.h，探测层不再 include 决策层头文件，
 // 依赖链恢复单向：environment -> perception -> decision（GOAL G2 / S4）。
@@ -20,6 +20,9 @@
 //   scoutCount 只表达侦察球数量；<=0（无侦察球）时退到"原生盲区"=
 //   senseRadius 的 1/4（核保留最基本的接触感知，不至于完全瞎），而非 0。
 #pragma once
+#include <functional>
+#include <vector>
+
 #include "core/Vec2.h"
 #include "core/Config.h"
 #include "core/SensorTypes.h"
@@ -51,7 +54,30 @@ struct NeighborInfo {
 // S17：有效感知半径（公开纯函数，供决策/单测直测）。
 // scoutCount<=0：baseRadius * 0.25（原生盲区）；否则 baseRadius * sqrt(1+n)
 //（边际递减扩张），上限 baseRadius * 4。资源球在此函数中没有入口。
+//
+// 规则 v2（P2 侦察球重做）：这个函数只剩"核的近身感知"这一个用途。
+// 侦察球不再放大核的探测半径，而是**从球自己所在的世界坐标**采样（见
+// ScoutSample），经有效控制距离回传给宿主。因此：
+//   · 核永远保留自己的近身感知（不是"没有球就全瞎"）；
+//   · 球把感知"搬到"食物旁边才真正有用（验收 A9）；
+//   · 资源球/护盾球仍然没有任何感知入口（构造性成立）。
 double effectiveSenseRadius(double baseRadius, int scoutCount);
+
+// ---- 规则 v2：一个受控侦察球的采样点 ----
+// 只有满足以下两条的侦察球才进入本表（判定在组合根，用环面最短距离）：
+//   1) 它是该核的受控球（ownerId == 该核 id）；
+//   2) 球与宿主的环面距离 <= scoutControlRadius（有效控制距离）——超出控制
+//      范围的球探到的东西回不来。
+// pos 为球**真实世界坐标**（不是轨道极坐标换算的近似）。
+struct ScoutSample {
+    Vec2 pos{};
+    double radius = 0.0;
+};
+
+// 可食量查询函数（感知层只读调用，不持有 CyanoParams 的拷贝语义）。
+// 用 std::function 是为了让 perception 不必 include 环境层的参数结构——
+// 依赖方向仍是 environment -> perception（单向）。
+using EdibleFn = std::function<double(const CyanoNode&)>;
 
 // 纯函数：只读环境，不写任何状态。
 // 读噪声幅度 = readNoiseK * speed / (1 + speed)，由传入 rng 产生（rng 可为 nullptr 表示无噪声）。
@@ -97,6 +123,13 @@ double effectiveSenseRadius(double baseRadius, int scoutCount);
 //   s[23] 最近目标距离：items[0].dist / R，clamp01；count==0 恒 1。
 //   s[0..17] 逐位不变（回归安全）：本函数对 rng 的消耗序不变、对 s[0..17] 的
 //   写入序不变，R2 六维全部在尾部追加。
+// 规则 v2 追加两个末位参数（带默认值，旧调用点零改动）：
+//   edibleOf     可食量口径（material - minStructure）。传 nullptr 时退回
+//                "任何存活节点都算候选"（既有单测的旧语义，不改变它们的断言）。
+//                生产路径恒传，保证感知/选目标/取食/扣库存用同一份定义（A3）。
+//   scouts       受控且有效的侦察球采样点（见 ScoutSample）；空 = 只有近身感知。
+//                侦察球采样不消耗 rng（与尾部 6 维的确定性通道同口径），
+//                并且**只增加候选、不放大半径**——资源球没有这个入口。
 SensorVector sense(const AgentEnvironment& env, Vec2 self, Vec2 vel, double speed,
                    const PolicyConfig& cfg, PCG32* rng,
                    const std::vector<CyanoNode>& cyanoNodes = std::vector<CyanoNode>{},
@@ -105,6 +138,8 @@ SensorVector sense(const AgentEnvironment& env, Vec2 self, Vec2 vel, double spee
                    int scoutCount = 0,
                    const NeighborInfo& nearest = NeighborInfo{},   // s[18..20]
                    double energyRatio = 0.0,                        // s[21]
-                   const TargetList& targets = TargetList{});       // s[22..23]
+                   const TargetList& targets = TargetList{},        // s[22..23]
+                   const std::vector<ScoutSample>& scouts = std::vector<ScoutSample>{},
+                   const EdibleFn& edibleOf = EdibleFn{});
 
 } // namespace agentsim

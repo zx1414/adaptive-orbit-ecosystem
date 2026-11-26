@@ -1,7 +1,7 @@
 #pragma once
 // agentsim - app/SaveStore.h（R5-C 存档系统）
 // 存档目录管理：saves/<名字>/{save.bin, meta.txt, timeline.bin}。
-//   save.bin    = 版本头(magic ASAV + version=1) + cfg 关键字段 + policyName
+//   save.bin    = 版本头(magic ASAV + version=2) + 配置块 + policyName
 //                 + Simulation::serializeState 的全量实体态（小端二进制）。
 //   meta.txt    = name/frame/seed/aliveNuclei/savedAt 的 key=value 文本（人可读）。
 //   timeline.bin= Timeline 的检查点序列（由 Timeline::exportTo/importFrom 读写）。
@@ -64,7 +64,7 @@ namespace savedetail {
 bool writeCfgBlock(std::ostream& os, const SimConfig& cfg,
                    const std::string& policyName, std::string& err);
 bool readCfgBlock(std::istream& is, SimConfig& cfg,
-                  std::string& policyName, std::string& err);
+                  std::string& policyName, std::string& err, bool extended = true);
 } // namespace savedetail
 
 } // namespace app

@@ -9,10 +9,6 @@
 | PLAYBOOK.md | 多代理流水线工作法（可直接复制的提示词手册） | 流程文档，与当前代码无关；WORKFLOW.md 是它的完整叙事版 |
 | WORKFLOW.md | 长线任务工作流手册（完整叙事 + 案例复盘） | 同上，过程方法论文档 |
 | PROMPTS.md | 从本项目提炼的提示词模板集 | 同上 |
-| DELIVERY.md | 2026-10-31 交付说明（审查用） | 时效性交付单 |
-| NIGHT-SHIFT.md | 夜班运行手册（夜间唯一循环指令） | 该工作模式已结束 |
-| NIGHT-SUMMARY.md | 夜班结果摘要 | 同上 |
-| RETROSPECTIVE.md | 13 小时夜班复盘（基于会话日志） | 同上 |
 | SPEC-ADDENDUM.md | 用户规格补充回答（2026-10-31） | 内容已并入 GOAL.md 体系 |
 
 **想了解当前版本**：回 [../../README.md](../../README.md)（总手册）与 [../GOAL.md](../GOAL.md)（成功标准）。

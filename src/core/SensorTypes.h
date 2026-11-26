@@ -53,6 +53,7 @@ struct ActionVector {
     double dirX = 0.0;   // 期望方向（未归一化也可）
     double dirY = 0.0;
     double boost = 0.0;  // 0..1 冲刺意愿，影响速度
+    double speedScale = 1.0;  // 0..1 行进速度比例
 
     // ---- R2 新增：点名施力（V2-SPEC-AMEND-1 §2）----
     // forceSlot = TargetList 下标；-1 表示本帧不施力（默认，也是"不花能量"的唯一方式）。

@@ -1,4 +1,4 @@
-﻿// agentsim - perception/AgentSensors.cpp
+// agentsim - perception/AgentSensors.cpp
 // 24 维传感器填充。R1-B：只读 AgentEnvironment（环面几何）+ 调用方传入的
 // 蓝细菌节点容器（唯一食物来源）+ TemperatureField，不写任何状态。
 // 噪声由调用方传入的 PCG32 产生；rng == nullptr 表示无噪声（确定性路径）。
@@ -84,7 +84,9 @@ SensorVector sense(const AgentEnvironment& env, Vec2 self, Vec2 vel, double spee
                    const TemperatureField& temp, const Terrain* terrain,
                    int scoutCount,
                    const NeighborInfo& nearest, double energyRatio,
-                   const TargetList& targets) {
+                   const TargetList& targets,
+                   const std::vector<ScoutSample>& scouts,
+                   const EdibleFn& edibleOf) {
     SensorVector s{};
 
     const double w = env.config().world.width;
@@ -93,6 +95,12 @@ SensorVector sense(const AgentEnvironment& env, Vec2 self, Vec2 vel, double spee
     // S17：本帧有效感知半径。查询半径与全部归一化分母统一用它，
     // 不再直接用 cfg.senseRadius（scoutCount<=0 时 = 1/4 原生盲区）。
     const double R = effectiveSenseRadius(cfg.senseRadius, scoutCount);
+    double observationRange = R;
+    for (const ScoutSample& scout : scouts) {
+        if (scout.radius > 0.0)
+            observationRange = std::max(observationRange,
+                                        env.torusDistance(self, scout.pos) + scout.radius);
+    }
 
     // ---- [0..9] 蓝细菌特征（R1-B）：半径内存活节点，按最小环距升序取最近 3 个 ----
     struct Cand {
@@ -101,24 +109,78 @@ SensorVector sense(const AgentEnvironment& env, Vec2 self, Vec2 vel, double spee
     };
     Cand cand[3];
     int candN = 0;
-    // 单遍"最近 3 候选"维护（插入排序，候选数 <= 3；节点按容器下标顺序扫描，
-    // 距离相等时先扫到的优先——确定性红线下标序 tie-break）。
-    for (const CyanoNode& node : cyanoNodes) {
-        if (!node.alive) continue;
-        Cand c;
-        c.delta = env.torusDelta(self, node.pos);
-        c.dist = length(c.delta);
-        if (!(c.dist <= R)) continue; // 半径外不进入候选（<=：贴边算在内）
-        // 插入到 cand[0..candN)（升序；扫描序即 tie-break 序）。
-        int pos = candN < 3 ? candN : 2;
-        while (pos > 0 && c.dist < cand[pos - 1].dist) {
-            if (pos < 3) cand[pos] = cand[pos - 1];
-            --pos;
+    // 规则 v2（A3）：候选的入选条件与"这个节点还剩多少能吃"用同一份口径。
+    // 旧版只看 node.alive，于是核会一直盯着一片已经被吃到 minStructure 的节点
+    //（旧式的"15 单位不可食保底"让它永远活着且永远吃不动的效果）。
+    // 现在：edible <= 0 的节点**不是**候选，最近的不可食节点不会挡住旁边还能吃
+    // 的那一个。
+    //
+    // 规则 v2（A9）：侦察球把感知点搬到它自己所在的世界坐标——每个受控且
+    // 在控制距离内的球贡献一个采样点，用环面最短距离从该点取候选；核自身
+    // 的近身感知照旧（R 半径）。重复目标（核与球看到同一个节点）在这里合并：
+    // 按节点身份去重，取**对该核更近**的那一个采样（距离才是决策真正消费的量）。
+    // 侦察采样不消耗 rng（与尾部确定性通道同口径）。
+    struct Seen {
+        Vec2 delta{};   // self -> 节点 的最小环距位移（决策消费的量）
+        double dist = 0.0;
+        EntityId id = 0;
+    };
+    Seen seen[3];
+    int seenN = 0;
+    auto considerNode = [&](const CyanoNode& node) {
+        if (!node.alive) return;
+        const double edibleNow = edibleOf ? edibleOf(node) : 1.0;
+        if (!(edibleNow > 0.0)) return;   // 已无可食组织：不是候选（A3）
+        const Vec2 dSelf = env.torusDelta(self, node.pos);
+        const double distSelf = length(dSelf);
+        // 可选性判定：核近身范围内，或任一侦察采样点读到它。
+        // 性能：单遍扫描每个节点至多算 (1 + scouts) 次环距，早退；侦察球表为空
+        // （无球 / 未接通）时与旧路径等价，零额外开销。
+        bool reachable = distSelf <= R;
+        if (!reachable) {
+            for (const ScoutSample& sp : scouts) {
+                if (sp.radius > 0.0 && env.torusDistance(sp.pos, node.pos) <= sp.radius) {
+                    reachable = true;
+                    break;
+                }
+            }
         }
-        if (pos < 3) {
-            cand[pos] = c;
-            if (candN < 3) ++candN;
+        if (!reachable) return;
+        // 去重：同一个节点只保留一个条目，取更近的读数（距离即决策输入）。
+        for (int i = 0; i < seenN; ++i) {
+            if (seen[i].id != node.id) continue;
+            if (distSelf < seen[i].dist) {
+                seen[i].delta = dSelf;
+                seen[i].dist = distSelf;
+            }
+            return;
         }
+        if (seenN >= 3) {
+            // 已满：只有比最远者更近才替换。
+            if (!(distSelf < seen[2].dist)) return;
+            seen[2].delta = dSelf;
+            seen[2].dist = distSelf;
+            seen[2].id = node.id;
+        } else {
+            seen[seenN].delta = dSelf;
+            seen[seenN].dist = distSelf;
+            seen[seenN].id = node.id;
+            ++seenN;
+        }
+        // 插入排序维持升序（候选数 <= 3，常数极小）。
+        int pos2 = seenN - 1;
+        while (pos2 > 0 && seen[pos2].dist < seen[pos2 - 1].dist) {
+            const Seen tmp = seen[pos2];
+            seen[pos2] = seen[pos2 - 1];
+            seen[pos2 - 1] = tmp;
+            --pos2;
+        }
+    };
+    for (const CyanoNode& node : cyanoNodes) considerNode(node);
+    for (int i = 0; i < seenN && i < 3; ++i) {
+        cand[i].delta = seen[i].delta;
+        cand[i].dist = seen[i].dist;
+        candN = i + 1;
     }
 
     // 本帧读噪声幅度（S6 读通道）：speed=0 时 amp=0，随速度单调递增。
@@ -130,7 +192,7 @@ SensorVector sense(const AgentEnvironment& env, Vec2 self, Vec2 vel, double spee
         amp = readNoiseAmp(speed) * (1.0 + kTempGain * d);
     }
     // S16：随机偏移在候选循环内逐候选独立抽取（本帧第 1..3 组随机数）。
-    const double r = R; // 归一化分母 = 有效感知半径（S17）
+    const double r = observationRange > 0.0 ? observationRange : 1.0;
     for (int i = 0; i < 3; ++i) {
         if (i < candN && cand[i].dist > 0.0) {
             // [0..5] 最近 3 个蓝细菌节点的相对环距方向（单位向量），x/y 交错。
@@ -140,6 +202,8 @@ SensorVector sense(const AgentEnvironment& env, Vec2 self, Vec2 vel, double spee
             // [6..8] 归一化接近度 1 - dist/R：越近越大，有效半径外 <=0。
             double prox = 1.0 - cand[i].dist / r;
             prox = std::max(0.0, std::min(1.0, prox));
+            // 保留采样边界的方向，默认策略用正接近度区分空槽。
+            if (!scouts.empty()) prox = std::max(prox, 1e-9);
             s[6 + i] = prox;
             // S16：每个候选独立抽取 U(-amp,+amp) 偏移；amp==0（speed==0）或
             // rng==nullptr 时不抽，两条路径的 rng 消耗量保持为 0（逐位零副作用）。

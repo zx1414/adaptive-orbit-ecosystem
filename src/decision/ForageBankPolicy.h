@@ -1,4 +1,4 @@
-﻿// agentsim - decision/ForageBankPolicy.h
+// agentsim - decision/ForageBankPolicy.h
 // 觅食-蓄能两态策略：风险偏好随自身状态变化（能量足则停手蓄能，不足才全力觅食）。
 //   · 觅食态：能量代理低 -> 直奔最近食物 (s[0], s[1])，boost=1.0 冲刺抢能量。
 //   · 蓄能态：能量代理高 -> 停止扩张（逆当前速度方向缓行/原地），boost=0.0。
@@ -27,8 +27,13 @@
 //     kPullBoost * boost（与冲刺意愿同源）。注意：这是"拉自己过去/把球拉过来"
 //     的复合意图，行为层按校验与扣费规则执行，决策只表达方向意图。
 //   · mod[0]（视野）：觅食态放大视野（找食物优先），蓄能态收窄（省心）。
+//
+// P0-4（记忆归个体）：两态滞回状态`forageForaging`住在 PolicyMemory 里，由每个核
+// 自己持有一份；本类实例只保留构造期标定好的不可变参数 p_。A 核的觅食经历不会
+// 再改写 B 核的状态（验收 A4）。
 #pragma once
 #include "decision/IDecisionPolicy.h"
+#include "decision/PolicyMemory.h"
 
 namespace agentsim {
 
@@ -45,21 +50,24 @@ public:
     explicit ForageBankPolicy(const Params& p = {});
 
     // 纯确定性；非有限输入清洗为 0，全 NaN 输入也不产生 NaN 输出。
-    ActionVector decide(const SensorVector& s, const TargetList& targets) override;
-    using IDecisionPolicy::decide; // 旧单参调用面（基类非虚重载）
+    // memory 是本个体的两态滞回历史（就地更新），默认值 = 蓄能态起步。
+    ActionVector decide(const SensorVector& s, const TargetList& targets,
+                        PolicyMemory& memory) override;
+    using IDecisionPolicy::decide; // 基类两参/单参兼容重载（一次性无状态语义）
     const char* name() const override { return "foragebank"; }
 
     // ---- 可解释性接口（供单测验证）----
     // 能量代理 ∈ [0,1]：wMargin*s[13] + (1-wMargin)*(1-s[12])，各项先 clamp01。
     double energyProxy(const SensorVector& s) const;
-    // 当前状态：true = 觅食态，false = 蓄能态（中间带 = 上帧状态）。
-    bool foraging() const { return foraging_; }
-    // 清空两态记忆（回到默认蓄能态，单测确定性验证用）。
-    void reset() { foraging_ = false; }
+    // 该个体当前状态：true = 觅食态，false = 蓄能态（中间带 = 上帧状态）。
+    // 静态 + 收记忆参数：状态已不在策略实例里（P0-4）。
+    static bool foraging(const PolicyMemory& memory) { return memory.forageForaging != 0; }
+    // 清空本策略的两态记忆（回到默认蓄能态，单测确定性验证用）。
+    // 只动自己的字段，不影响同一份记忆里其它策略的块。
+    static void reset(PolicyMemory& memory) { memory.forageForaging = 0; }
 
 private:
-    Params p_;
-    bool foraging_ = false; // 两态滞回记忆：默认保守蓄能起步
+    Params p_; // 构造期标定，不可变
 };
 
 } // namespace agentsim

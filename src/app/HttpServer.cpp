@@ -204,9 +204,9 @@ void HttpServer::stop() {
         shutdown(listenSocket_, SHUT_RDWR);
 #endif
         closesocket(listenSocket_);
-        listenSocket_ = static_cast<NativeSocket>(~static_cast<std::uintptr_t>(0));
     }
     if (thread_.joinable()) thread_.join();
+    listenSocket_ = static_cast<NativeSocket>(~static_cast<std::uintptr_t>(0));
 }
 
 void HttpServer::acceptLoop() {

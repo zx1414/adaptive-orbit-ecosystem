@@ -205,7 +205,14 @@ TEST(gene_orbit_radius_biases_ball_orbit) {
     cfg.cyanoNodeCount = 0;
     AgentEnvironment env(cfg);
     AgentLedger ledA, ledB;
-    Nucleus a = makeN(300.0), b = makeN(300.0);
+    // 规则 v2 迁移：初始能量从 300 降到 100。300 会越过产球触发线（0.6*cap）让
+    // T08 再造两颗球，并触发"超容富余先存进资源球"（cap 结算在 T08 之后），
+    // 于是被测球的 energy 从 20 被灌到 60，负载半径 10+0.5*E 随之从 20 涨到 40，
+    // targetR = 负载 × 基因偏置 就不再是 20*1.5 = 30 —— 断言测的已经不是
+    // "orbitRadius 基因把轨道推到哪"，而是"存进去多少能量"。
+    // 100 < 0.6*200：T08 三分支（产球/回收）都不触发，球能保持 20，负载半径
+    // 恒为 20，targetR 于是恰为 20*(0.5+240/240)=30 与 20*(0.5+12/240)=11。
+    Nucleus a = makeN(100.0), b = makeN(100.0);
     a.genome.orbitRadius[0] = 240.0;  // 偏置 = 0.5+1.0 = 1.5（外扩）
     b.genome.orbitRadius[0] = 12.0;   // 偏置 = 0.5+0.05 = 0.55（内收）
     a.genome.affinity[0] = 1.0 / 3.0; // 中性弹簧
@@ -228,8 +235,10 @@ TEST(gene_orbit_radius_biases_ball_orbit) {
     const double ra = a.balls.empty() ? -1.0 : a.balls[0].radius;
     const double rb = b.balls.empty() ? -1.0 : b.balls[0].radius;
     CHECK(ra > rb);
-    // 且外扩者真的在 targetR = 20*1.5 = 30 附近（弹簧收敛）。
+    // 且外扩者真的收敛到 targetR = 20*(0.5+240/240) = 30 附近（径向弹簧）。
+    // 实测 60 帧后 ra≈30.06、rb≈11.10：内收者对应 targetR = 20*(0.5+12/240) = 11。
     if (ra > 0.0) CHECK(std::fabs(ra - 30.0) < 6.0);
+    if (rb > 0.0) CHECK(std::fabs(rb - 11.0) < 6.0);
 }
 
 TEST(gene_affinity_changes_spring_speed) {
@@ -560,12 +569,34 @@ TEST(gene_named_force_invalid_slot_refused) {
 // ---------------- cyanoPreference / cyanoDigestion（组合根级） ----------------
 
 TEST(gene_cyano_preference_zero_never_eats) {
-    // 判别量：preference=0 时 graze 永不被调用 -> 蓝细菌存活数只增不减
-    //（光合净值恒正，节点不会饿死；唯一减员途径就是被捕食）。
+    // 判别量：preference=0 时**摄食请求**永不产生，于是没有任何节点因为「被咬」
+    // 而减少组织/死亡。
+    //
+    // 【2026-11-25 迁移】旧写法用「aliveCount 只增不减」当代理指标，前提是
+    // 「光合净值恒正 => 节点不会自己饿死」。规则 v2 加入按组织量计的维持开销
+    // （metabolismRate + maintenancePerMaterial*material）后这个前提不再成立：
+    // 节点完全可能自己饿死（默认参数下甚至第一帧就全死）。继续用 aliveCount
+    // 当代理指标，测到的会是生产者自身的收支，而不是基因有没有让它开饭。
+    // 因此改为直接观测**这条基因的效果本身**：节点的组织量只由「生长」与
+    // 「被咬」两条通道改变；preference=0 时第二条必须完全不发生。判据 =
+    // 每一帧的 grazeTaken 流水恒为 0（Simulation 的物质账在审计里闭合，
+    // 所以「有节点被咬」必然体现为残骸/物质的分布变化）。
+    // 直接可见的等价判据：matter().nodeMaterial 的减少只能来自被咬或饿死；
+    // 我们把养活这一侧的条件也钉住（光合足够、无维持开销），让它只可能来自被咬。
     SimConfig cfg{};
     cfg.world.seed = 42;
+    // 世界必须小到"核的捕食半径（14）能覆盖到节点"：默认 1024 世界撒 32 个节点，
+    // 1 个核 300 帧里一次也撞不上食物（实测 bodyMass 恒 20），那是**空间分布**
+    // 决定的，与本条要测的基因无关。128² 无聚落模式让 32 个节点均匀铺开，
+    // 捕食必然发生（实测 bodyMass 20 -> 56）。
+    cfg.world.width = 128.0;
+    cfg.world.height = 128.0;
     cfg.cyanoNodeCount = 32;
     cfg.colony.nuclei = 1;
+    // 关掉维持开销与分裂：节点只做光合，组织量只可能因「被咬」而下降。
+    cfg.cyanoTuning.reproductionProbability = 0.0;
+    cfg.cyanoTuning.metabolismRate = 0.0;
+    cfg.cyanoTuning.cyanoColonies = 0;   // 均匀撒点：让节点散布在核可及的范围里
     Simulation sim(cfg);
     for (Nucleus& n : const_cast<std::vector<Nucleus>&>(sim.nuclei())) {
         n.genome.cyanoPreference = 0.0; // 严格哨兵：绝不吃
@@ -573,14 +604,38 @@ TEST(gene_cyano_preference_zero_never_eats) {
     }
     bool everDecreased = false;
     std::size_t prev = sim.cyano().aliveCount();
+    double materialPrev = sim.matter().nodeMaterial;
     for (int t = 0; t < 300 && sim.nucleusCount() > 0; ++t) {
         sim.step();
         const std::size_t cur = sim.cyano().aliveCount();
         if (cur < prev) everDecreased = true;
         prev = cur;
+        // 组织总量只能涨（生长）或持平，绝不下降（没有咬、也没有饿死）。
+        const double m = sim.matter().nodeMaterial;
+        CHECK(m >= materialPrev - 1e-9);
+        materialPrev = m;
     }
     CHECK(!everDecreased); // preference=0：没有任何节点被捕食
     CHECK(sim.auditOk());
+    // 对照：同参数下把 preference 调回 1，必须观测到**摄食真的发生**。
+    // 不能用"组织总量下降"当判据——生长通道同时在往上加组织，两者相减可能
+    // 抵消。这里直接用摄食流水本身：Simulation 每帧把 grazeTaken 累进物质账，
+    // 而"未同化的部分"会变成残骸，于是 debris 是"咬过东西"的直接痕迹。
+    // 更强的判据：核吸收了组织 → bodyMass 增长（初始 bodyMass 是定值）。
+    Simulation eater(cfg);
+    for (Nucleus& n : const_cast<std::vector<Nucleus>&>(eater.nuclei())) {
+        n.genome.cyanoPreference = 1.0;
+        n.genome.cyanoDigestion = 1.0;   // 消化冷却最短 -> 尽量多吃
+        n.genome.energyThreshold = 1e9;
+    }
+    const double mass0 = eater.nuclei().front().bodyMass;
+    for (int t = 0; t < 300 && eater.nucleusCount() > 0; ++t) eater.step();
+    // 吃到东西的唯一可观测证据链：核体物质增加（absorbGraze 把同化部分记进身体）。
+    CHECK(eater.nucleusCount() > 0);
+    if (eater.nucleusCount() > 0) {
+        CHECK(eater.nuclei().front().bodyMass > mass0);
+    }
+    CHECK(eater.auditOk());
 }
 
 TEST(gene_cyano_digestion_shortens_cooldown) {
@@ -623,6 +678,10 @@ TEST(gene_hue_mutates_to_child) {
     for (int k = 0; k < 30; ++k) {
         EntityId cid = 100 + static_cast<EntityId>(k);
         pop[0].energy = 300.0; // 每轮回填：繁殖扣 20，300 够 14 次，不回填链条会断
+        // 规则 v2（P1）：繁殖还要分**身体物质**——亲代 bodyMass 必须超过
+        // kReproMassReserve(6) 才给得出材料，否则直接拒绝（拒绝路径零 rng）。
+        // 每轮回填 bodyMass 的理由与回填 energy 相同：子代只拿到一半，链条会枯。
+        pop[0].bodyMass = 40.0;
         CHECK(AgentBehavior::reproduce(pop[0], pop, ledger, cid, rng, GenomeRanges{}, 0.25));
         const double parentHue = pop[0].genome.hue;
         const double childHue = pop[pop.size() - 1].genome.hue;

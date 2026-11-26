@@ -4288,7 +4288,7 @@ adaptive-orbit-ecosystem/
 | [docs/experiments/](docs/experiments/) | 八策略对比 / 感知机进化 / 趋温策略实验数据 |
 | [docs/reviews/](docs/reviews/) | 红队对抗审查报告 |
 | [docs/accept/ACC-R11-acceptance.md](docs/accept/ACC-R11-acceptance.md) | R11 验收报告（四项问题定位 + 原版对比） |
-| [docs/archive/](docs/archive/) | 旧版过程文档（多代理工作法 / 夜班记录 / 迁移对齐清单）— 冻结，仅供参考 |
+| [docs/archive/](docs/archive/) | 可复用的历史工作流、提示词模板与迁移对齐清单 |
 | [CHANGELOG.md](CHANGELOG.md) | 版本历史与已知问题 |
 
 ---

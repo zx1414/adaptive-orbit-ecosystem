@@ -1,4 +1,4 @@
-﻿// agentsim - app/RuntimeEnv.cpp
+// agentsim - app/RuntimeEnv.cpp
 // R3-B：EnvChange{key,value} -> SimConfig 字段映射的实现（映射唯一权威）。
 // 总账对 docs/PARAM-MAPPING.md：
 //   genome 24 键 -> colony.genomeRanges（Init 收敛到 v + Clamp 扩到包含 v，见 genomeRange）
@@ -115,10 +115,9 @@ const std::vector<Entry>& entryTable() {
         {"ball_vel_range", [](SimConfig& c, double v) { c.ball.velRange = v; }},
         {"ball_initial_energy", [](SimConfig& c, double v) { c.ball.initialEnergy = v; }},
         {"ball_energy_cap", [](SimConfig& c, double v) { c.ball.energyCap = v; }},
-        {"ball_spawn_probability", [](SimConfig& c, double v) { c.cyanoTuning.ballSpawnProbability = v; }},
-        {"ball_spawn_cost", [](SimConfig& c, double v) { c.cyanoTuning.ballSpawnCost = v; }},
-        {"ball_spawn_min_dist", [](SimConfig& c, double v) { c.cyanoTuning.ballSpawnMinDist = v; }},
-        {"ball_spawn_max_dist", [](SimConfig& c, double v) { c.cyanoTuning.ballSpawnMaxDist = v; }},
+        // 【P2 提前收口】ball_spawn_probability / ball_spawn_cost / ball_spawn_min_dist /
+        // ball_spawn_max_dist 四行已删：蓝细菌产球退出普通玩法，任何接口都不再能
+        // 把产球概率/成本写进 CyanoTuning（字段本身留给 P2 收尾与存档兼容）。
         {"ball_loss_cost", [](SimConfig& c, double v) { c.ball.lossCost = v; }},
         {"detach_radius", [](SimConfig& c, double v) { c.ball.detachRadius = v; }},
 
@@ -126,8 +125,8 @@ const std::vector<Entry>& entryTable() {
         {"basal_cost", [](SimConfig& c, double v) { c.nucleus.respirationBase = v; }},
         {"respiration_base", [](SimConfig& c, double v) { c.nucleus.respirationBase = v; }},  // 与 basal_cost 同字段（映射表去重决策）
         {"speed_cost_k", [](SimConfig& c, double v) { c.nucleus.locomotionCost = v; }},
-    {"migration_bonus", [](SimConfig& c, double v) { c.nucleus.migrationBonus = v; }},   // R9-A
-    {"migration_radius", [](SimConfig& c, double v) { c.nucleus.migrationRadius = v; }}, // R9-A
+    // 【P0 删除】migration_bonus / migration_radius 两行已删：迁移回报规则整体移除，
+    // NucleusTuning 里对应的两个字段也一并删除，不存在"重新启用旧行为"的入口。
         {"speed_cost_exponent", [](SimConfig& c, double v) { c.nucleus.speedCostExponent = v; }},
         {"reproduction_cost_ratio", [](SimConfig& c, double v) { c.nucleus.reproductionCostRatio = v; }},
         {"child_energy_ratio", [](SimConfig& c, double v) { c.nucleus.childEnergyRatio = v; }},
@@ -152,15 +151,10 @@ const std::vector<Entry>& entryTable() {
         {"cyano_transfer_deadband", [](SimConfig& c, double v) { c.cyanoTuning.linkDeadband = v; }},
         {"cyano_min_node_separation", [](SimConfig& c, double v) { c.cyanoTuning.minSeparation = v; }},
         {"cyano_predation_radius", [](SimConfig& c, double v) { c.nucleus.cyanoPredationRadius = v; }},
-        {"cyano_conversion_mode", [](SimConfig& c, double v) { c.cyanoTuning.conversionMode = toNonNegInt(v); }},
+        // 【P0 删除】conversion_mode / _exponent / _speed_ref / _accel_ref / _w_speed /
+        // _w_accel 六行已删（对应 CyanoTuning 字段也删除）：摄食量不再按遗传最高速度
+        // 折减，普通玩法里没有重新启用旧折减公式的入口。保留基率与钳位上下限。
         {"cyano_conversion_rate", [](SimConfig& c, double v) { c.cyanoTuning.conversionRate = v; }},
-        {"cyano_conversion_exponent", [](SimConfig& c, double v) { c.cyanoTuning.conversionExponent = v; }},
-        {"cyano_conversion_speed_ref", [](SimConfig& c, double v) { c.cyanoTuning.conversionSpeedRef = v; }},
-        {"cyano_conversion_accel_ref", [](SimConfig& c, double v) { c.cyanoTuning.conversionAccelRef = v; }},
-        {"cyano_conversion_w_speed", [](SimConfig& c, double v) { c.cyanoTuning.conversionWSpeed = v; }},
-        {"cyano_conversion_w_accel", [](SimConfig& c, double v) { c.cyanoTuning.conversionWAccel = v; }},
-        {"cyano_conversion_min_rate", [](SimConfig& c, double v) { c.cyanoTuning.conversionMinRate = v; }},
-        {"cyano_conversion_max_rate", [](SimConfig& c, double v) { c.cyanoTuning.conversionMaxRate = v; }},
         {"cyano_hue_jitter", [](SimConfig& c, double v) { c.cyanoTuning.hueJitterSigma = v; }},
 
         // ===== genome（24 全接；GenomeRanges 对同族三类型共享同一区间，
@@ -269,10 +263,9 @@ const std::vector<Entry>& entryTable() {
         // ===== 运行面专用键 =====
         {"cyano_enabled", [](SimConfig& c, double v) { c.runtime.cyanoEnabled = v >= 0.5; }},
 
-        // ===== EnvControl food 轴/细调的 R1-C 拼写别名（schema 无此键；
-        // 不接的话 axis.food 换档与该细调杆会整体落进 unwired）=====
-        {"cyano_ball_spawn_probability", [](SimConfig& c, double v) { c.cyanoTuning.ballSpawnProbability = v; }},
-        {"cyano_ball_spawn_cost", [](SimConfig& c, double v) { c.cyanoTuning.ballSpawnCost = v; }},
+        // 【P2 提前收口】EnvControl food 轴的两个产球别名（cyano_ball_spawn_probability /
+        // cyano_ball_spawn_cost）已随 food 轴档位一起删除——轴档位里不再有产球项，
+        // 别名继续留着就是"删了说明、实际还能写"的后门。
         };
         return std::vector<Entry>(rows, rows + sizeof(rows) / sizeof(rows[0]));
     }();

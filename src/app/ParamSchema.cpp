@@ -1,4 +1,4 @@
-﻿// agentsim - app/ParamSchema.cpp
+// agentsim - app/ParamSchema.cpp
 // R1-C：参数元数据表 + 校验 + GET /schema 的 JSON。
 //
 // 键名风格沿用 v2.3.1（snake_case），但字段语义以 agentsim 为准：
@@ -84,10 +84,9 @@ const Row kRows[] = {
     {"ball_vel_range", G_FOOD, "新生球初速度随机范围（±）", ParamDef::Type::Double, 0, 50, 5.0},
     {"ball_initial_energy", G_FOOD, "新生自由球初始能量", ParamDef::Type::Double, 0, 1000, 10.0},
     {"ball_energy_cap", G_FOOD, "单球储能上限", ParamDef::Type::Double, 0, 10000, 500.0},
-    {"ball_spawn_probability", G_FOOD, "每帧随机补充自由球概率（0=只靠蓝细菌产球）", ParamDef::Type::Double, 0, 1, 0.0},
-    {"ball_spawn_cost", G_FOOD, "蓝细菌产出一个自由球的能量成本", ParamDef::Type::Double, 0, 1000, 30.0},
-    {"ball_spawn_min_dist", G_FOOD, "产球出生点距产者的最小环面距离", ParamDef::Type::Double, 0, 1000, 10.0},
-    {"ball_spawn_max_dist", G_FOOD, "产球出生点距产者的最大环面距离", ParamDef::Type::Double, 1, 2000, 30.0},
+    // 【P2 提前收口】原 ball_spawn_probability / ball_spawn_cost / ball_spawn_min_dist /
+    // ball_spawn_max_dist 四键已删：蓝细菌产球整条规则退出普通玩法（生产者只靠生长
+    // 与分裂，器官由核自建），玩家可见的参数页里不能再出现"调产球概率"的入口。
     {"ball_loss_cost", G_FOOD, "球脱附/被抢时对原主的扣能；调大丢球代价更高", ParamDef::Type::Double, 0, 1000, 5.0},
     {"detach_radius", G_FOOD, "球距核超过该距离脱附变自由", ParamDef::Type::Double, 10, 2000, 60.0},
     {"regrow_food", G_FOOD, "人工补食开关（蓝细菌之外的第二能量源，默认关）", ParamDef::Type::Bool, 0, 1, 0.0},
@@ -120,15 +119,11 @@ const Row kRows[] = {
     {"cyano_transfer_deadband", G_CYANO, "能量传输死区（差值不超过它不传输）", ParamDef::Type::Double, 0, 100, 1.0},
     {"cyano_min_node_separation", G_CYANO, "节点最小间距；过近则取消分裂", ParamDef::Type::Double, 0, 1000, 10.0},
     {"cyano_predation_radius", G_CYANO, "核捕食节点判定半径（0=禁捕食）", ParamDef::Type::Double, 0, 1000, 12.0},
-    {"cyano_conversion_mode", G_CYANO, "转化率公式形态：0=常数 1=速度反比 2=幂律 3=仅加速度", ParamDef::Type::Int, 0, 3, 1.0},
-    {"cyano_conversion_rate", G_CYANO, "转化率基准系数；调大捕食收益更高", ParamDef::Type::Double, 0, 100, 1.0},
-    {"cyano_conversion_exponent", G_CYANO, "模式 2 的幂指数；调大机动性收益差距更悬殊", ParamDef::Type::Double, 0, 5, 1.0},
-    {"cyano_conversion_speed_ref", G_CYANO, "速度归一化参考值", ParamDef::Type::Double, 1, 10000, 20.0},
-    {"cyano_conversion_accel_ref", G_CYANO, "加速度归一化参考值", ParamDef::Type::Double, 0.01, 10000, 6.0},
-    {"cyano_conversion_w_speed", G_CYANO, "转化率中速度项权重", ParamDef::Type::Double, 0, 10, 1.0},
-    {"cyano_conversion_w_accel", G_CYANO, "转化率中加速度项权重", ParamDef::Type::Double, 0, 10, 1.0},
-    {"cyano_conversion_min_rate", G_CYANO, "转化率下限（防止收益被压到 0）", ParamDef::Type::Double, 0, 100, 0.1},
-    {"cyano_conversion_max_rate", G_CYANO, "转化率上限（防止收益爆炸）", ParamDef::Type::Double, 0, 1000, 1.0},
+    // 【P0 删除】cyano_conversion_mode / _exponent / _speed_ref / _accel_ref /
+    // _w_speed / _w_accel / _min_rate / _max_rate 八键已删：按遗传最高速度或加速度
+    // 折减每口摄食量的整条修正通道（含钳位上下限）随 CyanoTuning 字段一起移除，
+    // 参数页不能再重新启用旧折减公式。只剩一个与机动性无关的基率。
+    {"cyano_conversion_rate", G_CYANO, "转化率基准系数（与速度/加速度无关）；调大捕食收益更高", ParamDef::Type::Double, 0, 100, 1.0},
     {"cyano_hue_jitter", G_CYANO, "子节点色相抖动（度）；调大后代颜色差异更明显", ParamDef::Type::Double, 0, 180, 8.0},
 
     // ===== genome：基因组（min/max = 变异 Clamp 范围；default = 初始化 Init 范围中值）=====
@@ -187,8 +182,18 @@ const Row kRows[] = {
     {"nucleus_init_energy_ratio", G_NUCLEUS, "初始核能量 = 比值 × 繁殖阈值", ParamDef::Type::Double, 0, 2, 1.0},
 };
 
-static_assert(sizeof(kRows) / sizeof(kRows[0]) >= 110,
-              "ParamSchema 表必须覆盖至少 110 个键（V2-SPEC-AMEND-1 后的验收线）");
+// 规则 v2（P0 / P2）共从本表删除 12 个键，旧验收线 110 随之失效：
+//   P0 摄食与迁移：cyano_conversion_mode / _exponent / _speed_ref / _accel_ref /
+//                   _w_speed / _w_accel / _min_rate / _max_rate（8 个）
+//   P2 蓝细菌产球：ball_spawn_probability / ball_spawn_cost / ball_spawn_min_dist /
+//                   ball_spawn_max_dist（4 个）
+// 113 - 12 = 101。这里钉的是"删除后实际键数"，不是为了凑数把阈值调低：
+// 阈值 = 当前行数，任何"顺手加一个无关键把数字补回去"的做法都会立刻失败。
+// 新增键时请同步改这个数字并说明原因（不要改成恒真的下限断言）。
+constexpr std::size_t kParamSchemaRowCount = 101;
+static_assert(sizeof(kRows) / sizeof(kRows[0]) == kParamSchemaRowCount,
+              "ParamSchema 行数与 v2 记录值不符：删/加键必须同步更新 kParamSchemaRowCount "
+              "并在注释里写明增删原因（规则 v2 删除 12 键后为 101）");
 
 // ---- JSON 小工具 ----
 

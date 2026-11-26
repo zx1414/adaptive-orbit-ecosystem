@@ -1,15 +1,16 @@
-﻿// agentsim - decision/BanditPolicy.cpp
+// agentsim - decision/BanditPolicy.cpp
 // T24：BanditPolicy 实现 —— Hedge/EXP3-lite 指数加权两臂混合。
 // 红线：decide() 全程确定性算术，绝不使用 RNG；只消费传入的 SensorVector 与
 // 自存历史，绝不读世界；不 include environment/ sim/ ledger/（依赖守卫）。
 //
 // ============================ 回报估计（设计核心） ============================
 // 感知向量里没有"我上一步做得对不对"的直接信号，回报由两个互补部分合成，
-// 全部只消费：本帧传入感知 s、自存的上一帧感知 prevS_、上一帧自身输出 。
+// 全部只消费：本帧传入感知 s、**本个体记忆里**的上一帧感知 memory.banditPrevS、
+// 上一帧自身输出 memory.banditPrevOut（P0-4 前这些是实例成员）。
 //
 // (1) 环境回报 rEnv ∈ [-1,1]（两臂共享的"结果项"：这一步走得值不值）：
-//       curProx  = max_j clamp01(s[6+j])       本帧最强食物接近度
-//       prevProx = max_j clamp01(prevS_[6+j])  上帧同量（自存历史）
+//       curProx  = max_j clamp01(s[6+j])              本帧最强食物接近度
+//       prevProx = max_j clamp01(memory.banditPrevS[6+j])  上帧同量（个体历史）
 //       gain     = curProx - prevProx          接近度增益：>0 = 上一步走对了
 //       speed    = clamp01(s[12])              速度大小归一化（能量代理，
 //                                              与 RulePolicy 的 urgency 同源）
@@ -106,41 +107,40 @@ BanditPolicy::BanditPolicy(double eta, ThermalPolicy::Params thermalParams, doub
     : rule_(),
       thermal_(thermalParams),
       eta_(clean1(eta)),
-      kModExplore_(clean1(kModExplore)),
-      logWR_(std::log(0.5)),
-      logWT_(std::log(0.5)),
-      wRule_(0.5),
-      wThermal_(0.5),
-      hasPrev_(false),
-      prevS_(),
-      prevARule_(),
-      prevAThermal_(),
-      prevOut_() {
+      kModExplore_(clean1(kModExplore)) {
     if (eta_ < 0.0) eta_ = 0.0;
     if (eta_ > 10.0) eta_ = 10.0;
     if (kModExplore_ > 1.0) kModExplore_ = 1.0;
     if (kModExplore_ < -1.0) kModExplore_ = -1.0;
 }
 
-void BanditPolicy::reset() {
-    logWR_ = std::log(0.5);
-    logWT_ = std::log(0.5);
-    wRule_ = 0.5;
-    wThermal_ = 0.5;
-    hasPrev_ = false;
-    prevS_ = SensorVector();
-    prevARule_ = ActionVector();
-    prevAThermal_ = ActionVector();
-    prevOut_ = ActionVector();
+void BanditPolicy::reset(PolicyMemory& memory) {
+    // 只清本策略的 bandit* 块：同一份记忆里其它策略的字段原样不动。
+    memory.banditLogW[0] = kPolicyLogHalfWeight;
+    memory.banditLogW[1] = kPolicyLogHalfWeight;
+    memory.banditW[0] = 0.5;
+    memory.banditW[1] = 0.5;
+    memory.banditHasPrev = 0;
+    for (int i = 0; i < SensorVector::kDim; ++i) memory.banditPrevS[i] = 0.0;
+    for (int arm = 0; arm < 2; ++arm) {
+        memory.banditPrevArm[arm][0] = 0.0;
+        memory.banditPrevArm[arm][1] = 0.0;
+    }
+    memory.banditPrevOut[0] = 0.0;
+    memory.banditPrevOut[1] = 0.0;
 }
 
-ActionVector BanditPolicy::decide(const SensorVector& sRaw, const TargetList& /*targets*/) {
+ActionVector BanditPolicy::decide(const SensorVector& sRaw, const TargetList& /*targets*/,
+                                  PolicyMemory& memory) {
     // 0) 输入清洗：非有限 -> 0（绝不把 NaN/Inf 带进任何算术）。
     SensorVector s;
     for (int i = 0; i < SensorVector::kDim; ++i) s[i] = clean1(sRaw[i]);
 
     // 1) 两臂各出一招（子策略均为零 RNG 确定性策略；targets 不透传——见文件头
     //    "R2 新通道"说明：施力意图不做混合，保持每臂信用分配的纯净）。
+    //    两臂目前本身无跨帧状态；它们的 decide(s) 走基类兼容重载（一次性无状态语义），
+    //    正是"臂 = 无状态专家"的设计意图。若将来某个臂也需要个体记忆，应在此把
+    //    同一份 memory 的对应块传下去（臂之间用不同的字段块，不得共用）。
     const ActionVector ar = rule_.decide(s);
     const ActionVector at = thermal_.decide(s);
 
@@ -150,19 +150,19 @@ ActionVector BanditPolicy::decide(const SensorVector& sRaw, const TargetList& /*
     unitOrZero(at.dirX, at.dirY, uxT, uyT);
 
     ActionVector out;
-    unitOrZero(wRule_ * uxR + wThermal_ * uxT,
-               wRule_ * uyR + wThermal_ * uyT,
+    unitOrZero(memory.banditW[0] * uxR + memory.banditW[1] * uxT,
+               memory.banditW[0] * uyR + memory.banditW[1] * uyT,
                out.dirX, out.dirY);
-    out.boost = clamp01(wRule_ * ar.boost + wThermal_ * at.boost);
+    out.boost = clamp01(memory.banditW[0] * ar.boost + memory.banditW[1] * at.boost);
 
     // 3) 回报估计 + Hedge 更新（首帧无历史 -> 跳过；公式见文件头注释）。
-    if (hasPrev_) {
+    if (memory.banditHasPrev != 0) {
         double curProx = 0.0;
         double prevProx = 0.0;
         for (int i = 0; i < 3; ++i) {
             const double c = clamp01(s[6 + i]);
             if (c > curProx) curProx = c;
-            const double p = clamp01(prevS_[6 + i]);
+            const double p = clamp01(memory.banditPrevS[6 + i]);
             if (p > prevProx) prevProx = p;
         }
         const double speed = clamp01(s[12]);
@@ -170,24 +170,26 @@ ActionVector BanditPolicy::decide(const SensorVector& sRaw, const TargetList& /*
         const double rEnv = clampSym(0.6 * gain + 0.4 * speed * (2.0 * curProx - 1.0), 1.0);
 
         double puRx, puRy, puTx, puTy;
-        unitOrZero(prevARule_.dirX, prevARule_.dirY, puRx, puRy);
-        unitOrZero(prevAThermal_.dirX, prevAThermal_.dirY, puTx, puTy);
+        unitOrZero(memory.banditPrevArm[0][0], memory.banditPrevArm[0][1], puRx, puRy);
+        unitOrZero(memory.banditPrevArm[1][0], memory.banditPrevArm[1][1], puTx, puTy);
         // 信用分配以上一帧的"实际执行方向"为基准（弃权臂/零输出自动记 0）。
-        const double agreeR = clampSym(puRx * prevOut_.dirX + puRy * prevOut_.dirY, 1.0);
-        const double agreeT = clampSym(puTx * prevOut_.dirX + puTy * prevOut_.dirY, 1.0);
+        const double agreeR = clampSym(puRx * memory.banditPrevOut[0] +
+                                       puRy * memory.banditPrevOut[1], 1.0);
+        const double agreeT = clampSym(puTx * memory.banditPrevOut[0] +
+                                       puTy * memory.banditPrevOut[1], 1.0);
 
         double sumProx = 0.0;
-        for (int i = 0; i < 3; ++i) sumProx += clamp01(prevS_[6 + i]);
+        for (int i = 0; i < 3; ++i) sumProx += clamp01(memory.banditPrevS[6 + i]);
         double potR = 0.5; // 无候选 -> 中性势能（不奖不罚）
         double potT = 0.5;
         if (sumProx > 1e-12) {
             double accR = 0.0;
             double accT = 0.0;
             for (int i = 0; i < 3; ++i) {
-                const double pj = clamp01(prevS_[6 + i]);
+                const double pj = clamp01(memory.banditPrevS[6 + i]);
                 if (!(pj > 0.0)) continue;
                 double djx, djy;
-                unitOrZero(prevS_[2 * i], prevS_[2 * i + 1], djx, djy);
+                unitOrZero(memory.banditPrevS[2 * i], memory.banditPrevS[2 * i + 1], djx, djy);
                 accR += pj * posPart(puRx * djx + puRy * djy);
                 accT += pj * posPart(puTx * djx + puTy * djy);
             }
@@ -199,35 +201,40 @@ ActionVector BanditPolicy::decide(const SensorVector& sRaw, const TargetList& /*
         const double rT = clampSym(0.5 * rEnv * agreeT + (potT - 0.5), 1.0);
 
         // Hedge 指数加权（对数空间）：logW += eta * r。
-        logWR_ += clampSym(eta_ * rR, kMaxLogStep);
-        logWT_ += clampSym(eta_ * rT, kMaxLogStep);
+        memory.banditLogW[0] += clampSym(eta_ * rR, kMaxLogStep);
+        memory.banditLogW[1] += clampSym(eta_ * rT, kMaxLogStep);
 
         // softmax（max-shift 数值稳定）+ 反塌零地板 + 重归一化。
-        const double m = logWR_ > logWT_ ? logWR_ : logWT_;
-        double pR = std::exp(logWR_ - m);
-        double pT = std::exp(logWT_ - m);
+        const double m = memory.banditLogW[0] > memory.banditLogW[1]
+                             ? memory.banditLogW[0]
+                             : memory.banditLogW[1];
+        double pR = std::exp(memory.banditLogW[0] - m);
+        double pT = std::exp(memory.banditLogW[1] - m);
         double z = pR + pT;
-        wRule_ = pR / z;
-        wThermal_ = pT / z;
-        if (wRule_ < kWeightFloor) wRule_ = kWeightFloor;
-        if (wThermal_ < kWeightFloor) wThermal_ = kWeightFloor;
-        z = wRule_ + wThermal_;
-        wRule_ /= z;
-        wThermal_ /= z;
+        memory.banditW[0] = pR / z;
+        memory.banditW[1] = pT / z;
+        if (memory.banditW[0] < kWeightFloor) memory.banditW[0] = kWeightFloor;
+        if (memory.banditW[1] < kWeightFloor) memory.banditW[1] = kWeightFloor;
+        z = memory.banditW[0] + memory.banditW[1];
+        memory.banditW[0] /= z;
+        memory.banditW[1] /= z;
     }
 
-    // 4) 滚动历史（下一帧的回报要用）。hasPrev_ 置位后，回报估计 + Hedge
+    // 4) 滚动历史（下一帧的回报要用）。banditHasPrev 置位后，回报估计 + Hedge
     // 更新从下一帧开始真实运转（缺了这行权重将永久冻结在 0.5/0.5——R2-C 实测踩坑）。
-    prevS_ = s;
-    prevARule_ = ar;
-    prevAThermal_ = at;
-    prevOut_ = out;
-    hasPrev_ = true;
+    for (int i = 0; i < SensorVector::kDim; ++i) memory.banditPrevS[i] = s[i];
+    memory.banditPrevArm[0][0] = ar.dirX;
+    memory.banditPrevArm[0][1] = ar.dirY;
+    memory.banditPrevArm[1][0] = at.dirX;
+    memory.banditPrevArm[1][1] = at.dirY;
+    memory.banditPrevOut[0] = out.dirX;
+    memory.banditPrevOut[1] = out.dirY;
+    memory.banditHasPrev = 1;
 
     // 5) R2 探索调制：决策不确定度 -> mod[3]（聚拢）。uncertainty = 4*wR*wT，
     // 0.5/0.5 时 = 1（最不确定、最该收集信息），权重尖锐后趋 0。k 默认 0 = 关闭。
     if (kModExplore_ != 0.0) {
-        const double uncertainty = 4.0 * wRule_ * wThermal_;
+        const double uncertainty = 4.0 * memory.banditW[0] * memory.banditW[1];
         out.mod[3] = clampSym(kModExplore_ * uncertainty, 1.0);
     }
     // forceSlot 保持 -1：本策略不施力（设计决定，见文件头）。

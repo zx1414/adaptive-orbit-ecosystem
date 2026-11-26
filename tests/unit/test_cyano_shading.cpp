@@ -42,7 +42,6 @@ CyanoNode& sole(CyanoField& f) {
 TEST(shade_solitary_node_bitwise_matches_legacy) {
     CyanoParams p;
     p.metabolismRate = 0.0;
-    p.ballSpawnProbability = 0.0;
     p.reproductionProbability = 0.0;
     p.linkRadius = 0.0; // 退化分支：无邻居，shade 恒 0
     CyanoField f(p);
@@ -61,7 +60,6 @@ TEST(shade_solitary_node_bitwise_matches_legacy) {
 TEST(shade_pair_gaussian_weight) {
     CyanoParams p;
     p.metabolismRate = 0.0;
-    p.ballSpawnProbability = 0.0;
     p.reproductionProbability = 0.0;
     p.linkRadius = 0.0; // 走退化分支的仅遮蔽扫描（关连线不关遮蔽）
     p.shadeK = 0.05;
@@ -89,7 +87,6 @@ TEST(shade_pair_gaussian_weight) {
 TEST(shade_density_reduces_per_node_gain) {
     CyanoParams p;
     p.metabolismRate = 0.0;
-    p.ballSpawnProbability = 0.0;
     p.reproductionProbability = 0.0;
     p.linkRadius = 0.0;
     p.shadeK = 0.05;
@@ -119,7 +116,6 @@ TEST(shade_suppresses_photosynthesis_vs_unshaded) {
     const auto run = [&](double shadeK) {
         CyanoParams p;
         p.metabolismRate = 0.0;
-        p.ballSpawnProbability = 0.0;
         p.reproductionProbability = 0.0;
         p.linkRadius = 0.0;
         p.shadeK = shadeK;
@@ -145,8 +141,7 @@ TEST(shade_consumes_no_rng) {
     const auto run = [&](double shadeK) {
         CyanoParams p;
         p.metabolismRate = 0.0;
-        p.ballSpawnProbability = 0.3; // 打开随机通道，放大任何消耗差异
-        p.reproductionProbability = 0.2;
+        p.reproductionProbability = 0.2; // 打开随机通道，放大任何消耗差异
         p.linkRadius = 0.0;
         p.shadeK = shadeK;
         CyanoField f(p);
@@ -213,27 +208,42 @@ TEST(shading_hot_tune_via_runtime_env) {
 
 // 默认参数快照。注意白盒镜像契约是"两边同名同义"，不是"两边默认值恒等"：
 // CyanoParams.shadeK=0.05 是模块层默认（生态中立），CyanoTuning.shadeK=0.20 是
-// R3-A 标定（经构造期镜像覆盖模块默认）；refuge 同理（模块 0 / 调控层 15）。
+// R3-A 标定（经构造期镜像覆盖模块默认）。
+//
+// 规则 v2 迁移：旧断言 CHECK(p.grazeRefugeEnergy == 0.0) 与
+// CHECK(cfg.cyanoTuning.grazeRefugeEnergy == 15.0) 保护的是"每节点不可食保底"
+// 这条**已被删除**的规则（它让节点永远吃不空）。保护意图换成新的可食量口径：
+// 不可食的部分现在由 minStructure（最小存活结构量）表达，于是同一份"我不能把
+// 一个节点吃到零"的意图改由下面两条断言承担——
+//   · edible = max(0, material - minStructure)，且 minStructure 两侧默认一致；
+//   · 吃空意味着节点死亡（不是被冻结在某个不可食余额上）。
 TEST(shade_default_params_match) {
     CyanoParams p;
     CHECK(p.shadeK == 0.05);
     CHECK(p.shadeRadius == 60.0);
     CHECK(p.shadeSigma == 30.0);
-    CHECK(p.grazeRefugeEnergy == 0.0); // 模块层默认：旧 graze 语义逐位
     CHECK(p.maxNodes == 256u); // R3-A：性能护栏升级
     // R7-C：聚落播种——模块层默认 0 聚落（旧均匀撒点，生态中立逐位回归），
-    // CyanoTuning 侧标定 4 聚落（经构造期镜像覆盖模块默认）；refuge 同理。
+    // CyanoTuning 侧标定 4 聚落（经构造期镜像覆盖模块默认）。
     CHECK(p.cyanoColonies == 0);
     CHECK(p.clusterSpread == 45.0);
     SimConfig cfg;
     CHECK(cfg.cyanoTuning.shadeK == 0.20);        // R3-A 标定（Config.h 注释）
     CHECK(cfg.cyanoTuning.shadeRadius == p.shadeRadius);
     CHECK(cfg.cyanoTuning.shadeSigma == p.shadeSigma);
-    CHECK(cfg.cyanoTuning.grazeRefugeEnergy == 15.0);
     CHECK(cfg.nucleus.grazeBiteFraction == 0.15);
     CHECK(cfg.cyanoMaxNodes == 4096u);   // R10 世界 1024
     CHECK(cfg.cyanoTuning.cyanoColonies == 64);   // R10 世界 1024：16→64
     CHECK(cfg.cyanoTuning.clusterSpread == 45.0);
+
+    // ---- 规则 v2：可食量口径取代 grazeRefugeEnergy（见上方迁移说明）----
+    CHECK(p.minStructure == 8.0);
+    CHECK(cfg.cyanoTuning.minStructure == p.minStructure); // 两侧默认同义
+    CyanoNode sample;
+    sample.material = 8.0;                       // 恰等于结构核心
+    CHECK(CyanoField::edibleOf(sample, p) == 0.0);        // 吃不到这一份
+    sample.material = 108.0;                              // 108 - 8 = 100
+    CHECK_NEAR(CyanoField::edibleOf(sample, p), 100.0, 1e-12);
 }
 
 // ---- R7-C：聚落播种 ----
@@ -331,10 +341,26 @@ TEST(cyano_seed_colony_rng_budget) {
 }
 
 // 组合根：默认运行下种群不撞护栏（自遮光接管承载力）。
+//
+// 【2026-11-25 迁移】本用例原来把世界钉在 256² 却保留 1024 世界的播种密度
+// （cyanoNodeCount=512、cyanoColonies=64）。规则 v2 之后这组配置在 256² 里
+// 会稳定崩掉，而原因**不是**自遮光失效，是养分预算被面积缩水了 16 倍：
+//   · 养分场按 regionSize=128 分区：1024² → 8x8=64 区 × 960 = 61440 存量；
+//                              256²  → 2x2= 4 区 × 960 =  3840 存量
+//   · 开局播种的组织却是 512 × 45 = 23040（与 1024² 世界一样多）
+//   养分/组织 比从 2.67 掉到 0.17 —— 新组织长不出来，节点只能被吃和饿死，
+//   实测 t500 cyano=0。这是**夹具的世界尺度不自洽**，不是机制缺陷。
+// 修法：376/1024 ≈ 1/2.7，故把节点数与聚落数按面积同步缩到 1/4 以下
+// （cyanoNodeCount 128→64、cyanoColonies 64→8），让 256² 世界里的
+// "养分/组织"比回到与默认世界同量级。断言本身（第一营养级不断 + 不撞护栏）
+// 一字未改。
 TEST(shade_default_run_stays_below_guard) {
     SimConfig cfg;
     cfg.world.seed = 42;
     cfg.world.width = 256.0; cfg.world.height = 256.0;  // R10：钉 256（机制测试，长跑需快）
+    // 密度按面积缩放（见上方注释）：否则 256² 的养分预算养不起 1024² 的密度。
+    cfg.cyanoNodeCount = 64;
+    cfg.cyanoTuning.cyanoColonies = 8;
     Simulation sim(cfg);
     CHECK(sim.runTo(1000));
     CHECK(sim.auditOk());

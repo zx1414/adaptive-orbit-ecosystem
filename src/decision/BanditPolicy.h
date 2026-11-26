@@ -1,4 +1,4 @@
-﻿// agentsim - decision/BanditPolicy.h
+// agentsim - decision/BanditPolicy.h
 // T24：BanditPolicy —— 多臂老虎机式策略加权（Hedge / EXP3-lite 指数加权）。
 //
 // 把已有的两条确定性策略当作两个"臂"：
@@ -24,11 +24,16 @@
 //     尖锐化（确定）后回归 0。强度 kModExplore 可配，默认 0 = 关闭（回归安全）。
 //   · 不点名施力（臂的施力意图不采纳：混合两臂的施力矢量在物理上没有可解释
 //     语义，且会绕过 Hedge 的信用分配）。
+// P0-4（记忆归个体）：Hedge 权重、上一帧感知/两臂输出、上一帧实际动作等**全部**
+// 跨帧学习状态都住在 PolicyMemory 的 bandit* 块里，由每个核各自持有一份；本类实例
+// 只保留构造期标定的不可变参数（eta_、kModExplore_ 与两个臂的内嵌参数）。
+// 因此同一个 BanditPolicy 实例服务多个核时，各自独立学习，互不改写对方权重（A4）。
 // 红线：decide() 全程确定性算术、绝不使用 RNG；只消费传入的 SensorVector 与
-// 自存历史；不 include environment/ sim/ ledger/。
+// 传入的个体记忆；不 include environment/ sim/ ledger/。
 #pragma once
 
 #include "decision/IDecisionPolicy.h"
+#include "decision/PolicyMemory.h"
 #include "decision/RulePolicy.h"
 #include "decision/ThermalPolicy.h"
 
@@ -42,30 +47,27 @@ public:
     explicit BanditPolicy(double eta = 0.05, ThermalPolicy::Params thermalParams = {},
                           double kModExplore = 0.0);
 
-    ActionVector decide(const SensorVector& sensors, const TargetList& targets) override;
-    using IDecisionPolicy::decide; // 旧单参调用面（基类非虚重载）
+    // memory 是本个体的学习历史（就地更新），默认值 = 等权 0.5/0.5 的新个体。
+    ActionVector decide(const SensorVector& sensors, const TargetList& targets,
+                        PolicyMemory& memory) override;
+    using IDecisionPolicy::decide; // 基类两参/单参兼容重载（一次性无状态语义）
     const char* name() const override { return "bandit"; }
 
-    // ---- 可解释性 / 单测接口 ----
-    double weightRule() const { return wRule_; }
-    double weightThermal() const { return wThermal_; }
+    // ---- 可解释性 / 单测接口（全部静态 + 收记忆参数：状态不在实例里）----
+    // 臂 R（rule）当前归一化权重。
+    static double weightRule(const PolicyMemory& memory) { return memory.banditW[0]; }
+    // 臂 T（thermal）当前归一化权重。
+    static double weightThermal(const PolicyMemory& memory) { return memory.banditW[1]; }
+    // 学习率是构造期标定的不可变参数，仍在实例上。
     double eta() const { return eta_; }
-    void reset(); // 回到构造初态：权重 0.5/0.5、清空历史
+    // 回到本策略的初态：权重 0.5/0.5、清空历史（只动 bandit* 块）。
+    static void reset(PolicyMemory& memory);
 
 private:
     RulePolicy rule_;
     ThermalPolicy thermal_;
-    double eta_;
-    double kModExplore_; // R2：探索调制强度（决策不确定度 -> mod[3]）
-    double logWR_;      // 臂 R 对数权重（Hedge 累积量，对数空间永不溢出）
-    double logWT_;      // 臂 T 对数权重
-    double wRule_;      // 归一化权重（softmax(logW) 后带反塌零地板）
-    double wThermal_;
-    bool hasPrev_;
-    SensorVector prevS_;        // 上一帧清洗后的感知（自存历史，回报来源之一）
-    ActionVector prevARule_;    // 上一帧臂 R 的原始输出
-    ActionVector prevAThermal_; // 上一帧臂 T 的原始输出
-    ActionVector prevOut_;      // 上一帧实际执行的动作
+    double eta_;         // 构造期标定，不可变
+    double kModExplore_; // R2：探索调制强度（决策不确定度 -> mod[3]），不可变
 };
 
 } // namespace agentsim

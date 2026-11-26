@@ -1,7 +1,7 @@
 #pragma once
 // agentsim - app/Timeline.h（R5-C 时间轴：检查点 + 世界线分支）
 // 旧版 v2.3.1 的核心器官之一：世界不再是"关掉就蒸发"的一次性流，而是
-//   1) 可回看的（每 N 帧一个完整内存检查点，超上限自动抽稀、保首尾）；
+//   1) 可回看的（定时与干预前进时记录检查点，优先保留干预边界）；
 //   2) 可分支的（世界线 branch：保留全部实体状态与 RNG 流，只换运行参数，
 //      从当前帧开新局——"变动世界线"）。
 // 确定性契约：检查点 payload = Simulation::serializeState 的全量输出（含 rng_
@@ -29,6 +29,8 @@ public:
         std::uint64_t frame = 0;
         std::uint64_t hash = 0;
         std::vector<unsigned char> payload;
+        SimConfig config;
+        bool inputBoundary = false;
     };
 
     // 内存上限：检查点条数硬顶（任务卡：2000），超出自动抽稀（保首尾）。
@@ -38,9 +40,11 @@ public:
 
     // 每 checkpointInterval() 帧一个完整检查点（tick % interval == 0 时捕获；
     // interval 0 = 关闭）。捕获 = sim.serializeState 到内存（完整世界，含
-    // rng），超上限时抽稀：保首尾、中间隔一去一（确定性策略，见实现注释）。
+    // rng），超上限时优先抽稀普通检查点。
     void maybeCheckpoint(const Simulation& sim, std::uint64_t tick,
                          std::uint64_t hash);
+    void checkpoint(const Simulation& sim);
+    void discardAfter(std::uint64_t tick);
 
     // 回看：恢复"帧号 <= frame 的最近检查点"到 sim（精确帧检查点直接命中；
     // 任意帧 = 回到最近的过去检查点，调用方继续 step 前进补齐）。没有可用
@@ -79,13 +83,13 @@ public:
     bool branched() const { return branched_; }
 
     // ---- timeline.bin 持久化（SaveStore 目录约定的第三件套）----
-    // 布局：u32 magic "ATML"(0x41544D4C) + u32 version=1 + u64 interval +
-    // u8 branched + u8[7] pad + cfg 块（SaveStore::savedetail 同源）+
-    // u64 count + {u64 frame, u64 hash, u64 len, len×u8 payload}×count。
-    bool exportTo(const std::string& path, std::string& err) const;
+    // 格式 v2 保存初始配置，并为每条检查点保存输入边界标记、生效配置和实体。
+    bool exportTo(const std::string& path, std::string& err,
+                  std::uint64_t throughFrame = UINT64_MAX) const;
     bool importFrom(const std::string& path, std::string& err);
 
 private:
+    void recordCheckpoint(const Simulation& sim, std::uint64_t hash, bool inputBoundary);
     void thin();
     SimConfig cfg_{};
     std::vector<Checkpoint> checkpoints_;

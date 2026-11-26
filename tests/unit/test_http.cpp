@@ -357,3 +357,51 @@ TEST(http_router_line_protocol_smoke) {
     CHECK(resp.find("\"ok\":false") != std::string::npos);
     srv.stop();
 }
+
+// ---- P0-5：POST /env 的错误反馈契约（"过期/未知命令必须有明确反馈"）----
+// 这里只验证 HTTP 层"路由给什么状态码就发什么状态码"——400 能被客户端真正看到，
+// 而不是被兜底成 200。错误码的内容语义在 test_envcontrol.cpp 覆盖
+// （retired_event / unknown_command / unknown_event …）。
+TEST(http_error_status_400_reaches_client) {
+    HttpServer srv;
+    srv.setRouter([](const std::string& method, const std::string& path,
+                     const std::string& body, const std::string& query,
+                     std::string& resp, std::string& contentType, int& status) {
+        (void)query;
+        if (method == "POST" && path == "/env") {
+            // 模拟 handleEnvPost 的被拒分支：ok:false + code + rejections[] + 400。
+            if (body.find("event.") == 0 && body.find("winter") == std::string::npos) {
+                resp = "{\"ok\":false,\"rejected\":1,\"code\":\"retired_event\","
+                       "\"error\":\"event harvest retired\","
+                       "\"rejections\":[{\"line\":\"" + body.substr(0, body.find('\n')) +
+                       "\",\"code\":\"retired_event\",\"error\":\"retired\"}]}";
+                contentType = "application/json; charset=utf-8";
+                status = 400;
+                return true;
+            }
+            resp = "{\"ok\":true,\"applied\":1}";
+            contentType = "application/json; charset=utf-8";
+            status = 200;
+            return true;
+        }
+        return false;
+    });
+    const int port = srv.start(18080);
+    CHECK(port > 0);
+    std::string resp;
+    // 已撤下的旧事件：400 + code + rejections。
+    CHECK(clientSend(port, "POST /env HTTP/1.1\r\nHost: x\r\n"
+                           "Content-Length: 16\r\n\r\nevent.harvest=1\n", resp));
+    CHECK(statusLineOf(resp) == "HTTP/1.1 400 Bad Request");
+    CHECK(resp.find("\"ok\":false") != std::string::npos);
+    CHECK(resp.find("\"code\":\"retired_event\"") != std::string::npos);
+    CHECK(resp.find("\"rejections\":") != std::string::npos);
+    CHECK(resp.find("event.harvest=1") != std::string::npos);
+    // 合法命令仍然 200（错误码不是"一律 400"）。
+    resp.clear();
+    CHECK(clientSend(port, "POST /env HTTP/1.1\r\nHost: x\r\n"
+                           "Content-Length: 15\r\n\r\nevent.winter=1\n", resp));
+    CHECK(statusLineOf(resp) == "HTTP/1.1 200 OK");
+    CHECK(resp.find("\"ok\":true") != std::string::npos);
+    srv.stop();
+}

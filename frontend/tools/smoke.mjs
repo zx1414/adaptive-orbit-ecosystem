@@ -47,7 +47,7 @@ function makeCtx() {
   return {
     canvas: { width: 300, height: 150 },
     clearRect: noop, fillRect: noop, strokeRect: noop, beginPath: noop,
-    moveTo: noop, lineTo: noop, arc: noop, closePath: noop, fill: noop,
+    moveTo: noop, lineTo: noop, arc: noop, rect: noop, clip: noop, closePath: noop, fill: noop,
     stroke: noop, save: noop, restore: noop, translate: noop, scale: noop,
     setLineDash: noop, createLinearGradient: () => ({ addColorStop: noop }),
     createRadialGradient: () => ({ addColorStop: noop }),
@@ -415,6 +415,16 @@ const fx = buildStateFixture();
 eq(fx.buf.byteLength, 80 + 2 * 25 + 2 * 32 + 2 * 20 + 1 * 8, "fixture size = 80+50+64+40+8 (strides 25/32/20/8)");
 
 const lf = LC.parse(fx.buf);
+eq(lf.stats.auditOk, null, "older live snapshot has no audit result");
+const annotated = fx.buf.slice(0);
+const annotatedView = new DataView(annotated);
+annotatedView.setUint8(3, 1);
+annotatedView.setInt32(48, 4096, true);
+const annotatedFrame = LC.parse(annotated);
+eq(annotatedFrame.stats.auditOk, true, "live snapshot reports enabled audit result");
+eq(annotatedFrame.live.cyanoLimit, 4096, "live snapshot reports producer guardrail");
+annotatedView.setUint8(3, 2);
+eq(LC.parse(annotated).stats.auditOk, false, "live snapshot can report audit failure");
 eq(lf.tick, 777, "live tick from header i32");
 eq(lf.balls.length, 2, "live balls count");
 eq(lf.nuclei.length, 2, "live nuclei count");
@@ -441,6 +451,38 @@ near(lf.stats.cyanoEnergy, 8.5, 1e-6, "live stats.cyanoEnergy");
 ok(lf.live && lf.live.sun === 0.5, "live.live.sun from header f32@44");
 ok(lf.live.worldW === 256 && lf.live.worldH === 256, "live.live world size from header");
 eq(lf.live.strideWarn, false, "no stride warning on well-formed snapshot");
+
+const mapCanvas = makeCanvas();
+const mapCtx = makeCtx();
+const mapClips = [], energyArcs = [], mapFills = [];
+mapCanvas.getContext = () => mapCtx;
+mapCanvas.getBoundingClientRect = () => ({ left: 0, top: 0, width: 960, height: 540 });
+mapCtx.rect = (...rect) => mapClips.push(rect);
+mapCtx.arc = (...arc) => energyArcs.push(arc);
+mapCtx.fillRect = (...rect) => mapFills.push([mapCtx.fillStyle, ...rect]);
+const mapRenderer = sandbox.Renderer.create(mapCanvas);
+mapRenderer.setTrace({ bounds: { minX: 0, maxX: 256, minY: 0, maxY: 256 } });
+const mapFrame = {
+  tick: 0, cyano: [], cyanoLinks: [],
+  nuclei: [{ id: 1, x: 128, y: 128, energy: 20, cap: 100, hue: 228 }],
+  balls: [{ id: 2, owner: 1, x: 128, y: 128, type: 1, energy: 30 }]
+};
+mapRenderer.draw(mapFrame);
+eq(mapClips[0], [210, 0, 540, 540], "wide canvas displays a square that fills the full short side");
+near(mapRenderer.camera().scale, 540 / 256, 1e-9, "default camera keeps world units square");
+ok(energyArcs.some(arc => arc[3] === -Math.PI / 2 &&
+   Math.abs(arc[4] - arc[3] - Math.PI * 0.4) < 1e-9), "default render draws the nucleus energy arc at 20%");
+ok(mapFills.some(fill => fill[0] === "rgb(109,125,139)" && fill[4] === fill[3] / 2),
+   "scout diamond shows half fill for 30 energy on the 0–60 scale");
+eq(mapRenderer.hitTest(480, 270).kind, "ball", "ball remains selectable above an overlapping nucleus");
+eq(mapRenderer.hitTest(200, 270).kind, "none", "outer backdrop cannot select map entities");
+ok(mapRenderer.renderThumb(mapFrame, makeCanvas()), "thumbnail uses the same renderer");
+eq(mapRenderer.hitTest(480, 270).data.id, 2, "thumbnail leaves map hit coordinates intact");
+mapCanvas.getBoundingClientRect = () => ({ left: 0, top: 0, width: 390, height: 600 });
+mapRenderer.resize();
+mapClips.length = 0;
+mapRenderer.draw(mapFrame);
+eq(mapClips[0], [0, 105, 390, 390], "portrait canvas displays a centered square across the full width");
 
 // 9c. R8-A: /state v2 — 128B nucleus records with 24 genome f32 (genes at +32)
 function buildStateV2Fixture() {
@@ -599,6 +641,15 @@ ok(Array.isArray(sandbox.window.Main._state.saves) && sandbox.window.Main._state
   "R6-D: boot 后存档列表为空数组（离线不生成假存档，等 GET /saves）");
 ok(sandbox.window.Main._state.demoTrace && sandbox.window.Main._state.demoTrace.frames.length > 0,
   "boot generated demo trace");
+ok(!sandbox.document.body.classList.contains("cinema"), "map layout is scoped to the run page");
+sandbox.window.Main.showPage("run");
+ok(sandbox.document.body.classList.contains("cinema"), "run opens with the map filling the viewport");
+elements.btnMapCinema.click();
+ok(!sandbox.document.body.classList.contains("cinema"), "map controls can reopen the full panels");
+elements.btnMapCinema.click();
+ok(sandbox.document.body.classList.contains("cinema"), "map controls can restore the full viewport");
+sandbox.window.Main.showPage("menu");
+ok(!sandbox.document.body.classList.contains("cinema"), "returning to the menu restores normal navigation");
 // 载入真实 v3 trace 走完整 loadTrace（charts setData + 派生序列）
 const realObj = real; // 来自第 7 节
 if (realObj) {
@@ -608,11 +659,55 @@ if (realObj) {
   ok(Array.isArray(sandbox.window.Main._state.hueSeries), "state.hueSeries derived from frames");
   // 环境轴 + 调控
   sandbox.window.Main.showPage("run");
+  ok(elements.energyOverview.innerHTML.includes("地图能量") &&
+    ["nucleus", "ball", "cyano"].every(group => elements.energyOverview.innerHTML.includes("energy-" + group)),
+    "map readout shows all three energy pools from the trace");
   sandbox.window.Main.setAxis("light", 4);
   ok(sandbox.window.Main._state.interventions >= 1, "env axis intervention counted");
   ok(sandbox.window.Main._state.env.light === 4, "env axis set to 4");
   sandbox.window.Main.setPlaying(false);
 }
+console.log("== P0-5) 玩家干预：事件卡只剩寒冬 + 外部播种标注 + 撤下的按钮不再存在 ==");
+// 后端契约（EnvControl.cpp buildEffects）——前端不得复制常量，这里只断言"前端
+// 不再把旧事件当作可触发项"，以及撤下的按钮在真实 index.html 里已删除。
+(function p05() {
+  const idx = readFileSync(path.join(fe, "index.html"), "utf8");
+  const mainJs = readFileSync(path.join(fe, "js", "main.js"), "utf8");
+  // 1) 三个直接改能量/造菌的按钮在 HTML 里已经不存在（不是被隐藏）
+  ok(idx.indexOf('id="btnHarvest"') < 0, "index.html 无 #btnHarvest（收获已撤下）");
+  ok(idx.indexOf('id="btnPlague"') < 0, "index.html 无 #btnPlague（瘟疫已撤下）");
+  ok(idx.indexOf('id="btnBloom"') < 0, "index.html 无 #btnBloom（藻华已撤下）");
+  // 2) 环境事件按钮只剩寒冬；文案写明"不直接改能量"与持续时间
+  ok(idx.indexOf('id="btnWinter"') >= 0, "index.html 保留 #btnWinter（寒冬 = 环境事件）");
+  ok(/id="btnWinter"[^>]*title="[^"]*不直接改任何核的能量/.test(idx),
+     "寒冬按钮 title 写明「不直接改任何核的能量」");
+  // 3) 外部播种按钮存在且写明是外部输入
+  ok(idx.indexOf('id="btnSeedCyano"') >= 0, "index.html 有 #btnSeedCyano（外部播种）");
+  ok(/id="btnSeedCyano"[^>]*title="[^"]*外部输入/.test(idx),
+     "播种按钮 title 写明「外部输入」（不是事件奖励也不是自然生长）");
+  // 4) main.js 的事件映射只留 winter；旧事件名不再作为可触发项出现
+  ok(mainJs.indexOf("btnHarvest') {") < 0 && mainJs.indexOf("'harvest'") < 0,
+     "main.js 不再把 harvest 映射成可触发事件");
+  ok(mainJs.indexOf("'plague'") < 0, "main.js 不再把 plague 映射成可触发事件");
+  ok(mainJs.indexOf("'bloom'") < 0, "main.js 不再把 bloom 映射成可触发事件");
+  const liveMapAt = mainJs.indexOf("var LIVE_EVENT_ID = {");
+  ok(liveMapAt >= 0, "main.js 仍有 LIVE_EVENT_ID 映射表");
+  if (liveMapAt >= 0) {
+    const lineEnd = mainJs.indexOf(";", liveMapAt);
+    const line = mainJs.slice(liveMapAt, lineEnd);
+    ok(line.indexOf("btnWinter: 'winter'") >= 0, "LIVE_EVENT_ID 含 btnWinter -> winter");
+    ok(line.indexOf("harvest") < 0 && line.indexOf("plague") < 0 && line.indexOf("bloom") < 0,
+       "LIVE_EVENT_ID 不含任何已撤下的事件（harvest/plague/bloom）");
+  }
+  ok(mainJs.indexOf("seed.cyano='") >= 0 || mainJs.indexOf("'seed.cyano='") >= 0,
+     "main.js 用独立命令 seed.cyano=N 做外部播种（不是复用事件）");
+  // 5) 触发路径：前端发出的是 event.winter=1
+  ok(mainJs.indexOf("'event.' + liveId + '=1'") >= 0, "前端事件触发仍走 event.<id>=1");
+  // 6) 错误反馈路径：有被拒命令时显示后端 code + rejections（不是 200+ok:false 静默）
+  ok(mainJs.indexOf("j.rejections") >= 0, "POST /env 被拒时展示 rejections[]（过期命令有明确反馈）");
+  ok(mainJs.indexOf("j.code") >= 0, "POST /env 被拒时展示后端错误码 code");
+})();
+
 // 演示轨迹全链路（菜单 startRun）
 // R4-D：startRun 现在是**异步**的（先 probe /status，失败才回退演示数据）。
 // 同步断言会在 Promise resolve 之前跑，看到的是空的 state.trace。
@@ -881,8 +976,8 @@ ok(prog.indexOf("完成") >= 0, "分析进度显示完成（got: " + prog + "）
 console.log("== 11) R7-D: palette 默认值（离线内置色，与旧硬编码一致） ==");
 const RP = sandbox.window.Renderer;
 const R7D_DEFAULTS = {
-  background: '10,14,26', ball_shield: '255,207,94', ball_worker: '69,224,216',
-  ball_scout: '183,139,255', free_ball: '200,200,210', nucleus: '255,255,255'
+  background: '233,228,211', ball_shield: '169,119,70', ball_worker: '71,125,109',
+  ball_scout: '109,125,139', free_ball: '63,76,60', nucleus: '77,92,70'
 };
 eq(JSON.stringify(RP.getPalette()), JSON.stringify(R7D_DEFAULTS),
    "renderer 内置默认调色板 = 旧硬编码色（'r,g,b' 形态）");

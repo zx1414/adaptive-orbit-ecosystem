@@ -1,4 +1,4 @@
-﻿// agentsim - decision/PerceptronPolicy.h
+// agentsim - decision/PerceptronPolicy.h
 // 感知机策略（GOAL 后续项）：规格 Z = W^T X + b，y_hat = sign(Z)。
 // 两个输出神经元：Z0 -> dirX、Z1 -> dirY 的二分类倾向。
 //
@@ -14,6 +14,7 @@
 #include <string>
 
 #include "decision/IDecisionPolicy.h"
+#include "decision/PolicyMemory.h"
 
 namespace agentsim {
 
@@ -37,8 +38,11 @@ public:
 
     // 内部绝不用 RNG：Z = sum_j w[i][j]*s[j] + b[i]（j 遍历全部 kDim 维，
     // 含 R2 新增的 s[18..23]），y = sign(Z)。
-    ActionVector decide(const SensorVector& sensors, const TargetList& targets) override;
-    using IDecisionPolicy::decide; // 旧单参调用面（基类非虚重载）
+    // P0-4：权重是**构造期标定的不可变参数**（进化押注），不是学习记忆；本策略
+    // 无可变跨帧状态，memory 只按契约占位、绝不写入。
+    ActionVector decide(const SensorVector& sensors, const TargetList& targets,
+                        PolicyMemory& memory) override;
+    using IDecisionPolicy::decide; // 基类两参/单参兼容重载（一次性无状态语义）
 
     const char* name() const override { return "perceptron"; }
 

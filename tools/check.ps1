@@ -107,7 +107,7 @@ if (Test-Path "$root\build\unit_tests.exe") {
     $unitExit = $LASTEXITCODE
     Report "unit_tests" ($unitExit -eq 0) "exit $unitExit"
 } else {
-    Report "unit_tests" $true "skipped (no exe)"
+    Report "unit_tests" $false "unit_tests.exe missing"
 }
 
 # 3b) frontend smoke: parser/renderer/DOM stub end-to-end (~1.5s, zero deps).
@@ -116,12 +116,23 @@ if (Test-Path "$root\build\unit_tests.exe") {
 # smoke 第 7 节需要 build/v3.json 做真实 trace 对拍。如果没有就先生成——
 # 否则每次清 build 后 smoke 静默少跑 12 条断言（checks 数会浮动，掩盖回归）。
 if (Test-Path "$root\frontend\tools\smoke.mjs") {
-    if (-not (Test-Path "$root\build\v3.json") -and (Test-Path "$root\build\agentsim.exe")) {
-        & "$root\build\agentsim.exe" --no-render --ticks 10000 --seed 42 --trace "$root\build\v3.json" --trace-interval 20 2>&1 | Out-Null
-        Write-Host "(generated build/v3.json for smoke)"
+    $traceOk = $false
+    if (Test-Path "$root\build\agentsim.exe") {
+        $previousErrorAction = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = "Continue"
+            & "$root\build\agentsim.exe" --no-render --ticks 500 --seed 42 --audit --trace "$root\build\v3.json" --trace-interval 20 2>&1 | Out-Null
+            $traceOk = ($LASTEXITCODE -eq 0 -or $LASTEXITCODE -eq 5) -and (Test-Path "$root\build\v3.json")
+        } finally {
+            $ErrorActionPreference = $previousErrorAction
+        }
     }
-    & node "$root\frontend\tools\smoke.mjs" 2>&1 | Select-Object -Last 3
-    Report "frontend smoke" ($LASTEXITCODE -eq 0) "exit $LASTEXITCODE"
+    if ($traceOk) {
+        & node "$root\frontend\tools\smoke.mjs" 2>&1 | Select-Object -Last 3
+        Report "frontend smoke" ($LASTEXITCODE -eq 0) "exit $LASTEXITCODE"
+    } else {
+        Report "frontend smoke" $false "could not generate current audited trace"
+    }
 } else {
     Report "frontend smoke" $true "skipped (no smoke.mjs)"
 }
@@ -137,9 +148,9 @@ if (Test-Path $exe) {
     $e2 = $LASTEXITCODE
     $s1 = ($o1 -join "`n")
     $s2 = ($o2 -join "`n")
-    $same = ($s1 -ceq $s2)
+    $same = ($e1 -eq $e2) -and ($e1 -eq 0 -or $e1 -eq 5) -and ($s1 -ceq $s2)
     Report "double-run determinism" $same (
-        "exit1=$e1 exit2=$e2 (exit0 not required by spec) same=$same; out1: " + ($o1 -join " | "))
+        "exit1=$e1 exit2=$e2 same=$same; out1: " + ($o1 -join " | "))
     $runOut = $o1
 } else {
     Report "double-run determinism" $false "agentsim.exe missing"
@@ -170,10 +181,32 @@ if (Test-Path $exe) {
         # $base -ne $out 而假 PASS（exe 拒绝参数 != 参数生效改变输出）。
         $out = ''
         $perr = ''
+        $ec = 0
         try {
-            $out = (& $exe --no-render --ticks 1000 --seed 42 @($p.args) 2>&1 | Select-Object -Last 1) -replace ' policy=\w+',''
-            if ($LASTEXITCODE -ne 0 -or $out -match 'unknown option') {
-                $perr = "exe rejected probe (exit=$LASTEXITCODE): $out"
+            # Native stderr must NOT throw under $ErrorActionPreference=Stop: the
+            # engine is expected to print "population extinct" on stderr and that is
+            # a legitimate outcome, not a parameter error. Relax the preference for
+            # this call only and read $LASTEXITCODE explicitly.
+            $prevEap = $ErrorActionPreference
+            $ErrorActionPreference = 'Continue'
+            try {
+                $out = (& $exe --no-render --ticks 1000 --seed 42 @($p.args) 2>&1 | Select-Object -Last 1) -replace ' policy=\w+',''
+                $ec = $LASTEXITCODE
+            } finally {
+                $ErrorActionPreference = $prevEap
+            }
+            # Exit-code contract (main.cpp): 0 = ok, 3 = audit broken, 5 = extinction.
+            # NOTE: keep this file ASCII-only. PowerShell 5.1 reads BOM-less scripts
+            # as ANSI, so non-ASCII comments here corrupt the parser (learned the hard way).
+            # Extinction is NOT "parameter rejected": the design says local depletion /
+            # lineage loss / natural extinction are valid outcomes, so exit 5 must count
+            # as "parameter is live and produced a different ecological outcome".
+            # Otherwise any parameter that starves a small world is reported as dead
+            # (observed: --cyano-nodes 8 -> "population extinct at tick 1000").
+            # Real parameter errors (unknown option / other non-zero) still FAIL.
+            $mechExit = ($ec -eq 0 -or $ec -eq 5)
+            if (-not $mechExit -or $out -match 'unknown option') {
+                $perr = "exe rejected probe (exit=$ec): $out"
             }
         } catch {
             $perr = $_.Exception.Message

@@ -7,23 +7,18 @@
 #### 1.1 接口签名
 
 ```cpp
-virtual ActionVector decide(const SensorVector& sensors, const TargetList& targets) = 0;   // 主接口（虚）
-ActionVector decide(const SensorVector& sensors);                                          // 兼容重载（非虚）
+virtual ActionVector decide(const SensorVector& sensors, const TargetList& targets,
+                            PolicyMemory& memory) = 0;
+ActionVector decide(const SensorVector& sensors, const TargetList& targets);
+ActionVector decide(const SensorVector& sensors);
 virtual const char* name() const = 0;
 ```
 
-- 双参主接口：`src/decision/IDecisionPolicy.h:30`。
-- 单参兼容重载是**非虚**函数，函数体内用一个函数局部 `static const TargetList empty{}` 转发到双参版本（`src/decision/IDecisionPolicy.h:34-37`）。因此单参调用等价于"空目标表"，任何合规策略在空表下都不得产出施力意图。
-- 每个具体策略都必须写 `using IDecisionPolicy::decide;` 把基类非虚重载引入派生类作用域，否则同名派生 `decide` 会隐藏基类重载（`src/decision/IDecisionPolicy.h:15-17`）。
-- `decide` **不是 const 成员函数**（基类声明即无 const 限定，`src/decision/IDecisionPolicy.h:30,34`），因为它可以改自身内部状态（见 1.5）；只有 `name()` 是 const（`src/decision/IDecisionPolicy.h:39`）。
+三参版本接收指定个体的记忆。单参和双参便捷重载每次创建一份临时记忆，适合一次性的策略调用。各派生类通过 `using IDecisionPolicy::decide;` 保留这些重载。
 
 #### 1.2 输入：SensorVector 的 24 维
 
-`SensorVector::kDim = 24`（`src/core/SensorTypes.h:46`），分量语义由感知层 `src/perception/AgentSensors.cpp:81-252` 填充。有效感知半径
-
-$$R = \begin{cases} 0.25\,R_{\text{base}}, & \text{scoutCount} \le 0 \\ \min\left(R_{\text{base}}\sqrt{1+n},\; 4R_{\text{base}}\right), & \text{scoutCount}=n>0 \end{cases}$$
-
-其中 $R_{\text{base}}$ = `cfg.policy.senseRadius`，默认 24.0（`src/core/Config.h:45`），实现见 `src/perception/AgentSensors.cpp:74-79`。
+`SensorVector::kDim = 24`。正式模拟中，核搜索自身近处的可食目标。受控侦察球以实际世界坐标和自己的采样半径搜索，信息须在与宿主的控制距离内才会回传。距离采用环面最短距离，感知合并重复目标。
 
 | 下标 | 含义 | 计算式 | 值域 | 源码位置 |
 |---|---|---|---|---|
@@ -98,14 +93,14 @@ $$\text{amp} = k_{\text{readNoiseK}}\cdot\frac{\lvert v\rvert}{1+\lvert v\rvert}
 for (每个存活核 i) {
     TargetList targets = ...;                        // Simulation.cpp:356-388
     SensorVector sv = sense(...);                    // Simulation.cpp:419-421
-    ActionVector act = policy_->decide(sv, targets); // Simulation.cpp:422
+    ActionVector act = policy_->decide(sv, targets, n.memory);
     AgentBehavior::socialAccelerations(...);         // Simulation.cpp:428  （读 act.mod）
     if (act.forceSlot >= 0) applyNamedForce(...);    // Simulation.cpp:432-445（读 forceSlot/forceX/forceY）
     AgentBehavior::apply(n, act, ...);               // Simulation.cpp:446（读 dirX/dirY/boost）
 }
 ```
 
-**关键事实**：整个仿真只持有**一个**策略实例 `std::unique_ptr<IDecisionPolicy> policy_`（`src/sim/Simulation.h:141`），所有核按 `nuclei_` 下标顺序共享它。因此有状态的策略（Hysteresis / ForageBank / Bandit / RiskAverse）的内部记忆是**全种群共享的滚动状态**，不是每核独立状态：第 $i$ 个核读到的"上一帧"其实是同一帧里第 $i-1$ 个核写下的（ $i=0$ 时是上一 tick 最后一个核写下的）。这一点直接决定了第 4、7、8、9 节中各策略失效模式的形状。
+同一世界可共享一份策略对象和参数。Hysteresis、ForageBank、Bandit 和 RiskAverse 读取、更新各核自己的 `PolicyMemory`。新生核以初始记忆开始，存档与检查点保存各核的记忆。
 
 #### 1.6 策略装配
 
@@ -317,7 +312,7 @@ $$a.\text{mod}[1] = \mathrm{clamp}\!\left(-1,1,\ k_{\text{ModFocus}}\,(2p_{i^*} 
 
 #### 4.5 失效模式
 
-- **"现任"是全种群共享的**：`lastChoice_` 挂在共享实例上（1.5 节），下一个核读到的"现任"是同一帧里上一个核的选择，滞回语义在种群层面被稀释成"群体惯性"。核数 $n = 1$ 时才是设计意图。
+- 每只核独立保存上次选中的候选槽位。候选排序变化时，同一槽位可能指向不同菌落。
 - **gap 造成目标粘滞**：食物快速闪现/消失时，滞回带让它继续扑向已变差的目标，直到挑战者优势足够。
 - **永不施力、不做社会调制**（除可选的 `mod[1]`）。
 - **无紧迫度项**：能量耗尽与能量充足时行为完全一致，boost 只等于接近度。
@@ -552,7 +547,7 @@ $$a.\text{dir} = -\frac{(s_{10},s_{11})}{\lVert(s_{10},s_{11})\rVert},\qquad a.\
 
 - **"能量代理"不是能量**： $s_{13}$ 只表示"离地图边界多远"，而世界是环面拓扑，边界只是坐标卷绕缝，与风险无关（`src/perception/AgentSensors.cpp:189-190` 的注释也承认它是"占位的空间位置特征"）。真实能量维 $s_{21}$ 在默认参数下**完全不参与决策**。
 - **蓄能态方向是"逆速"而非"回中心"**： $s_{13}$ 不含方位信息，严格反推中心不可行，"原地蓄能"只是净位移最小化（`src/decision/ForageBankPolicy.h:15-17`）。
-- **状态全种群共享**：`foraging_` 只有一份（1.5 节），一个核的饥饿会把下一个核直接推入觅食态。
+- 觅食或储备状态由该核上一帧的判断保留。
 - **滞回带宽固定 0.4**：中间带很宽，环境缓慢漂移时可能长期卡在旧态。
 
 ### 8 BanditPolicy（Hedge / EXP3-lite 双臂加权）
@@ -657,7 +652,7 @@ $w_R = w_T = 0.5$ 时 uncertainty = 1；单臂饱和时趋 0。生产路径 `kMo
 
 - **回报是"接近度变化"而非真实能量收支**： $r_{\text{Env}}$ 看不见移动与呼吸耗散，"值不值得"只是几何代理。
 - **势能项不依赖真实结果**：只依赖上一帧感知与两臂方向，权重可以在没有真实反馈的情况下漂移。
-- **共享状态在这里危害最大**：`prevS_ / prevOut_` 是"同一帧上一个核"的数据（1.5 节），跨核信用分配在物理上没有意义； $n > 1$ 时两臂权重实际是按种群交错序列在更新，Hedge 的理论保证不成立。
+- 每只核根据自己的上一帧观测和动作更新权重。
 - **$\eta$ 上限 10 时单步对数差可达约 10**，几十帧内就饱和到地板（`tests/unit/test_bandit.cpp:494-520` 覆盖了极端 $\eta$ 下 softmax 下溢的数值稳定性）。
 - **不施力**：混合两臂的施力矢量被明确弃用（`src/decision/BanditPolicy.cpp:49-51`）。
 
@@ -793,7 +788,7 @@ $$a.\text{mod}[3] = \begin{cases}+k_{\text{Cohesion}}, & \text{mode} = 2\\ -k_{\
 - **温度折扣压死一切**：持续 $d > 0$ 时逐帧乘性衰减，即使食物充足也可能掉进 Conserve； $d = 0$ 时该项恒等。
 - **增益只看候选 0**：候选 0 在两个 tick 之间换人（最近节点变了）会制造虚假的"接近度增益"。
 - **Conserve 刷新周期与帧计数耦合**：`frameInMode_ % 3 == 1` 意味着进入 Conserve 的第 1、4、7… 帧刷新；若方向频繁失效，缓存会过期但不清空。
-- **共享状态**：`eroi_ / mode_ / prevProx_` 全种群一份（1.5 节）。
+- 各核独立缓存回报率、模式和上一次接近度。
 - **扫路先选"最近"再判"挡路"**：最近但不在路径上的球会占住唯一施力名额，真正挡路的球不会被处理（每帧只施力一个目标）。
 
 ### 10 StubPolicy（空策略）

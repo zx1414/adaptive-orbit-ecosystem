@@ -1,4 +1,4 @@
-﻿// agentsim - sim/Simulation.h
+// agentsim - sim/Simulation.h
 // 组合根：把环境/感知/决策/行为/账本拼成主循环。只负责编排，不改实体规则。
 // R1-B（蓝细菌取代食物）：Food 实体整条链路删除——foodCount()/foods() 已移除，
 // 核的唯一食物 = 蓝细菌节点（step() 内确定性捕食，见 Simulation.cpp R1-B 注释）。
@@ -17,6 +17,7 @@
 #include "decision/IDecisionPolicy.h"
 #include "environment/AgentEnvironment.h"
 #include "environment/CyanoNode.h"
+#include "environment/NutrientField.h"
 #include "environment/Terrain.h"
 #include "environment/TemperatureField.h"
 #include "ledger/AgentLedger.h"
@@ -39,9 +40,21 @@ public:
     // 序列化前逐位一致（test_save 的 roundtrip 用例把守）；auditOk 立即成立。
     bool serializeState(std::ostream& os) const;
     bool deserializeState(std::istream& is, std::string& err);
+    struct LightEffect {
+        double offset = 0.0;
+        Tick duration = 0;
+        Tick end = 0;
+    };
+    void setLightEffect(LightEffect effect) { lightEffect_ = effect; }
+    LightEffect lightEffect() const { return lightEffect_; }
+    SunConfig effectiveSun() const;
     // 世界线分支（Timeline 调用）：实体与 rng 保留，tick 归零（昼夜相位/统计
     // 节拍从 0 重算；world 几何/seed 由调用方保持不变）。
-    void restartClock() { tick_ = 0; }
+    void restartClock() {
+        if (lightEffect_.end > tick_) lightEffect_.end -= tick_;
+        else lightEffect_ = {};
+        tick_ = 0;
+    }
 
     // ---- R3-B（实时调控接线）追加：运行时热改入口（只追加，绝不改 step()）----
     // applyConfig(next)：把 next.cfg 融合进 cfg_ 后下一帧生效。融合规则：
@@ -60,10 +73,17 @@ public:
     //     cfg_.colony.genomeRanges 现取），已存在的 genome 不改（基因不能后天改）；
     //   - RNG：本函数零消耗，双跑确定性不受影响。
     void applyConfig(const SimConfig& next);
-    // 事件 bloom 用：向蓝细菌场追加 n 个节点（播种消耗 rng，等价一次小规模
-    // CyanoField::seed 的追加版；受 cyanoMaxNodes 护栏截断，返回实际追加数）。
-    // 能量账：追加节点的能量走 ledger（注入/耗散对由账本自证平衡）。
+    // 显式播种（外部输入）：向蓝细菌场追加 n 个节点。这是**玩家/脚本的显式
+    // 外部输入**，不是自然生长，也不是事件奖励——规则 v2 撤下了玩家直接造
+    // 生产者的旧事件（bloom）。物质账上，追加节点的 bodyMaterial + energy 都要
+    // 显式记为外部投入（见 nutrientExternallyAdded_），否则 A7 的物质守恒
+    // 会在"播种"这一步凭空多出物质却查不出来源。
     int addCyanoNodes(int n);
+    // 规则 v2：显式施肥（外部物质输入）。返回实际投入量。
+    // 与 addCyanoNodes 一样属于"外部投入"，物质账上单列（A7 的对照项）。
+    double fertilize(Vec2 pos, double amount);
+    // 规则 v2（P1）：物质场只读视图（前端/审计/测试）。
+    const NutrientField& nutrients() const { return nutrients_; }
     // 蓝细菌参数访问器（供测试断言 CyanoParams 白盒同步是否生效）。
     const CyanoParams& cyanoParams() const { return cyano_.params(); }
     // 当前生效配置的只读视图（测试/诊断用：断言 applyConfig 的 merge 结果）。
@@ -80,6 +100,18 @@ public:
     void setAuditEnabled(bool on) { auditEnabled_ = on; }
     bool auditEnabled() const { return auditEnabled_; }
     std::uint64_t deathCount() const { return deathCount_; }
+    // 规则 v2（P1）：物质账视图（A7 守恒断言用；与总能量口径完全独立）。
+    struct MatterLedger {
+        double nodeMaterial = 0.0;   // 存活蓝细菌的组织
+        double nucleusMass = 0.0;    // 存活核的身体物质
+        double debris = 0.0;         // 待分解残骸
+        double nutrient = 0.0;       // 可吸收养分
+        double externalIn = 0.0;     // 累计外部投入（开局注入 + 显式施肥/播种）
+        double total() const {
+            return nodeMaterial + nucleusMass + debris + nutrient;
+        }
+    };
+    MatterLedger matter() const;
 
     // ---- 只读视图（组合根接线用，S15 轨迹导出消费）----
     // 只暴露 const 引用，外部无法写入，不破坏"行为层是唯一写点"红线。
@@ -145,16 +177,25 @@ private:
     BallFieldParams ballField_{};   // R7-B（behavior 命名空间域结构，类外）
     std::unique_ptr<IDecisionPolicy> policy_;
     BehaviorParams bp_{};
-    // R2-A §8：待分配尸体营养包（核死亡 30% 遗产，apply 填充 → 本容器中转 →
-    // 当帧分配给最近的蓝细菌节点）。能量始终在账：totalEnergy() 计入 carrion_。
-    std::vector<Carrion> carrion_;
-    // R3-A（营养循环）：carrion 能量流水（逐包累加）。in = 死核装包入队的
-    // 能量；out = 分配时实际出账的能量（fertilize 接受量 + 溢出/无分解者的
-    // dissipate 量）。carrion_ 每帧清空 => 流水每帧闭合：|in - out| 只剩浮点
-    // 尾数（逐包 ≤1 ulp），step() 审计段断言 1e-9 相对容差内相等——"包被取走
-    // 却既没转移也没耗散"（能量滞留/蒸发）当场置 auditOk_=false。
-    double carrionEnergyIn_ = 0.0;
-    double carrionEnergyOut_ = 0.0;
+    // ---- 规则 v2（P1）：物质场 ----
+    // 环境层的残骸/养分网格。与能量账完全独立：这里的量是"物质"，
+    // 不能让生产者凭空多出可用能量（A7/A8）。
+    NutrientField nutrients_;
+    LightEffect lightEffect_;
+    // 累计外部物质投入（开局播种 + 显式施肥/播种）。
+    // 用途：A7 的守恒式必须写成 matter().total() == 初值 + externalIn，
+    // 否则"玩家施肥"与"物质凭空出现"在账上分不开。
+    double matterExternalIn_ = 0.0;
+    // 规则 v2：摄食流水的逐帧闭合（与 carrion 流水同一套思路）。
+    //   grazeTaken_ = 本帧被咬下并离开蓝细菌场的组织总量
+    //   grazeAbsorbed_ = 其中真正进入核体的部分
+    //   grazeRejected_ = 回到环境的残骸
+    // 恒等式：grazeTaken_ == grazeAbsorbed_ + grazeRejected_（1e-12 相对容差）。
+    double grazeTaken_ = 0.0;
+    double grazeAbsorbed_ = 0.0;
+    double grazeRejected_ = 0.0;
+    // 规则 v2：本帧因死亡产生的残骸总量（观测/审计用）。
+    double lastDeadMaterial_ = 0.0;
     Tick tick_ = 0;
     bool auditOk_ = true;
     bool auditEnabled_ = false; // 运行时审计开关：默认关（opt-in），见 setAuditEnabled

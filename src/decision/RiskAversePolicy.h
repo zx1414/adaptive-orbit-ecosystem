@@ -1,4 +1,4 @@
-﻿// agentsim - decision/RiskAversePolicy.h
+// agentsim - decision/RiskAversePolicy.h
 // 风险规避 + 能量预算策略（用户授权的策略创新第 5 条）。
 // 动机：现有策略都不"记账"——它们不知道自己为移动花了多少能量。本策略把
 // 能量回报率（EROI, Energy Return On Investment）显式纳入决策：
@@ -36,12 +36,14 @@
 //   · mod[]：Earn 态正调制聚拢（mod[3]，富矿区值得呼朋引伴一起收割）；
 //     Conserve 态负调制聚拢 + 负调制视野（疏散 + 少看省心）。强度可配，默认 0。
 //
-// decide() 禁 RNG、禁读世界；全部状态只有 eroi_、lastDirX/Y（含 Conserve 低频
-// 刷新缓存 cachedDir*）、prevProx_、mode_、frameInMode_。非有限输入一律清洗为 0，
-// 全 NaN 输入也不产生 NaN 输出。纯确定性算术，绝不 include environment/ sim/
-// ledger/（红线 S4）。
+// decide() 禁 RNG、禁读世界。P0-4（记忆归个体）：全部跨帧状态（EROI 的 EMA、
+// 上一帧接近度、最近/缓存方向、模式与模式内帧计数）都住在 PolicyMemory 的 risk*
+// 块里，由每个核各自持有一份；本类实例只保留构造期标定的不可变参数 p_。
+// 非有限输入一律清洗为 0，全 NaN 输入也不产生 NaN 输出。纯确定性算术，
+// 绝不 include environment/ sim/ ledger/（红线 S4）。
 #pragma once
 #include "decision/IDecisionPolicy.h"
+#include "decision/PolicyMemory.h"
 
 namespace agentsim {
 
@@ -68,32 +70,25 @@ public:
     explicit RiskAversePolicy(const Params& p = {});
 
     // 纯确定性；非有限输入清洗为 0，全 NaN 输入也不产生 NaN 输出。
-    ActionVector decide(const SensorVector& s, const TargetList& targets) override;
-    using IDecisionPolicy::decide; // 旧单参调用面（基类非虚重载）
+    // memory 是本个体的 EROI/模式记忆（就地更新），默认值 = Mid 起步的新个体。
+    ActionVector decide(const SensorVector& s, const TargetList& targets,
+                        PolicyMemory& memory) override;
+    using IDecisionPolicy::decide; // 基类两参/单参兼容重载（一次性无状态语义）
     const char* name() const override { return "riskaverse"; }
 
     // ---- 可解释性接口（供单测验证 EROI 状态机）----
-    // 当前 EROI 估计（EMA 后含温度折扣，恒 >= 0）。
-    double eroi() const { return eroi_; }
-    // 当前模式：0=Conserve（省能巡航），1=Mid（插值），2=Earn（全速觅食）。
-    int mode() const { return mode_; }
-    // 当前模式内已持续帧数（decide 内自增，首帧调用后 = 1）。
-    int frameInMode() const { return frameInMode_; }
-    // 清空全部记忆（单测确定性验证用）。
-    void reset();
+    // 全部为静态 + 收记忆参数：这些状态已不在策略实例里（P0-4）。
+    // 该个体当前 EROI 估计（EMA 后含温度折扣，恒 >= 0）。
+    static double eroi(const PolicyMemory& memory) { return memory.riskEroi; }
+    // 该个体当前模式：0=Conserve（省能巡航），1=Mid（插值），2=Earn（全速觅食）。
+    static int mode(const PolicyMemory& memory) { return memory.riskMode; }
+    // 该个体当前模式内已持续帧数（decide 内自增，首帧调用后 = 1）。
+    static int frameInMode(const PolicyMemory& memory) { return memory.riskFrameInMode; }
+    // 清空本策略的记忆（单测确定性验证用）；只动自己的 risk* 块。
+    static void reset(PolicyMemory& memory);
 
 private:
-    Params p_;
-    double eroi_ = 0.0;        // EMA 后含温度折扣的 EROI 估计，恒 >= 0
-    double prevProx_ = 0.0;    // 上一帧候选 0 接近度（增益 = 本帧 - 上帧，只取正部）
-    double lastDirX_ = 0.0;    // 最近一次有效的食物方向（每帧维护）
-    double lastDirY_ = 0.0;
-    double cachedDirX_ = 0.0;  // Conserve 态低频刷新的方向缓存
-    double cachedDirY_ = 0.0;
-    bool hasCachedDir_ = false;// Conserve 缓存是否已建立
-    int mode_ = 1;             // 0=Conserve 1=Mid 2=Earn；中性 Mid 起步（保守并不消极）
-    int frameInMode_ = 0;      // 当前模式内帧计数（迁移时清零重计）
-    int frameInModeMode_ = 1;  // frameInMode_ 所属模式
+    Params p_; // 构造期标定，不可变
 };
 
 } // namespace agentsim

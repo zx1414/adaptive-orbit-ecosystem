@@ -198,10 +198,6 @@ fc.exe /b run1.txt run2.txt
 | 5 | `--no-render --ticks 20000 --seed 42 --audit` | done tick=20000 nuclei=18 food=15 total_energy=1740.43027179 audit=ok policy=rule（**新基线**，见「基线变更说明」） | 0 |
 | 6 | `--no-render --ticks 20000 --seed {7\|123} --audit` | seed 7：nuclei=17 food=12 total_energy=1633.88919315 audit=ok<br>seed 123：nuclei=16 food=12 total_energy=1799.60976441 audit=ok | 0 / 0 |
 
-## 夜班最终总结
-
-见 [NIGHT-SUMMARY.md](NIGHT-SUMMARY.md)。
-
 ---
 
 ## R4 红队修复（2026-10-31 10:00，主代理亲自主持）
@@ -371,3 +367,100 @@ score     = wProximity*proximity*trustFood + wThermal*thermal*trustStay
 | T23 前端同步 | S24, S25 | 真实 600 帧蓝细菌生态轨迹打包（4.2MB 单文件）；Scout 紫 / 自由球虚线外圈 / 环面接缝箭头；node --check 5 js 全过 | `node frontend/tools/bundle.mjs`；headless Edge 截图（主代理实核） |
 | 门禁强化 | §6 | guard:decision-has-no-rng（PerceptronPolicy 构造期窄豁免）；live-param 4 探针（剥 policy= 后比较）；写点守卫覆盖 `arr[i].energy =` 形态 | `tools\check.ps1`（8 守卫 + 4 探针全 PASS） |
 | 红队 R7/R8 修复 | S3, §6 | R7：5×P1（trace 精度/audit 中止/错误码/球type/内存上限）+ 2×P2；R8：2×P0（产球幻影注入 417k、credited/gain 分叉）+ 饿死蒸发 + 尸体占坑 + 能量坟场 + stateHash；**resid 对销通道删除** | `agentsim.exe --ticks 20000 --audit` × 6 seed 全 ok；R8 报告与主代理独立复现记录见 LOG.md |
+
+---
+
+# 规则 v2（生态机制改造 P0–P2）可复现证据 — 2026-11-25
+
+### 2026-11-26 本地复核
+
+| 范围 | 验证方式与判据 |
+| --- | --- |
+| A3 搜索和 A9 侦察 | `build\unit_tests.exe --only a3_ --only a9_`。默认核能在无可见食物时移动，侦察球半径控制目标是否出现，球跨接缝时仍能采样，默认策略能选择远处目标。 |
+| A10 储备 | `build\unit_tests.exe --only a10_ --only cap_overflow_occurs`。正常摄食补充球内储备，核体上限独立结算，溢出耗散可以核对。 |
+| A13 干预与续跑 | `build\unit_tests.exe --only a13_ --only save_and_timeline_restore_active`。测试以冬季和非默认环境参数存档，验证检查点、回放补帧和连续推进在效应到期前后逐位一致。 |
+| 默认生态 | 对种子 7、42、123 分别执行 `build\agentsim.exe --no-render --ticks 3000 --seed <seed> --audit`。三组审计均通过。生产者终局依次为 85、0、2，核数为 45、17、55。 |
+| 客户端 | `build\agentsim.exe --serve 18991 --ticks 25 --no-open --audit` 可启动服务并结束批跑。受限环境对客户端回环连接返回 Winsock 10013，真实 HTTP 请求链路仍待验证。 |
+| 回归 | 34 项针对性用例通过。独立运行 442 项非 HTTP 单测，23269 条断言均通过。全量门禁中的失败仅出现在 HTTP 用例；前端使用本次构建生成的审计轨迹，266 项烟雾检查通过。 |
+
+> 规则版本 `kRulesVersion = 2`，存档格式 v4。以下命令均在仓库根执行。
+
+## 1. 门禁与单测
+
+```powershell
+cmd /d /c tools\gate.bat
+Get-Content -Encoding utf8 -Tail 30 build\gate_out.txt
+# 单测（本机需排除 resourcepack：该文件在本机会 0xC0000409，见 V1）
+.\build\unit_tests.exe --skip resourcepack
+# 期望末行：440/449 tests, 25375 checks, 0 failures
+```
+
+单测定位开关（`tests/unit/main.cpp` 新增，用于把"环境崩溃"与"用例失败"分离）：
+`--list` / `--only <子串>` / `--skip <子串>` / `--from N`。
+
+## 2. 验收判据（A1–A13）
+
+```powershell
+.\build\unit_tests.exe --only a1_
+.\build\unit_tests.exe --only a2_
+.\build\unit_tests.exe --only a3_
+.\build\unit_tests.exe --only a4_
+.\build\unit_tests.exe --only a6_
+.\build\unit_tests.exe --only a7_
+.\build\unit_tests.exe --only a8_
+.\build\unit_tests.exe --only a9_
+.\build\unit_tests.exe --only a10_
+.\build\unit_tests.exe --only a11_
+.\build\unit_tests.exe --only a12_
+.\build\unit_tests.exe --only a13_
+.\build\unit_tests.exe --only decision_memory_
+```
+
+## 3. A5：真实 HTTP 客户端路径（普通开局 / 干预 / 保存 / 恢复 / 时间轴）
+
+```powershell
+.\build\agentsim.exe --serve 8080 --no-open
+# 另一个窗口：
+Invoke-WebRequest http://127.0.0.1:8080/env -UseBasicParsing
+Invoke-WebRequest http://127.0.0.1:8080/env/event -UseBasicParsing
+Invoke-WebRequest http://127.0.0.1:8080/env -Method Post -Body "event.winter=1" -ContentType "application/x-www-form-urlencoded" -UseBasicParsing
+Invoke-WebRequest http://127.0.0.1:8080/env -Method Post -Body "seed.cyano=25"   -ContentType "application/x-www-form-urlencoded" -UseBasicParsing
+Invoke-WebRequest http://127.0.0.1:8080/save   -Method Post -Body "name=v2check" -ContentType "application/x-www-form-urlencoded" -UseBasicParsing
+Invoke-WebRequest http://127.0.0.1:8080/load   -Method Post -Body "name=v2check" -ContentType "application/x-www-form-urlencoded" -UseBasicParsing
+Invoke-WebRequest http://127.0.0.1:8080/timeline -UseBasicParsing
+```
+
+2026-11-25 实测关键行：
+
+```
+POST event.winter=1 -> 200 {"ok":true,...,"queuedEvents":1}
+GET /env/event      -> {"active":true,"lightOffset":-0.350000,"durationFrames":600,
+                        "remainingFrames":594,"endTick":733,
+                        "sunBaseEffective":0.150000,"sunBasePlayer":0.500000}
+POST seed.cyano=25  -> 200 {"ok":true,...,"queuedSeeds":1}   （服务端日志标 external input）
+POST /save          -> 200 {"ok":true,"name":"v2check"}
+POST /load          -> 200 {"ok":true,"name":"v2check"}
+GET /timeline       -> {"ok":true,"checkpoints":[],"current":64}
+GET /state          -> 14400 bytes
+POST event.harvest=1 -> HTTP 400（retired_event）
+POST event.bloom=1   -> HTTP 400（retired_event）
+```
+
+## 4. 物质守恒（A7）与能量审计
+
+```powershell
+.\build\agentsim.exe --no-render --ticks 2000 --seed 42 --audit
+# 期望：audit=ok（末行含 nuclei/cyano/total_energy）
+```
+
+`matter().total() - matter().externalIn` 在 5000 tick、多组参数下恒为 0.000000
+（探针脚本属临时诊断，未入库）。
+
+## 5. 确定性（A12/A13）
+
+```powershell
+# 同种子双跑逐字节一致（门禁 double-run 亦覆盖）
+.\build\agentsim.exe --no-render --ticks 2000 --seed 42 --audit > a.txt
+.\build\agentsim.exe --no-render --ticks 2000 --seed 42 --audit > b.txt
+Compare-Object (Get-Content a.txt) (Get-Content b.txt)
+```

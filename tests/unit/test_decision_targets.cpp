@@ -19,6 +19,10 @@
 //   E. targets.count 的防御：count<0 / count>8 时输出仍有限、无越界读
 //      （契约说 count ∈ [0,8]，但决策层不信任上游）。
 // 红线：本文件不使用 RNG（手工构造全部输入），不 include environment/sim/ledger。
+//
+// P0-4 说明：本文件主要钉"契约形状"（施力点名 / 社会调制 / 防御），多帧用例
+// （B2/C3/C4 需要 EROI 或 Hedge 累积）显式传同一个 PolicyMemory；单帧用例继续走
+// 基类两参兼容重载（一次性无状态语义）。三参接口的个体隔离性见 test_decision_memory.cpp。
 #include "test_framework.h"
 
 #include <cmath>
@@ -29,6 +33,7 @@
 #include "../../src/decision/HysteresisPolicy.h"
 #include "../../src/decision/IDecisionPolicy.h"
 #include "../../src/decision/PerceptronPolicy.h"
+#include "../../src/decision/PolicyMemory.h"
 #include "../../src/decision/RiskAversePolicy.h"
 #include "../../src/decision/RulePolicy.h"
 #include "../../src/decision/ThermalPolicy.h"
@@ -39,6 +44,7 @@ using agentsim::ActionVector;
 using agentsim::ForceTarget;
 using agentsim::IDecisionPolicy;
 using agentsim::PerceptronPolicy;
+using agentsim::PolicyMemory;
 using agentsim::SensorVector;
 using agentsim::TargetList;
 
@@ -178,14 +184,15 @@ TEST(targets_riskaverse_pushes_blocking_ball_in_earn) {
 
     // 制造 Earn：接近度持续上升（obs ≈ 1.39，EMA ~12 帧后 > 1.3）。
     const SensorVector s = fedSensor();
+    PolicyMemory mem; // 同一个体的 EROI 记忆（P0-4：状态不再在策略实例里）
     ActionVector a{};
     for (int k = 1; k <= 30; ++k) {
         SensorVector f = s;
         f[6] = 0.05 + 0.01 * static_cast<double>(k);
         f[9] = 1.0 - f[6];
-        a = pol.decide(f, oneTarget(1.0, 0.0, 4.0));
+        a = pol.decide(f, oneTarget(1.0, 0.0, 4.0), mem);
     }
-    CHECK(pol.mode() == 2);              // Earn
+    CHECK(agentsim::RiskAversePolicy::mode(mem) == 2); // Earn
     CHECK(a.forceSlot == 0);             // 球在 (+1,0) = 期望方向 -> 挡路
     CHECK(a.forceX > 0.0);               // 推力主要沿 +x
     const double flen = std::sqrt(a.forceX * a.forceX + a.forceY * a.forceY);
@@ -193,28 +200,30 @@ TEST(targets_riskaverse_pushes_blocking_ball_in_earn) {
 
     // 球在侧后方（(-1,0)），不挡路 -> 不施力。
     agentsim::RiskAversePolicy pol2(p);
+    PolicyMemory mem2;
     for (int k = 1; k <= 30; ++k) {
         SensorVector f = s;
         f[6] = 0.05 + 0.01 * static_cast<double>(k);
         f[9] = 1.0 - f[6];
-        a = pol2.decide(f, oneTarget(-1.0, 0.0, 4.0));
+        a = pol2.decide(f, oneTarget(-1.0, 0.0, 4.0), mem2);
     }
-    CHECK(pol2.mode() == 2);
+    CHECK(agentsim::RiskAversePolicy::mode(mem2) == 2);
     CHECK(a.forceSlot == -1);
 
     // EROI 崩塌后（Conserve）不施力：EROI 折扣到位后模式必然退出 Earn。
     agentsim::RiskAversePolicy pol3(p);
+    PolicyMemory mem3;
     for (int k = 1; k <= 30; ++k) {
         SensorVector f = s;
         f[6] = 0.05 + 0.01 * static_cast<double>(k);
         f[9] = 1.0 - f[6];
-        (void)pol3.decide(f, oneTarget(1.0, 0.0, 4.0));
+        (void)pol3.decide(f, oneTarget(1.0, 0.0, 4.0), mem3);
     }
-    CHECK(pol3.mode() == 2);
+    CHECK(agentsim::RiskAversePolicy::mode(mem3) == 2);
     for (int k = 1; k <= 120; ++k) {
-        a = pol3.decide(s, oneTarget(1.0, 0.0, 4.0)); // 无增益 -> EMA 衰减
+        a = pol3.decide(s, oneTarget(1.0, 0.0, 4.0), mem3); // 无增益 -> EMA 衰减
     }
-    CHECK(pol3.mode() == 0);             // Conserve
+    CHECK(agentsim::RiskAversePolicy::mode(mem3) == 0); // Conserve
     CHECK(a.forceSlot == -1);
 }
 
@@ -312,8 +321,9 @@ TEST(bandit_explore_mod_peaks_at_uncertainty) {
     asym[17] = 0.5;
 
     agentsim::BanditPolicy p1(0.05, {}, 0.9); // kModExplore 开启
+    PolicyMemory mem1;                       // 个体 1 的学习历史
     // 首帧权重 0.5/0.5 -> uncertainty = 4*0.5*0.5 = 1 -> mod[3] = 0.9。
-    const ActionVector a = p1.decide(asym, oneTarget(1.0, 0.0, 5.0));
+    const ActionVector a = p1.decide(asym, oneTarget(1.0, 0.0, 5.0), mem1);
     CHECK_NEAR(a.mod[3], 0.9, 1e-12);
     CHECK(maxAbsMod(a) > 0.01);
     CHECK(a.forceSlot == -1); // bandit 不施力（设计决定）
@@ -323,9 +333,10 @@ TEST(bandit_explore_mod_peaks_at_uncertainty) {
     agentsim::ThermalPolicy::Params tp;
     tp.wThermal = 3.0;
     agentsim::BanditPolicy p2(0.5, tp, 0.9);
-    for (int i = 0; i < 60; ++i) (void)p2.decide(asym, oneTarget(1.0, 0.0, 5.0));
-    CHECK(p2.weightRule() > 0.9);            // 权重确实尖锐化了
-    const ActionVector b = p2.decide(asym, oneTarget(1.0, 0.0, 5.0));
+    PolicyMemory mem2;
+    for (int i = 0; i < 60; ++i) (void)p2.decide(asym, oneTarget(1.0, 0.0, 5.0), mem2);
+    CHECK(agentsim::BanditPolicy::weightRule(mem2) > 0.9); // 权重确实尖锐化了
+    const ActionVector b = p2.decide(asym, oneTarget(1.0, 0.0, 5.0), mem2);
     CHECK(std::fabs(b.mod[3]) < 0.9 * 0.01); // uncertainty < 0.01
 
     // 默认参数：mod 恒 0。
@@ -343,23 +354,24 @@ TEST(riskaverse_mod_tracks_mode) {
 
     // Earn：+聚拢 +视野。
     const SensorVector s = fedSensor();
+    PolicyMemory mem;
     ActionVector a{};
     for (int k = 1; k <= 30; ++k) {
         SensorVector f = s;
         f[6] = 0.05 + 0.01 * static_cast<double>(k);
         f[9] = 1.0 - f[6];
-        a = pol.decide(f, TargetList{});
+        a = pol.decide(f, TargetList{}, mem);
     }
-    CHECK(pol.mode() == 2);
+    CHECK(agentsim::RiskAversePolicy::mode(mem) == 2);
     CHECK_NEAR(a.mod[3], 0.6, 1e-12);
     CHECK_NEAR(a.mod[0], 0.4, 1e-12);
     CHECK(maxAbsMod(a) > 0.01);
 
     // Conserve：-聚拢 -视野。
     for (int k = 1; k <= 120; ++k) {
-        a = pol.decide(s, TargetList{});
+        a = pol.decide(s, TargetList{}, mem);
     }
-    CHECK(pol.mode() == 0);
+    CHECK(agentsim::RiskAversePolicy::mode(mem) == 0);
     CHECK_NEAR(a.mod[3], -0.6, 1e-12);
     CHECK_NEAR(a.mod[0], -0.4, 1e-12);
 }

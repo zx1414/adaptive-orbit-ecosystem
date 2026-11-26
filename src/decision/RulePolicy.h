@@ -1,4 +1,4 @@
-﻿// agentsim - decision/RulePolicy.h
+// agentsim - decision/RulePolicy.h
 // 规则打分策略：对 3 个食物候选逐个打分，取最高分方向。纯确定性，无 RNG。
 //
 // R2 生态位假设（本策略靠什么活/怎么死）：
@@ -10,28 +10,34 @@
 //   不做社会调制；只消费邻居维做"拥挤让速"（被动礼让，不是合作）。
 #pragma once
 #include "decision/IDecisionPolicy.h"
+#include "decision/PolicyMemory.h"
 
 namespace agentsim {
 
 class RulePolicy : public IDecisionPolicy {
 public:
     explicit RulePolicy(double wProximity = 1.0, double wAlignment = 0.8, double wUrgency = 0.6);
-    // R2 双参主接口：targets 参与契约（本策略恒不施力），感知只用 s[0..16]。
-    ActionVector decide(const SensorVector& sensors, const TargetList& targets) override;
-    using IDecisionPolicy::decide; // 旧单参调用面（基类非虚重载）
+    // R2 三参主接口：targets 参与契约（本策略恒不施力），感知只用 s[0..16]。
+    // P0-4：本策略**无可变记忆**（每帧只读输入 + 不可变权重），memory 仅按契约占位、
+    // 绝不写入 —— 这正是"记忆归个体"里最简单的一类：它本来就没有个体历史。
+    ActionVector decide(const SensorVector& sensors, const TargetList& targets,
+                        PolicyMemory& memory) override;
+    using IDecisionPolicy::decide; // 基类两参/单参兼容重载（一次性无状态语义）
     const char* name() const override { return "rule"; }
 
 private:
-    double wP_;  // 接近度权重：奖励更近的食物
+    double wP_;  // 接近度权重：奖励更近的食物（构造期标定，不可变）
     double wA_;  // 对齐权重：奖励与当前航向一致的候选，减少折返抖动
     double wU_;  // 紧迫度权重：能量代理量越低越急迫，压过对齐项
 };
 
 class StubPolicy : public IDecisionPolicy {
 public:
-    // R2 双参接口：Stub 什么都不做——默认保守契约的完整性由此测试：
+    // R2 三参接口：Stub 什么都不做——默认保守契约的完整性由此测试：
     // 零方向、零 boost、不施力（forceSlot=-1）、不调制（mod 全 0）。
-    ActionVector decide(const SensorVector& sensors, const TargetList& targets) override;
+    // P0-4：无记忆，memory 只读占位不写。
+    ActionVector decide(const SensorVector& sensors, const TargetList& targets,
+                        PolicyMemory& memory) override;
     using IDecisionPolicy::decide;
     const char* name() const override { return "stub"; }
 };

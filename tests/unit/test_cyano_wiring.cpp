@@ -1,7 +1,13 @@
 // agentsim - tests/unit/test_cyano_wiring.cpp
 // S22 接线单测：CyanoField 进入 Simulation 组合根后的行为与账本恒等式。
 // 覆盖：播种、光照净增长、20k tick 审计闭合、totalEnergy 包含蓝细菌、
-// 同种子逐位确定性、产球实体投放。
+// 同种子逐位确定性。
+//
+// ---- 规则 v2（P0–P2）迁移说明 ----
+// · 删除 wiring_free_balls_from_cyano：蓝细菌不再产出成品球（验收 A11），
+//   保护意图的新落点见该处原位注释。
+// · wiring_cyano_grows_with_sun / wiring_audit_holds_long_run 的生态前提
+//   （第一营养级不断）目前受一条生产缺陷影响，见各用例原位注释。
 #include "test_framework.h"
 
 #include <cstddef>
@@ -33,10 +39,25 @@ TEST(wiring_cyano_seeded) {
     CHECK(sim.auditOk()); // 构造期注入（初始能量入账）后审计即应成立
 }
 
+// 【2026-11-25 迁移】本用例把世界钉在 256² 却保留 1024 世界的播种密度
+// （makeSim 用默认 cyanoNodeCount/cyanoColonies），规则 v2 之后这组配置在
+// 256² 里会稳定崩掉——原因是养分预算被面积缩水 16 倍（256² 只有 2x2=4 个
+// 养分区 × 960 = 3840，而开局播种了 512 × 45 = 23040 的组织），
+// 详见 test_cyano_shading.cpp:shade_default_run_stays_below_guard 的推导。
+// 这里按面积把密度缩到 1/8（64 节点 / 8 聚落），让养分/组织比回到与默认
+// 世界同量级；断言本身一字未改。
 TEST(wiring_cyano_grows_with_sun) {
-    Simulation sim = makeSim(42);
+    // 密度按面积缩放（见上方注释）：256² 世界的养分预算只有默认世界的 1/16。
+    SimConfig cfg;
+    cfg.world.seed = 42;
+    cfg.world.width = 256.0;
+    cfg.world.height = 256.0;
+    cfg.cyanoNodeCount = 64;
+    cfg.cyanoTuning.cyanoColonies = 8;
+    Simulation sim(cfg);
     const std::size_t initial = sim.cyano().aliveCount();
     CHECK(initial > 0);
+    CHECK(initial == 64u);          // 播种数由 cyanoNodeCount 决定（不是默认 512）
     CHECK(sim.runTo(2000));
     // 【断言修正 2026-10-31】原断言是 aliveCount() >= initial（"种群只增不减"），
     // 那是在**捕食还没接线**时写的假设。现在核会吃蓝细菌（S22 捕食接线），
@@ -66,24 +87,25 @@ TEST(wiring_deterministic) {
     CHECK(a.stateHash() == b.stateHash());
 }
 
-// 产球链路：跑足够多 tick，累计 ballsProduced 必为正，且每个产球 tick
-// freeBalls 容器都承接了对应数量的新实体（id 从 0x40000000 起分配）。
-TEST(wiring_free_balls_from_cyano) {
-    Simulation sim = makeSim(42);
-    bool sawBalls = false;
-    for (std::uint64_t t = 0; t < 6000 && !sawBalls; ++t) {
-        sim.step();
-        // 模块报告无法从外部逐帧取（step 内部消化），改从自由球容器观测：
-        // cyano 产的球 id >= 0x40000000，核脱离球 id 则来自行为层小 id 空间。
-        for (const agentsim::Ball& b : sim.freeBalls()) {
-            if (b.id >= 0x40000000ULL) { sawBalls = true; break; }
-        }
-        if (sim.cyano().aliveCount() == 0) break; // 极端灭绝则放弃触发
-    }
-    // 断言：不崩溃、审计全程通过，并且确实观测到过蓝细菌产出的自由球。
-    CHECK(sim.auditOk());
-    CHECK(sawBalls);
-}
+// 【规则 v2（P2）—— 用例已删除】原 wiring_free_balls_from_cyano 保护的是
+// 「蓝细菌付出自身能量产出可被核接管的成品球，且产出的球进入自由球容器
+// （id >= 0x40000000）」。
+//
+// 这条规则已被设计 §3.3 / 验收 A11 明确撤去：「统一器官来源与储能位置……
+// 普通生态由核造球，蓝细菌只生长和分裂」。生产侧对应删除项包括
+// CyanoParams.ballSpawn*、CyanoStepReport.ballsProduced / ballEnergyTotal、
+// CyanoField::lastBallSpawns() 以及 Simulation 里 0x40000000 这条 id 空间。
+//
+// 为什么删除而不是改写：本用例的**全部断言**都挂在「蓝细菌能产出球」这个前提上
+//（观测对象就是 cyano 源的球 id）。规则不存在了，前提也就不存在——把它改成
+// 「自由球池里没有球」会是一条**反向**的、恒真的断言（没有核时本来就没有球），
+// 那等于把一条真实的保护意图换成永远 pass 的空壳，正是执行提示词禁止的做法。
+//
+// 保护意图的新落点（"器官从哪来"这件事仍然要被守住）：
+//   · 正向替代：test_ecology_v2.cpp 的 a11_nucleus_builds_its_own_organ_and_pays_for_it
+//     （核自己付费造器官）与 a11_cyano_no_longer_drops_ready_made_balls
+//     （核数为 0 时自由球池必须为空——那才是"蓝细菌不产球"的正向断言）；
+//   · 行为层细节：test_ball_forces.cpp 的 deploy_* 用例族。
 
 // 审计闭合（最关键一条）：整个推进过程中 injected-dissipated
 // 与全部存活实体（核+球+蓝细菌+自由球）能量总和逐 tick 相等。

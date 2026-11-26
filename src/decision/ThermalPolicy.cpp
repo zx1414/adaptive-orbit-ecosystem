@@ -1,4 +1,4 @@
-﻿// agentsim - decision/ThermalPolicy.cpp
+// agentsim - decision/ThermalPolicy.cpp
 // 趋温策略实现：温度是资源品质的代理信号，显式推理、完全可解释、零 RNG。
 // 打分机制（对至多 3 个食物候选逐个算分，取最高分方向）：
 //   proximity = s[6+i]                     归一化接近度，越近分越高。
@@ -152,7 +152,8 @@ double ThermalPolicy::candidateScore(const SensorVector& s, int i) const {
 
 // ①无目标早退 -> ②逐候选打分取最高 -> ③高失真降速 -> ④方向归一化防 NaN
 // -> ⑤ R2 社会调制（comfort 写 mod，强度默认 0）。
-ActionVector ThermalPolicy::decide(const SensorVector& s, const TargetList& /*targets*/) {
+ActionVector ThermalPolicy::decide(const SensorVector& s, const TargetList& /*targets*/,
+                                 PolicyMemory& /*memory*/) {
     ActionVector a;
 
     // ① 无目标：最近食物距离归一化 s[9] <= 0，且候选槽位全空时原地等待。

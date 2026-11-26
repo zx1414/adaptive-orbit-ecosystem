@@ -43,8 +43,8 @@ window.Main = (function () {
     idx: 0,
     playing: false, loop: true, speed: 1, accum: 0, lastTs: 0,
     FPS_BASE: 24,
-    cinema: false,
-    hoverIndex: -1,
+    cinema: true,
+    hoverPoint: null,
     pinnedCards: {},        // R8-D: nucleusId -> true (pinned param cards)
     pinnedSeq: 0,           // dom id counter
     frameCount: 0,
@@ -66,12 +66,12 @@ window.Main = (function () {
     // R7-D 调色板：renderer DEFAULT_PALETTE 的镜像（'r,g,b' 字符串）。真源在
     // renderer 内部；boot 时 GET /packs → active 覆盖默认，离线/404 保持内置默认。
     palette: {
-      background: '10,14,26',
-      ball_shield: '255,207,94',
-      ball_worker: '69,224,216',
-      ball_scout: '183,139,255',
-      free_ball: '200,200,210',
-      nucleus: '255,255,255'
+      background: '233,228,211',
+      ball_shield: '169,119,70',
+      ball_worker: '71,125,109',
+      ball_scout: '109,125,139',
+      free_ball: '63,76,60',
+      nucleus: '77,92,70'
     },
     packs: [],            // R7-D：GET /packs 的包列表缓存（[] = 未拉到/离线）
     packsOnline: null,    // R7-D：材质包区在线态 true/false/null（探测中）
@@ -107,6 +107,11 @@ window.Main = (function () {
   var PAGE_IDS = ['menu', 'run', 'params', 'saves'];
   function showPage(name) {
     state.page = name;
+    updateMapLayout();
+    if (name !== 'run') {
+      state.hoverPoint = null;
+      refreshHover();
+    }
     for (var i = 0; i < PAGE_IDS.length; i++) {
       var el = $('page-' + PAGE_IDS[i]);
       if (el) el.classList.toggle('active', PAGE_IDS[i] === name);
@@ -158,7 +163,7 @@ window.Main = (function () {
       return false;
     }
     state.trace = t;
-    state.idx = 0; state.accum = 0; state.lastTs = 0; state.hoverIndex = -1;
+    state.idx = 0; state.accum = 0; state.lastTs = 0; state.hoverPoint = null;
   if (state.pinnedCards) { for (var pid in state.pinnedCards) unpinCard(pid); }  // R8-D 换局清卡
     var tip = $('tip');
     if (tip) tip.classList.remove('on');
@@ -179,13 +184,9 @@ window.Main = (function () {
     }
     // 派生序列：|审计差值|（injected - dissipated - totalEnergy，应恒为 ~0）
     state.series = (t.series || []).map(function (s) {
-      var d = 0;
-      if (typeof s.injected === 'number' && typeof s.dissipated === 'number' && typeof s.totalEnergy === 'number') {
-        d = Math.abs(s.injected - s.dissipated - s.totalEnergy);
-      }
       var o = {};
       for (var k in s) if (Object.prototype.hasOwnProperty.call(s, k)) o[k] = s[k];
-      o.auditDelta = d;
+      o.auditDelta = auditDelta(s);
       return o;
     });
     if (state.chart.pop) state.chart.pop.setData(state.series, CHART_KEYS.pop);
@@ -227,35 +228,42 @@ window.Main = (function () {
     if (state.chart.audit) state.chart.audit.setCursor(state.idx);
     if (state.chart.hue) state.chart.hue.setCursor(state.idx);
     updateScatter(frame);
-    if (state.hoverIndex >= 0) refreshHover(frame, force);
+    if (state.hoverPoint) refreshHover();
     refreshPinnedCards(frame);   // R8-D：钉住卡每帧跟随数据（死亡自动解钉）
   }
 
   // R11-P1-6：结束原因（extinct/max_ticks 来自 /state 头 52..79 保留区）
-  var REASON_TXT = { extinct: '灭绝', max_ticks: '到达帧上限' };
+  var REASON_TXT = { extinct: '核种群已灭绝，环境仍可推进', max_ticks: '到达帧上限' };
   function END_REASON_METRIC(frame) {
     var r = frame && frame.live && frame.live.reason;
     if (!r || r === 'running' || r === 'paused') return '';
-    return '<div class="metric wide"><div class="k">结束原因</div><div class="v bad">' +
-      (REASON_TXT[r] || r) + '</div></div>';
+    return '<div class="metric wide"><div class="k">世界状态</div><div class="v bad">' +
+      (REASON_TXT[r] || '未知状态') + '</div></div>';
   }
 
   function updateMetrics(frame) {
     var box = $('metrics');
     if (!box) return;
     var s = frame.stats || {};
-    var ok = s.auditOk !== false;
+    var auditText = s.auditOk == null ? '未开启或未提供' : (s.auditOk ? 'PASS' : 'FAIL');
+    var auditClass = s.auditOk == null ? '' : (s.auditOk ? 'ok' : 'bad');
+    var cyanoAlive = s.cyanoAlive != null ? s.cyanoAlive : frame.cyano.length;
+    var cyanoLimit = frame.live && frame.live.cyanoLimit;
+    var atLimit = cyanoLimit > 0 && cyanoAlive >= cyanoLimit;
     var hueSdStr = (typeof frame.hueSd === 'number' && isFinite(frame.hueSd)) ? frame.hueSd.toFixed(1) + '°' : '—（无 g）';
     box.innerHTML =
       '<div class="metric"><div class="k">核数</div><div class="v cy">' + (s.nuclei != null ? s.nuclei : frame.nuclei.length) + '</div></div>' +
-      '<div class="metric"><div class="k">蓝细菌</div><div class="v ok">' + (s.cyanoAlive != null ? s.cyanoAlive : frame.cyano.length) + '</div></div>' +
+      '<div class="metric"><div class="k">蓝细菌</div><div class="v ' + (atLimit ? 'bad' : 'ok') + '">' +
+      cyanoAlive + (atLimit ? '（达性能上限）' : '') + '</div></div>' +
       '<div class="metric"><div class="k">总能量</div><div class="v am">' + fmt(s.totalEnergy, 1) + '</div></div>' +
       '<div class="metric"><div class="k">帧号</div><div class="v cy">' + frame.tick + '</div></div>' +
-      '<div class="metric wide"><div class="k">累计注入 / 耗散</div><div class="v">' + fmt(s.injected, 1) + ' / ' + fmt(s.dissipated, 1) + '</div></div>' +
+      (s.injected == null || s.dissipated == null ? '' :
+        '<div class="metric wide"><div class="k">累计注入 / 耗散</div><div class="v">' +
+        fmt(s.injected, 1) + ' / ' + fmt(s.dissipated, 1) + '</div></div>') +
       '<div class="metric wide"><div class="k">蓝细菌连线</div><div class="v cy">' + (frame.cyanoLinks ? frame.cyanoLinks.length : 0) + '</div></div>' +
       '<div class="metric wide"><div class="k">谱系多样性（hue 圆标准差）</div><div class="v">' + hueSdStr + '</div></div>' +
       '<div class="metric wide"><div class="k">已干预（免费）</div><div class="v">' + state.interventions + '</div></div>' +
-      '<div class="metric wide"><div class="k">能量审计</div><div class="v ' + (ok ? 'ok' : 'bad') + '">' + (ok ? 'PASS' : 'FAIL') + '</div></div>' +
+      '<div class="metric wide"><div class="k">能量审计</div><div class="v ' + auditClass + '">' + auditText + '</div></div>' +
       '<div class="metric wide"><div class="k">数据源</div><div class="v ' + (state.live ? 'ok' : '') + '">' +
       (state.live ? (state.replay ? '实时 /state · 回放' : '实时 /state') : '离线演示') + '</div></div>';
     if (box) box.innerHTML += END_REASON_METRIC(frame);
@@ -263,21 +271,55 @@ window.Main = (function () {
     if (box) box.classList.toggle('replaying', !!(state.live && st && st.replay));
   }
 
+  function auditDelta(stats) {
+    return [stats.injected, stats.dissipated, stats.totalEnergy].every(Number.isFinite)
+      ? Math.abs(stats.injected - stats.dissipated - stats.totalEnergy)
+      : null;
+  }
+
+  function sumEnergy(items) {
+    return items.reduce(function (sum, item) {
+      return sum + (item.alive !== false && Number.isFinite(item.energy) ? Math.max(0, item.energy) : 0);
+    }, 0);
+  }
+
   function updateHud(frame) {
     var hud = $('hud');
     if (!hud) return;
-    var frees = 0;
+    var balls = 0, frees = 0;
     for (var i = 0; i < frame.balls.length; i++) {
+      if (frame.balls[i].alive === false) continue;
+      balls++;
       if (!frame.balls[i].owner) frees++;
     }
-    var linkN = frame.cyanoLinks ? frame.cyanoLinks.length : 0;
-    var linkTxt = '（连线 ' + linkN + (linkN > 4000 ? '，抽稀显示' : '') + '）';
-    var sunTxt = (frame.live && isFinite(frame.live.sun)) ? ' · 阳光 ' + frame.live.sun.toFixed(2) : '';
+    var nuclei = frame.nuclei.filter(function (n) { return n.alive !== false; }).length;
+    var cyano = frame.cyano.filter(function (n) { return n.alive !== false; }).length;
+    var sunTxt = (frame.live && Number.isFinite(frame.live.sun)) ? ' · 阳光 ' + frame.live.sun.toFixed(2) : '';
+    var delta = auditDelta(frame.stats || {});
     hud.textContent = 't=' + frame.tick +
-      ' · 核 ' + frame.nuclei.length +
-      ' · 球 ' + frame.balls.length + '（自由 ' + frees + '）' +
-      ' · 蓝细菌 ' + frame.cyano.length + linkTxt + sunTxt +
-      ' · ΔE ' + fmt(Math.abs((frame.stats.injected || 0) - (frame.stats.dissipated || 0) - (frame.stats.totalEnergy || 0)), 2);
+      ' · 核 ' + nuclei +
+      ' · 球 ' + balls + '（自由 ' + frees + '）' +
+      ' · 蓝细菌 ' + cyano + sunTxt +
+      (delta === null ? '' : ' · ΔE ' + fmt(delta, 2));
+
+    var overview = $('energyOverview');
+    if (!overview) return;
+    var nuclear = sumEnergy(frame.nuclei);
+    var stored = sumEnergy(frame.balls);
+    var producers = sumEnergy(frame.cyano);
+    var total = nuclear + stored + producers;
+    var parts = [
+      { key: 'nucleus', label: '核', amount: nuclear },
+      { key: 'ball', label: '球', amount: stored },
+      { key: 'cyano', label: '蓝细菌', amount: producers }
+    ];
+    overview.innerHTML = '<div class="energy-head"><span>地图能量</span><strong>' + fmt(total, 1) + '</strong></div>' +
+      '<div class="energy-bar" aria-hidden="true">' + parts.map(function (part) {
+        return '<i class="energy-' + part.key + '" style="width:' + (total > 0 ? part.amount / total * 100 : 0) + '%"></i>';
+      }).join('') + '</div><div class="energy-parts">' + parts.map(function (part) {
+        return '<span><i class="energy-' + part.key + '"></i>' + part.label +
+          ' <b>' + fmt(part.amount, 1) + '</b></span>';
+      }).join('') + '</div>';
   }
 
   // ── 播放控制 ─────────────────────────────────────────────────
@@ -287,11 +329,13 @@ window.Main = (function () {
     if (!(opts && opts.silent) && state.live) {
       postControl(on ? 'resume' : 'pause');   // 单一分发点：setPlaying 负责 POST /control
     }
-    var b = $('btnPlay');
-    if (b) {
+    ['btnPlay', 'btnMapPlay'].forEach(function (id) {
+      var b = $(id);
+      if (!b) return;
       b.textContent = on ? '⏸' : '▶';
       b.title = on ? '暂停（空格）' : '播放（空格）';
-    }
+      b.setAttribute('aria-label', b.title);
+    });
   }
 
   function stepTo(i) {
@@ -407,18 +451,29 @@ window.Main = (function () {
   }
 
   // ── 悬停 tooltip：核的全部基因组参数（无战斗字段）────────────
-  function refreshHover(frame, keepVisible) {
+  function refreshHover() {
     var tip = $('tip');
     if (!tip) return;
-    if (state.hoverIndex < 0) { tip.classList.remove('on'); return; }
-    var nu = frame.nuclei[state.hoverIndex];
-    if (!nu) {
-      if (!keepVisible) { state.hoverIndex = -1; tip.classList.remove('on'); }
+    var point = state.hoverPoint;
+    if (!point) { tip.classList.remove('on'); return; }
+    var rect = canvas.getBoundingClientRect();
+    var hit = renderer.hitTest(point.x - rect.left, point.y - rect.top);
+    if (hit.kind === 'none') {
+      tip.classList.remove('on');
       return;
     }
-    tip.innerHTML = renderTooltip(nu);
+    var item = hit.data;
+    if (hit.kind === 'nucleus') {
+      tip.innerHTML = renderTooltip(item);
+    } else {
+      var title = hit.kind === 'ball' ? (TYPE_NAMES[item.type] || '资源') + '球' : '蓝细菌';
+      tip.innerHTML = '<div class="tsec">' + title + ' #' + item.id + '</div>' +
+        '<div class="trow"><span>当前能量</span><strong>' + fmt(item.energy, 2) + '</strong></div>' +
+        (hit.kind === 'ball' ? '<div class="trow"><span>归属</span><span>' +
+          (item.owner ? '核 #' + item.owner : '自由球') + '</span></div>' : '');
+    }
     tip.classList.add('on');
-    positionTip(tip, state.hoverX, state.hoverY);
+    positionTip(tip, point.x, point.y);
   }
 
   function positionTip(tip, x, y) {
@@ -549,13 +604,21 @@ window.Main = (function () {
     renderer.resize();
     updateAll(true);
   }
+  function updateMapLayout() {
+    if (document.body) document.body.classList.toggle('cinema', state.cinema && state.page === 'run');
+    var button = $('btnMapCinema');
+    if (button) {
+      button.setAttribute('aria-expanded', String(!state.cinema));
+      button.textContent = state.cinema ? '展开面板' : '地图铺屏';
+    }
+  }
+
   function setCinema(on) {
     state.cinema = on;
-    if (document.body) document.body.classList.toggle('cinema', on);
+    updateMapLayout();
     renderer.resize();
     resizeCharts();
     updateAll(true);
-    toast(on ? '影院模式：F / Esc 退出' : '已退出影院模式');
     raf(function () { renderer.resize(); updateAll(true); });
   }
 
@@ -741,14 +804,18 @@ window.Main = (function () {
     var el = $('envDesc');
     if (el) el.textContent = parts.join(' · ') + dirty;
     var el2 = $('envHint');
-    if (el2) el2.textContent = '换档免费无限制 · ' + AXIS_DESC.pressure;
+    if (el2) {
+      el2.textContent = '换档免费无限制 · 环境事件只改环境（不直接改核的能量）· ' +
+        AXIS_DESC.pressure;
+    }
   }
 
+  // P0-5：普通玩法只剩一个环境事件。收获（全体 +8 能量）、瘟疫（富核 -12）、
+  // 藻华（直接追加节点）三个按钮连同它们的前端入口一起撤下 —— 后端也拒绝
+  // event.harvest / event.plague / event.bloom（retired_event, HTTP 400）。
+  // 事件的幅度与持续时长由后端 GET /env 的 events[].effect 给出，前端不复制常量。
   var EVENTS = [
-    { id: 'btnWinter', name: '寒冬', desc: '光照骤降 · 代谢消耗上升' },
-    { id: 'btnBloom', name: '藻华', desc: '光合倍增 · 蓝细菌爆发' },
-    { id: 'btnHarvest', name: '收获', desc: '立即注入一批能量' },
-    { id: 'btnPlague', name: '瘟疫', desc: '蓝细菌批量凋亡' }
+    { id: 'btnWinter', name: '寒冬', envId: 'winter' }
   ];
   var PRESETS = [
     { id: 'btnPresetStable', name: '稳定态', lv: [2, 2, 2, 2] },
@@ -756,18 +823,77 @@ window.Main = (function () {
     { id: 'btnPresetBarren', name: '荒芜态', lv: [0, 1, 4, 1] }
   ];
 
+  // 触发一个环境事件。语义（P0-5）：它只改环境状态（光照基线），不改任何核的能量；
+  // 到期自动恢复，玩家期间改的基础设置继续有效。
   function fire(kind, name) {
+    var ev = null;
+    for (var i = 0; i < EVENTS.length; i++) if (EVENTS[i].id === kind) ev = EVENTS[i];
+    var liveId = ev ? ev.envId : LIVE_EVENT_ID[kind];
+    if (!liveId) return;
     state.interventions++;
     state.dirty = true;
-    var liveId = LIVE_EVENT_ID[kind];
-    if (state.live && liveId) {
-      postEnvLines(['event.' + liveId + '=1']);
-      toast('已触发「' + name + '」→ POST /env event.' + liveId + '=1');
+    if (state.live) {
+      postEnvLines(['event.' + liveId + '=1'], function (j) {
+        var off = (j && j.effect && typeof j.effect.lightOffset === 'number')
+          ? j.effect.lightOffset : null;
+        toast(off === null
+          ? ('已触发「' + name + '」→ POST /env event.' + liveId + '=1')
+          : ('「' + name + '」生效：光照基线 ' + (off > 0 ? '+' : '') + off.toFixed(2) +
+             ' · 到点自动恢复（不直接改核的能量）'));
+        refreshEnvStatus();
+      });
     } else {
-      toast('已触发「' + name + '」（免费 · 无冷却）· 本轮演示不改变轨迹数据');
+      toast('已触发「' + name + '」（环境变化 · 到期自动恢复）· 本轮演示不改变轨迹数据');
     }
     describeEnv();
     updateAll(true);
+  }
+
+  // 外部播种（显式外部输入）。与"自然生长/事件奖励"区分，文案必须写清楚。
+  function seedCyano() {
+    state.interventions++;
+    state.dirty = true;
+    var n = 120;
+    if (state.live) {
+      postEnvLines(['seed.cyano=' + n], function (j) {
+        toast('外部播种 ' + n + ' 个蓝细菌节点（玩家输入，不是自然生长也不是事件奖励）');
+      });
+    } else {
+      toast('外部播种 ' + n + ' 个蓝细菌节点 · 本轮演示不改变轨迹数据');
+    }
+    describeEnv();
+    updateAll(true);
+  }
+
+  // GET /env → 刷新"寒冬剩余时长"与光照基线读数（触发瞬间/后续模拟步/到期都能看到）。
+  function refreshEnvStatus() {
+    if (!state.live) {
+      var el0 = $('winterState');
+      if (el0) el0.textContent = '离线演示';
+      return;
+    }
+    try {
+      fetch('/env', { cache: 'no-store' }).then(function (r) {
+        return r.ok ? r.json() : null;
+      }).then(function (j) {
+        if (!j) return;
+        state.envStatus = j;
+        var el = $('winterState');
+        if (el) {
+          var eff = j.effect || {};
+          if (eff.active) {
+            el.textContent = '❄ ' + (eff.id || 'winter') + ' 剩余 ' +
+              (eff.remainingFrames | 0) + ' 帧 · 光照 ' +
+              Number(j.sunBaseEffective).toFixed(2) +
+              '（基础 ' + Number(j.sunBasePlayer).toFixed(2) + '）';
+            el.classList.add('on');
+          } else {
+            el.textContent = '无环境事件 · 光照 ' + Number(j.sunBaseEffective).toFixed(2);
+            el.classList.remove('on');
+          }
+        }
+      }).catch(function () {});
+    } catch (e) { /* file:// 等环境静默 */ }
   }
 
   function applyPreset(lv, name) {
@@ -828,7 +954,8 @@ window.Main = (function () {
       ['cyanoLinkDistance', '连线距离 cyanoLinkDistance', 6, 60, 20, 1],
       ['cyanoMaxLinks', '最大连线 cyanoMaxLinks', 0, 6, 3, 1],
       ['cyanoReproCost', '繁殖成本 cyanoReproCost', 2, 40, 9.6, 0.2],
-      ['cyanoBallSpawnCost', '产球成本 cyanoBallSpawnCost', 5, 60, 18, 1],
+      // P2 提前收口：「产球成本 cyanoBallSpawnCost」滑杆已撤下 —— 蓝细菌产球
+      // 整条规则退出普通玩法，参数页不能再给出"调产球概率/成本"的入口。
       ['minNodeSeparation', '节点最小间距 minNodeSeparation', 2, 40, 6, 0.5]
     ]],
     ['世界与阳光', [
@@ -1229,24 +1356,46 @@ window.Main = (function () {
   // ── R4-D 实时数据源（live-client.js）────────────────────────
   // 前端轴 id → 后端 EnvControl 轴 id（EnvControl.cpp：light/food/pressure/producer）
   var LIVE_AXIS_ID = { light: 'light', nutrient: 'food', pressure: 'pressure', producer: 'producer' };
-  // 前端事件卡按钮 id → 后端事件 id（EnvControl.cpp：harvest/winter/plague/bloom）
-  var LIVE_EVENT_ID = { btnWinter: 'winter', btnBloom: 'bloom', btnHarvest: 'harvest', btnPlague: 'plague' };
+  // 前端按钮 id → 后端环境事件 id（EnvControl.cpp：规则 v2 之后只有 winter）。
+  // harvest / plague / bloom 三个旧事件已撤下：后端对它们返回 retired_event（HTTP 400），
+  // 这里刻意不保留映射，前端也没有按钮可点。
+  var LIVE_EVENT_ID = { btnWinter: 'winter' };
   var liveCtl = { warnedNoControl: false, lastPaintTick: -1 };
 
-  // POST /env 行式协议（HttpServer handleEnvPost：每行一条 key=value）
-  function postEnvLines(lines) {
+  // POST /env 行式协议（HttpServer handleEnvPost：每行一条 key=value）。
+  // P0-5 契约变化：有被拒命令时后端返回 **HTTP 400**（不再"200 + ok:false"），
+  // 回执带 code / error / rejections[]。这里的错误分支必须把后端原文显示出来，
+  // 否则"过期命令有明确反馈"在 UI 上就看不见了。
+  function postEnvLines(lines, onOk) {
     var body = lines.join('\n');
     try {
       fetch('/env', { method: 'POST', cache: 'no-store',
         headers: { 'Content-Type': 'text/plain' }, body: body })
-        .then(function (r) { return r.ok ? r.json() : { ok: false, error: 'HTTP ' + r.status }; })
-        .then(function (j) {
-          if (!j) return;
-          if (j.ok) {
-            if (j.rejected) toast('POST /env：部分被拒 ' + j.rejected + ' 条' + (j.error ? '（' + j.error + '）' : ''));
-          } else {
-            toast('POST /env 失败：' + (j.error || ('rejected=' + j.rejected)));
+        .then(function (r) {
+          return r.json().catch(function () { return null; }).then(function (j) {
+            return { status: r.status, ok: r.ok, json: j };
+          });
+        })
+        .then(function (res) {
+          var j = res.json;
+          if (!j) { toast('POST /env 失败：HTTP ' + res.status); return; }
+          if (res.ok && j.ok) {
+            if (typeof onOk === 'function') onOk(j);
+            else if (j.rejected) toast('POST /env：部分被拒 ' + j.rejected + ' 条');
+            return;
           }
+          // 明确反馈：错误码 + 原因 + 被拒命令行（过期的旧事件会落到这里）。
+          var msg = 'POST /env 被拒';
+          if (j.code) msg += ' [' + j.code + ']';
+          if (j.error) msg += '：' + j.error;
+          if (j.rejections && j.rejections.length) {
+            var parts = [];
+            for (var i = 0; i < j.rejections.length && i < 3; i++) {
+              parts.push(j.rejections[i].line + ' → ' + j.rejections[i].error);
+            }
+            msg += '（' + parts.join('；') + '）';
+          }
+          toast(msg);
         })
         .catch(function (e) { toast('POST /env 网络失败：' + (e.message || e)); });
     } catch (e) { toast('POST /env 失败：' + (e.message || e)); }
@@ -1288,23 +1437,20 @@ window.Main = (function () {
     t.frames = dedup;
     state.series = t.series = dedup.map(function (f) {
       var s = f.stats || {};
-      var d = 0;
-      if (typeof s.injected === 'number' && typeof s.dissipated === 'number' && typeof s.totalEnergy === 'number') {
-        d = Math.abs(s.injected - s.dissipated - s.totalEnergy);
-      }
       return { tick: f.tick, nuclei: s.nuclei, cyanoAlive: s.cyanoAlive,
         cyanoEnergy: s.cyanoEnergy, totalEnergy: s.totalEnergy,
         injected: s.injected, dissipated: s.dissipated, auditOk: s.auditOk,
-        auditDelta: d };
+        auditDelta: auditDelta(s) };
     });
     state.hueSeries = dedup.map(function (f) {
       return { tick: f.tick, hueSd: f.hueSd, cyanoHueSd: f.cyanoHueSd };
     });
     var lb = state.liveWorld || { w: 256, h: 256 };
+    var boundsChanged = t.bounds.maxX !== lb.w || t.bounds.maxY !== lb.h;
     t.bounds = { minX: 0, minY: 0, maxX: lb.w, maxY: lb.h };  // 环面世界固定框，尺寸随 /state 头
     var first = (t.meta.liveFirst !== true);
     t.meta.liveFirst = true;
-    if (first) {
+    if (first || boundsChanged) {
       var lw = state.liveWorld || {};
       t.meta.world = { width: lw.w || 256, height: lw.h || 256 };
     }
@@ -1318,7 +1464,7 @@ window.Main = (function () {
     if (tl) { tl.max = String(dedup.length - 1); tl.value = String(state.idx); }
     var tlMax = $('tlMax');
     if (tlMax) tlMax.textContent = '/ t' + frame.tick;
-    if (first && renderer) renderer.resetView();   // 首帧按世界满幅取景（resetView = fitCamera）
+    if ((first || boundsChanged) && renderer) renderer.resetView();
     liveCtl.lastPaintTick = frame.tick;
     updateAll(true);
   }
@@ -1335,7 +1481,7 @@ window.Main = (function () {
       frames: [], series: [], hasGenome: false,
       stats: { frames: 0, droppedTuples: 0, detail: { nuclei: 0, balls: 0, cyano: 0, links: 0, genomes: 0 } }
     };
-    state.idx = 0; state.accum = 0; state.lastTs = 0; state.hoverIndex = -1;
+    state.idx = 0; state.accum = 0; state.lastTs = 0; state.hoverPoint = null; state.liveWorld = null;
     state.interventions = 0; state.dirty = false;
     state.series = []; state.hueSeries = [];
     renderer.setTrace(state.trace);
@@ -1509,14 +1655,10 @@ window.Main = (function () {
         var t = state.trace;
         t.series = frames.map(function (fr) {
           var s = fr.stats || {};
-          var d = 0;
-          if (typeof s.injected === 'number' && typeof s.dissipated === 'number' && typeof s.totalEnergy === 'number') {
-            d = Math.abs(s.injected - s.dissipated - s.totalEnergy);
-          }
           return { tick: fr.tick, nuclei: s.nuclei, cyanoAlive: s.cyanoAlive,
             cyanoEnergy: s.cyanoEnergy, totalEnergy: s.totalEnergy,
             injected: s.injected, dissipated: s.dissipated, auditOk: s.auditOk,
-            auditDelta: d };
+            auditDelta: auditDelta(s) };
         });
         state.hueSeries = frames.map(function (fr) {
           return { tick: fr.tick, hueSd: fr.hueSd, cyanoHueSd: fr.cyanoHueSd };
@@ -1747,12 +1889,12 @@ window.Main = (function () {
     var dragging = false, lastX = 0, lastY = 0, movedPx = 0;
     canvas.addEventListener('pointerdown', function (e) {
       dragging = true; lastX = e.clientX; lastY = e.clientY; movedPx = 0;
+      state.hoverPoint = null;
+      refreshHover();
       canvas.classList.add('dragging');
       try { canvas.setPointerCapture(e.pointerId); } catch (err) {}
     });
     canvas.addEventListener('pointermove', function (e) {
-      var rect = canvas.getBoundingClientRect();
-      var lx = e.clientX - rect.left, ly = e.clientY - rect.top;
       if (dragging) {
         var dx = e.clientX - lastX, dy = e.clientY - lastY;
         movedPx += Math.abs(dx) + Math.abs(dy);
@@ -1761,30 +1903,19 @@ window.Main = (function () {
         if (state.trace) updateAll();
         return;
       }
-      state.hoverX = lx; state.hoverY = ly;
-      var hit = renderer.hitTest(lx, ly);
-      if (hit.kind === 'nucleus') {
-        if (hit.index !== state.hoverIndex) {
-          state.hoverIndex = hit.index;
-          refreshHover(state.trace.frames[state.idx], false);
-        } else if (state.hoverIndex >= 0) {
-          var tip = $('tip');
-          if (tip && tip.classList.contains('on')) positionTip(tip, lx, ly);
-        }
-      } else if (!dragging && state.hoverIndex >= 0) {
-        state.hoverIndex = -1;
-        var tip2 = $('tip');
-        if (tip2) tip2.classList.remove('on');
-      }
+      state.hoverPoint = { x: e.clientX, y: e.clientY };
+      refreshHover();
     });
     canvas.addEventListener('pointerup', function (e) {
       var wasDrag = movedPx > 6;
       dragging = false;
       canvas.classList.remove('dragging');
       try { canvas.releasePointerCapture(e.pointerId); } catch (err) {}
-      if (!wasDrag && state.hoverIndex >= 0 && state.trace) {
-        var nu = state.trace.frames[state.idx].nuclei[state.hoverIndex];
-        if (nu) {
+      if (!wasDrag && state.trace) {
+        var rect = canvas.getBoundingClientRect();
+        var hit = renderer.hitTest(e.clientX - rect.left, e.clientY - rect.top);
+        if (hit.kind === 'nucleus') {
+          var nu = hit.data;
           if (state.pinnedCards[nu.id]) { unpinCard(nu.id); }   // 再点同核 = 取消钉住
           else pinCard(nu);
           state.followNucleus = (state.followNucleus === nu.id) ? -1 : nu.id;
@@ -1792,12 +1923,20 @@ window.Main = (function () {
             ? ('跟随核 #' + nu.id + '（hue ' + nu.hue.toFixed(0) + '°）— 再次点按取消')
             : '已取消跟随');
         }
+        state.hoverPoint = { x: e.clientX, y: e.clientY };
+        refreshHover();
       }
     });
-    canvas.addEventListener('pointerleave', function () {
-      state.hoverIndex = -1;
-      var tip = $('tip');
-      if (tip) tip.classList.remove('on');
+    canvas.addEventListener('pointercancel', function () {
+      dragging = false;
+      canvas.classList.remove('dragging');
+      state.hoverPoint = null;
+      refreshHover();
+    });
+    canvas.addEventListener('pointerleave', function (e) {
+      if (e.pointerType === 'touch') return;
+      state.hoverPoint = null;
+      refreshHover();
     });
     canvas.addEventListener('wheel', function (e) {
       e.preventDefault();
@@ -1809,6 +1948,9 @@ window.Main = (function () {
 
   // ── 绑定 ─────────────────────────────────────────────────────
   function bindAll() {
+    on('btnMapFit', 'click', function () { renderer.resetView(); updateAll(true); });
+    on('btnMapPlay', 'click', function () { setPlaying(!state.playing); });
+    on('btnMapCinema', 'click', function () { setCinema(!state.cinema); });
     // 顶栏
     on('brandHome', 'click', function () { showPage('menu'); });
     var nav = $('navBtns');
@@ -1897,6 +2039,8 @@ window.Main = (function () {
         on(ev.id, 'click', function () { fire(ev.id, ev.name); });
       })(EVENTS[ev2]);
     }
+    // P0-5：外部播种（显式外部输入，独立于环境事件）
+    on('btnSeedCyano', 'click', function () { seedCyano(); });
     for (var pr = 0; pr < PRESETS.length; pr++) {
       (function (p) {
         on(p.id, 'click', function () { applyPreset(p.lv, p.name); });
@@ -1983,12 +2127,12 @@ window.Main = (function () {
       else if (k === 'End' && state.page === 'run') { setPlaying(false); stepTo(state.trace ? state.trace.frames.length - 1 : 0); }
       else if (k === 'r' || k === 'R') { renderer.resetView(); updateAll(true); toast('视角已复位'); }
       else if (k === 'l' || k === 'L') { var lb = $('btnLoop'); if (lb) lb.click(); }
-      else if (k === 'f' || k === 'F') { setCinema(!state.cinema); }
+      else if ((k === 'f' || k === 'F') && state.page === 'run') { setCinema(!state.cinema); }
       else if (k === 'h' || k === 'H') {
         setStatusCollapsed(!(document.body && document.body.classList.contains('statushidden')));
       }
       else if (k === 'Escape') {
-        if (state.cinema) setCinema(false);
+        if (state.cinema && state.page === 'run') setCinema(false);
         else if (state.page === 'params') showPage('run');
         else if (state.page === 'saves') showPage('menu');
       }
@@ -2057,6 +2201,16 @@ window.Main = (function () {
           if (front && typeof a.level === 'number') setAxis(front, Math.max(0, Math.min(4, a.level | 0)), { silent: true });
         }
         describeEnv();
+        // P0-5：把当前环境事件状态（含剩余帧数）搬上调控条。
+        var el = $('winterState');
+        if (el) {
+          var eff = j.effect || {};
+          el.textContent = eff.active
+            ? ('❄ ' + (eff.id || 'winter') + ' 剩余 ' + (eff.remainingFrames | 0) +
+               ' 帧 · 光照 ' + Number(j.sunBaseEffective).toFixed(2))
+            : ('无环境事件 · 光照 ' + Number(j.sunBaseEffective).toFixed(2));
+          el.classList.toggle('on', !!eff.active);
+        }
       }).catch(function () {});
     } catch (e) { /* 静默 */ }
   }
@@ -2075,6 +2229,9 @@ window.Main = (function () {
       appendLiveFrame: appendLiveFrame,
       enterLiveMode: enterLiveMode,
       syncEnvFromServer: syncEnvFromServer,
+      refreshEnvStatus: refreshEnvStatus,
+      seedCyano: seedCyano,
+      fire: fire,
       refreshSaves: refreshSaves,
       renderSaves: renderSaves,
       checkDemo: checkDemo,

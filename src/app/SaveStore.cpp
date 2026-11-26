@@ -1,6 +1,6 @@
 // agentsim - app/SaveStore.cpp（R5-C 存档系统实现）
 // save.bin 二进制布局（小端）：
-//   u32 magic=0x41534153 ("ASAV") ; u32 version=1
+//   u32 magic=0x41534153 ("ASAV") ; u32 version=2
 //   u8 seedIsDefault ; u8[3] pad                       // 存档时刻上界快照
 //   -- cfg 块（savedetail::writeCfgBlock，save.bin 与 timeline.bin 共用同一节）--
 //   -- Simulation::serializeState 全量实体态（布局见 Simulation.cpp 注释）--
@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <ctime>
 #include <cstring>
@@ -16,8 +17,10 @@
 #include <fstream>
 #include <istream>
 #include <iterator>
+#include <limits>
 #include <ostream>
 #include <sstream>
+#include <type_traits>
 
 #include "sim/Simulation.h"
 
@@ -26,7 +29,7 @@ namespace app {
 namespace {
 
 constexpr std::uint32_t kMagic = 0x41534153u;   // "ASAV"
-constexpr std::uint32_t kVersion = 1u;
+constexpr std::uint32_t kVersion = 2u;
 constexpr std::size_t kNameLimit = 64;
 constexpr std::size_t kPolicyNameLimit = 64;
 
@@ -131,6 +134,49 @@ void applyPolicyName(SimConfig& cfg, const std::string& policyName) {
 // ---- savedetail：cfg 块（save.bin 与 timeline.bin 共用）----
 namespace savedetail {
 
+// Fields omitted by the original config block. Keep a single field order for
+// both reading and writing, including tuned worlds saved from the live UI.
+template <typename Config, typename Field>
+bool visitTuning(Config& cfg, Field field) {
+    auto& r = cfg.runtime;
+    auto& n = cfg.nucleus;
+    auto& b = cfg.ball;
+    auto& c = cfg.cyanoTuning;
+    auto& t = cfg.temperature;
+    auto& terrain = cfg.terrain;
+    return field(cfg.agent.agentMode, cfg.policy.usePerceptron, cfg.policy.useThermal,
+        r.maxFps, r.renderInterval, r.autosaveInterval, r.initialFreeBalls,
+        r.lightWarmth, r.lightSampleGrid, r.cyanoInitialEnergy, r.cyanoColonies, r.cyanoEnabled,
+        n.respirationBase, n.locomotionCost, n.speedCostExponent, n.reproductionCostRatio,
+        n.childEnergyRatio, n.reproductionOffset, n.nucleusInitEnergyRatio, n.damping,
+        n.minSeparation, n.repelK, n.forageK, n.forageRadius, n.wanderK, n.wanderTurnRate,
+        n.cyanoPredationRadius, n.grazeBiteFraction,
+        b.energy, b.radius, b.velRange, b.initialEnergy, b.energyCap, b.lossCost,
+        b.detachRadius, b.damping, b.radialK, b.tangentialK, b.nearRepelRadius,
+        b.ballRepelRadius, b.ballRepelK, b.sameOwnerAttractRadius, b.sameOwnerAttractK,
+        b.maxSpeedShield, b.maxSpeedResource, b.maxSpeedScout, b.followCoupling,
+        b.followBoost, b.bounceRestitution, b.wrapBoundary, b.scoutControlRadius, b.scoutSenseRadius,
+        c.photosynthesisRate, c.lightHalfSaturation, c.metabolismRate, c.energyCap,
+        c.reproductionCost, c.reproductionProbability, c.reproductionOffset, c.minSeparation,
+        c.linkRadius, c.linkMaxNeighbors, c.linkTransferRate, c.linkDeadband, c.linkCheckInterval,
+        c.maxNodes, c.nodeSeedCount, c.conversionRate, c.hueJitterSigma, c.cyanoColonies,
+        c.clusterSpread, c.shadeK, c.shadeRadius, c.shadeSigma, c.minStructure, c.maxMaterial,
+        c.initialMaterial, c.seedEnergy, c.growthPerTick, c.nutrientPerMaterial,
+        c.growthEnergyCost, c.assimilation, c.nutrientRegionSize, c.nutrientBudgetRatio,
+        c.decomposeRate, t.sourceCount, t.baseline, t.preferred, t.distortionK,
+        terrain.obstacleCount, terrain.waterCount, terrain.thermalZoneCount,
+        terrain.obstacleRadius, terrain.waterRadius, terrain.waterCostMultiplier,
+        terrain.thermalRadius, terrain.thermalStrength);
+}
+
+template <typename Field, typename C>
+bool visitConfigLists(C& cfg, Field field) {
+    return field(cfg.temperature.sources, &TemperatureSource::amplitude) &&
+           field(cfg.terrain.obstacles, &TerrainBlob::strength) &&
+           field(cfg.terrain.waters, &TerrainBlob::strength) &&
+           field(cfg.terrain.thermalZones, &TerrainBlob::strength);
+}
+
 bool writeCfgBlock(std::ostream& os, const SimConfig& cfg,
                    const std::string& policyName, std::string& err) {
     err.clear();
@@ -196,11 +242,29 @@ bool writeCfgBlock(std::ostream& os, const SimConfig& cfg,
     const unsigned char pn2 = static_cast<unsigned char>(policyName.size());
     os.put(static_cast<char>(pn2));
     wBytes(os, policyName.data(), pn2);
+    visitTuning(cfg, [&](const auto&... fields) {
+        const auto writeField = [&](auto value) {
+            if constexpr (std::is_floating_point_v<decltype(value)>) wF64(os, value);
+            else wU64(os, static_cast<std::uint64_t>(value));
+        };
+        (writeField(fields), ...);
+        return os.good();
+    });
+    visitConfigLists(cfg, [&](const auto& entries, auto extra) {
+        wU64(os, entries.size());
+        for (const auto& entry : entries) {
+            wF64(os, entry.x);
+            wF64(os, entry.y);
+            wF64(os, entry.radius);
+            wF64(os, entry.*extra);
+        }
+        return os.good();
+    });
     return os.good();
 }
 
 bool readCfgBlock(std::istream& is, SimConfig& cfg,
-                  std::string& policyName, std::string& err) {
+                  std::string& policyName, std::string& err, bool extended) {
     err.clear();
     double width = 0.0, height = 0.0;
     std::uint64_t seed = 0, maxTicks = 0, nuclei = 0, maxNuclei = 0;
@@ -299,6 +363,37 @@ bool readCfgBlock(std::istream& is, SimConfig& cfg,
         return false;
     }
     applyPolicyName(cfg, policyName);
+    cfg.policy.mutation = mu;
+    if (!extended) return true;
+    const bool readTuning = visitTuning(cfg, [&](auto&... fields) {
+        const auto readField = [&](auto& value) {
+            using T = std::decay_t<decltype(value)>;
+            if constexpr (std::is_floating_point_v<T>) {
+                return rF64(is, value) && std::isfinite(value);
+            } else {
+                std::uint64_t raw = 0;
+                if (!rU64(is, raw) || raw > static_cast<std::uint64_t>((std::numeric_limits<T>::max)()))
+                    return false;
+                value = static_cast<T>(raw);
+                return true;
+            }
+        };
+        return (readField(fields) && ...);
+    });
+    const bool readLists = readTuning && visitConfigLists(cfg, [&](auto& entries, auto extra) {
+        std::uint64_t count = 0;
+        if (!rU64(is, count) || count > 100000u) return false;
+        entries.resize(static_cast<std::size_t>(count));
+        for (auto& entry : entries) {
+            if (!rF64(is, entry.x) || !rF64(is, entry.y) ||
+                !rF64(is, entry.radius) || !rF64(is, entry.*extra)) return false;
+        }
+        return true;
+    });
+    if (!readLists) {
+        err = "cannot read saved simulation tuning";
+        return false;
+    }
     return true;
 }
 
@@ -409,9 +504,9 @@ bool parseHeaderStream(std::istream& is, SimConfig& cfg,
     std::uint32_t version = 0;
     if (!rU32(is, magic) || !rU32(is, version)) { err = "cannot read header"; return false; }
     if (magic != kMagic) { err = "bad magic (not ASAV)"; return false; }
-    if (version != kVersion) {
+    if (version != 1u && version != kVersion) {
         err = "unsupported save version: " + std::to_string(version) +
-              " (expected 1)";
+              " (expected 1 or " + std::to_string(kVersion) + ")";
         return false;
     }
     unsigned char seedIsDefault = 0;
@@ -419,7 +514,7 @@ bool parseHeaderStream(std::istream& is, SimConfig& cfg,
     (void)seedIsDefault;
     unsigned char pad[3];
     if (!rBytes(is, pad, 3)) { err = "cannot read header pad"; return false; }
-    if (!savedetail::readCfgBlock(is, cfg, policyName, err)) return false;
+    if (!savedetail::readCfgBlock(is, cfg, policyName, err, version >= 2u)) return false;
     return true;
 }
 

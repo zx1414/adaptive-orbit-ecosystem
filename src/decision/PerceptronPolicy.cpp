@@ -1,4 +1,4 @@
-﻿// agentsim - decision/PerceptronPolicy.cpp
+// agentsim - decision/PerceptronPolicy.cpp
 // 感知机策略实现。纯线性代数 + sign，无 RNG、无隐藏魔法。
 // decide 流程：
 //   Z_i = sum_j w[i][j]*s[j] + b[i]（j 遍历全部 kDim=24 维，s[18..23] 全额参与）
@@ -67,7 +67,8 @@ double PerceptronPolicy::Z(int i, const SensorVector& s) const {
     return z;
 }
 
-ActionVector PerceptronPolicy::decide(const SensorVector& s, const TargetList& /*targets*/) {
+ActionVector PerceptronPolicy::decide(const SensorVector& s, const TargetList& /*targets*/,
+                                     PolicyMemory& /*memory*/) {
     // kOutputs_ 可能为 1：缺省神经元按 Z=0 -> y=+1 处理（偏置/权重未配置）。
     // 扩展项恒以完整 kDim 宽度计算：kDim_ < kDim（旧文本反序列化）时 18..23 列
     // 全 0，extended() 贡献恰为 0，与旧 18 维行为逐位一致。
