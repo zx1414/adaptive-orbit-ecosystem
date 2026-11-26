@@ -251,17 +251,17 @@ std::vector<ResourcePack> ResourcePackStore::loadAll(const std::string& dir,
 
 ResourcePack ResourcePackStore::builtInDefaults() {
     ResourcePack p;
-    p.name = "classic_flat";
-    p.desc = "built-in classic flat palette (fallback)";
+    p.name = "field_guide";
+    p.desc = "Built-in field guide palette";
     p.version = "1.0";
     p.author = "built-in";
     p.colors["mode"] = "type_color";
-    p.colors["background"] = "10,14,26";
-    p.colors["ball_shield"] = "255,207,94";
-    p.colors["ball_worker"] = "69,224,216";
-    p.colors["ball_scout"] = "183,139,255";
-    p.colors["free_ball"] = "200,200,210";
-    p.colors["nucleus"] = "255,255,255";
+    p.colors["background"] = "233,228,211";
+    p.colors["ball_shield"] = "169,119,70";
+    p.colors["ball_worker"] = "71,125,109";
+    p.colors["ball_scout"] = "109,125,139";
+    p.colors["free_ball"] = "63,76,60";
+    p.colors["nucleus"] = "77,92,70";
     return p;
 }
 

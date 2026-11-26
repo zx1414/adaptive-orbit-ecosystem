@@ -75,6 +75,19 @@
               <input type="checkbox" id="menuAutosave" checked>
             </label>
           </div>
+          <div class="start-options">
+            <label class="field">生态 Mod
+              <select id="menuMod">
+                <option value="standard">标准生态</option>
+                <option value="constant_light">恒定光照 · 关闭自然昼夜波动</option>
+                <option value="rich_nutrients">富营养水域 · 开局养分翻倍</option>
+              </select>
+            </label>
+            <details class="start-packs">
+              <summary>材质包</summary>
+              <div id="menuPacksBox" class="packs-box" aria-live="polite"></div>
+            </details>
+          </div>
           <div class="menu-btns">
             <button class="btn-hero" id="menuStart" type="button">▶ 开始模拟</button>
             <button class="btn-ghost btn-mini" id="menuParams" type="button">⚙ 参数预设</button>
@@ -109,7 +122,7 @@
         </div>
         <div class="stage-actions">
           <button class="btn btn-mini" id="btnMapPlay" type="button" title="播放（空格）" aria-label="播放">▶</button>
-          <button class="btn btn-mini" id="btnMapFit" type="button" title="复位到完整地图 (R)">全图</button>
+          <button class="btn btn-mini" id="btnMapFit" type="button" title="切换铺满与全图">全图</button>
           <button class="btn btn-mini" id="btnMapCinema" type="button" title="切换地图铺屏 (F)" aria-expanded="false">展开面板</button>
         </div>
         <div class="legend mono">

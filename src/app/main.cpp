@@ -124,6 +124,24 @@ std::string formValue(const std::string& body, const std::string& key) {
                        e == std::string::npos ? std::string::npos : e - pos - pat.size());
 }
 
+std::string decodePackName(const std::string& encoded) {
+    std::string name;
+    for (std::size_t i = 0; i < encoded.size(); ++i) {
+        if (encoded[i] == '%' && i + 2 < encoded.size()) {
+            unsigned int byte = 0;
+            const char* end = encoded.data() + i + 3;
+            const auto hex = std::from_chars(encoded.data() + i + 1, end, byte, 16);
+            if (hex.ptr == end && hex.ec == std::errc{}) {
+                name += static_cast<char>(byte);
+                i += 2;
+                continue;
+            }
+        }
+        name += encoded[i] == '+' ? ' ' : encoded[i];
+    }
+    return name;
+}
+
 bool startsWith(const std::string& s, const char* prefix) {
     return s.rfind(prefix, 0) == 0;
 }
@@ -350,6 +368,7 @@ public:
         std::lock_guard<std::mutex> lk(m_);
         runCfg_ = cfg;
         runPending_ = true;
+        worldDone_ = false;
     }
     bool takeRunRequest(agentsim::SimConfig& out) {
         std::lock_guard<std::mutex> lk(m_);
@@ -845,7 +864,27 @@ EnvEffectState restoredEffect(const Simulation& sim) {
 // 线程模型（数据竞争免疫的归属设计）：
 // HTTP 线程解析命令和维护控件状态；模拟线程推进世界、管理时间轴和生成快照。
 // ServeBridge 用同一把锁交换配置、命令及已发布的只读状态。
-int serveMode(const CliOptions& opts, int port, bool ticksGiven, bool openBrowser) {
+void openGameWindow(int port) {
+    char url[64];
+    std::snprintf(url, sizeof(url), "http://127.0.0.1:%d/", port);
+    const char* edgePaths[] = {
+        "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+        "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
+    };
+    const std::string args = std::string("--app=") + url + " --start-maximized";
+    for (const char* edge : edgePaths) {
+        if (GetFileAttributesA(edge) == INVALID_FILE_ATTRIBUTES) continue;
+        const HINSTANCE opened = ShellExecuteA(nullptr, "open", edge, args.c_str(),
+                                               nullptr, SW_SHOWMAXIMIZED);
+        if (reinterpret_cast<INT_PTR>(opened) > 32) return;
+    }
+    const HINSTANCE opened = ShellExecuteA(nullptr, "open", url, nullptr, nullptr, SW_SHOWMAXIMIZED);
+    if (reinterpret_cast<INT_PTR>(opened) <= 32) {
+        MessageBoxA(nullptr, url, "Open agentsim in your browser", MB_OK | MB_ICONINFORMATION);
+    }
+}
+
+int serveMode(const CliOptions& opts, int port, bool ticksGiven, bool openBrowser, bool startPaused) {
     // R6-C：sim 改为 unique_ptr——/run /load 需要"原子替换世界"（关旧开新/换存档态），
     // 栈对象做不到。独占权在主循环；HTTP 线程只碰 bridge（既有模式不变）。
     auto simPtr = std::make_unique<agentsim::Simulation>(opts.config);
@@ -853,7 +892,17 @@ int serveMode(const CliOptions& opts, int port, bool ticksGiven, bool openBrowse
     agentsim::Simulation* simRaw = simPtr.get();   // R6-C：换局时随 ptr 一起换
     EnvState envSt;                    // 调控面状态（HTTP 线程独占）
     // R7-A：启动即加载材质包（resourcepacks.list 不存在 = 只用内置默认色）。
+    std::string appRoot;
+    char exePath[MAX_PATH] = {};
+    GetModuleFileNameA(nullptr, exePath, MAX_PATH);
+    const std::string exeDir(exePath, std::string(exePath).find_last_of("\\/") + 1);
+    if (std::ifstream(exeDir + "frontend\\agentsim.html").good())
+        appRoot = exeDir;
+    else if (std::ifstream(exeDir + "..\\frontend\\agentsim.html").good())
+        appRoot = exeDir + "..\\";
     PackState packState;
+    packState.dir = appRoot + "resourcepacks";
+    packState.listPath = appRoot + "resourcepacks.list";
     std::string packsErr;
     {
         std::string listErr;
@@ -873,35 +922,21 @@ int serveMode(const CliOptions& opts, int port, bool ticksGiven, bool openBrowse
                     packState.all.size(), packState.enabled.size());
     }
     ServeBridge bridge(opts.config);
+    if (startPaused) bridge.setPaused(true);
     // R6-C：时间轴（回放数据源）。默认 200 帧一个检查点。
     auto timelinePtr = std::make_unique<agentsim::app::Timeline>(opts.config);
     timelinePtr->checkpoint(*simRaw);
     bridge.publishCheckpoints(*timelinePtr);
 
     HttpServer server;
-    // R10 修复：webRoot 相对可执行文件定位（双击 Explorer 时 CWD 可能不是仓库根——
-    // 实测 agentsimw/agentsim 双击 → CWD=build\ → "frontend" 解析失败 → 根路径 404）。
-    std::string webRoot = "frontend";
-    {
-        char exePath[MAX_PATH] = {};
-        GetModuleFileNameA(nullptr, exePath, MAX_PATH);
-        std::string exeDir(exePath);
-        const std::size_t slash = exeDir.find_last_of("\\/");
-        if (slash != std::string::npos) exeDir = exeDir.substr(0, slash + 1);
-        // 优先 exe 同级（仓库根<exe 同级>rontend），其次 exe 目录下的 frontend，
-        // 最后回落 CWD（旧行为，脚本从仓库根跑时等价）。
-        if (std::ifstream(std::string(exeDir + "..\\frontend\\agentsim.html")).good())
-            webRoot = exeDir + "..\\frontend";
-        else if (std::ifstream(std::string(exeDir + "frontend\\agentsim.html")).good())
-            webRoot = exeDir + "frontend";
-    }
+    const std::string webRoot = appRoot + "frontend";
     server.setWebRoot(webRoot);
     server.setRouter([&](const std::string& method, const std::string& path,
                          const std::string& body, const std::string& query,
                          std::string& resp, std::string& contentType,
                          int& status) -> bool {
         (void)query;
-        if (method == "GET" && path == "/status") {
+        if (method == "GET" && (path == "/status" || path == "/launch-ready-v31")) {
             // 只读 bridge 发布的 tick（锁内拷出的原子快照）。
             resp = "{\"ok\":true,\"phase\":\"running\",\"tick\":" +
                    std::to_string(bridge.tick()) + "}";
@@ -1012,7 +1047,22 @@ int serveMode(const CliOptions& opts, int port, bool ticksGiven, bool openBrowse
             if (!fpsS.empty()) {
                 try { next.runtime.maxFps = std::stod(fpsS); } catch (...) {}
             }
+            const std::string mod = formValue(body, "mod");
+            if (!mod.empty()) {
+                if (mod != "standard" && mod != "constant_light" && mod != "rich_nutrients") {
+                    resp = "{\"ok\":false,\"error\":\"unknown ecology mod\"}";
+                    contentType = "application/json; charset=utf-8"; status = 400; return true;
+                }
+                next.sun.dayAmplitude = mod == "constant_light" ? 0.0 : opts.config.sun.dayAmplitude;
+                next.cyanoTuning.nutrientBudgetRatio = opts.config.cyanoTuning.nutrientBudgetRatio *
+                    (mod == "rich_nutrients" ? 2.0 : 1.0);
+            }
             bridge.requestRun(next);
+            std::string runError;
+            if (!bridge.waitWorldResult(runError)) {
+                resp = "{\"ok\":false,\"error\":\"start timeout\"}";
+                contentType = "application/json; charset=utf-8"; status = 504; return true;
+            }
             resp = "{\"ok\":true,\"phase\":\"running\",\"seed\":" +
                    std::to_string(next.world.seed) + "}" ;
             contentType = "application/json; charset=utf-8"; status = 200; return true;
@@ -1149,10 +1199,19 @@ int serveMode(const CliOptions& opts, int port, bool ticksGiven, bool openBrowse
         if (method == "POST" && path == "/set-packs") {
             // 行式体：enabled=classic_flat,another（空 = 全部停用，只留内置默认色）。
             const std::string csv = formValue(body, "enabled");
-            packState.enabled = agentsim::app::ResourcePackStore::parseEnabledList(csv);
+            auto enabled = agentsim::app::ResourcePackStore::parseEnabledList(csv);
+            for (std::string& name : enabled) {
+                name = decodePackName(name);
+                const auto known = [&](const auto& pack) { return pack.name == name; };
+                if (std::none_of(packState.all.begin(), packState.all.end(), known)) {
+                    resp = "{\"ok\":false,\"error\":\"unknown resource pack\"}";
+                    contentType = "application/json; charset=utf-8"; status = 400; return true;
+                }
+            }
             std::string werr;
             const bool saved = agentsim::app::ResourcePackStore::writeListFile(
-                packState.listPath, packState.enabled, werr);
+                packState.listPath, enabled, werr);
+            if (saved) packState.enabled = enabled;
             reloadPacks(packState, packsErr);
             if (!werr.empty()) {
                 if (!packsErr.empty()) packsErr += "; ";
@@ -1175,34 +1234,7 @@ int serveMode(const CliOptions& opts, int port, bool ticksGiven, bool openBrowse
                 actualPort, webRoot.c_str());
     std::printf("[serve] 关闭本窗口即退出模拟\n");
 
-    // R8-A：自动拉起默认浏览器（ShellExecuteA，零第三方依赖）。失败静默——
-    // 前端可手动打开；这行不是账目路径，出错不影响仿真。
-    if (openBrowser) {
-        char url[64];
-        std::snprintf(url, sizeof(url), "http://127.0.0.1:%d/", actualPort);
-        // R11 发布形态：优先 Edge --app 独立窗口（无边框桌面应用观感、无浏览器
-        // 标签页 chrome）；Edge 缺失/启动失败回落默认浏览器。展示路径，不影响账目。
-        const char* edgeCands[] = {
-            "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
-            "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
-        };
-        bool opened = false;
-        for (const char* edge : edgeCands) {
-            const DWORD attr = GetFileAttributesA(edge);
-            if (attr == INVALID_FILE_ATTRIBUTES || (attr & FILE_ATTRIBUTE_DIRECTORY) != 0) continue;
-            std::string params = std::string("--app=") + url + " --window-size=1280,800";
-            const HINSTANCE h = ShellExecuteA(nullptr, "open", edge, params.c_str(),
-                                              nullptr, SW_SHOWNORMAL);
-            if (reinterpret_cast<INT_PTR>(h) > 32) { opened = true; break; }
-        }
-        if (!opened) {
-            const HINSTANCE h = ShellExecuteA(nullptr, "open", url, nullptr, nullptr, SW_SHOWNORMAL);
-            if (reinterpret_cast<INT_PTR>(h) <= 32) {
-                std::printf("[serve] browser auto-open failed (%d); open %s manually\n",
-                            static_cast<int>(reinterpret_cast<INT_PTR>(h)), url);
-            }
-        }
-    }
+    if (openBrowser) openGameWindow(actualPort);
     std::printf("[serve] wired keys: %d; rejected-on-purpose: width/height/seed/ticks/regrow_food\n",
                 RuntimeEnv::wiredKeyCount());
 
@@ -1247,6 +1279,7 @@ int serveMode(const CliOptions& opts, int port, bool ticksGiven, bool openBrowse
             viewingPast = false;
             lastEffectGen = -1;
             syncRestoredWorld();
+            bridge.publishWorldResult("");
         }
 
         SimConfig loadConfig;
@@ -1437,7 +1470,7 @@ int main(int argc, char** argv) {
         return 2;
     }
     if (opts.help) { printHelp(); return 0; }
-    if (opts.version) { std::printf("agentsim 3.0.0\n"); return 0; }
+    if (opts.version) { std::printf("agentsim 3.1.0\n"); return 0; }
 
     // R8-A：无参双击 = 实时服务模式（此前走批跑 maxTicks=1000 即退，被用户判为"秒退"）。
     // 任何显式参数（含 --help/--version）保持既有批跑语义；--no-open 仅抑制浏览器拉起。
@@ -1471,7 +1504,7 @@ int main(int argc, char** argv) {
                     }
                 } else alive = true;
                 if (alive) {
-                    const char* req = "GET /state HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n";
+                    const char* req = "GET /launch-ready-v31 HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n";
                     send(sock, req, static_cast<int>(strlen(req)), 0);
                     char rsp[64] = {};
                     // 读侧恢复阻塞语义前先给接收一个短窗（仍非阻塞，select 等待）
@@ -1487,7 +1520,7 @@ int main(int argc, char** argv) {
                 if (alive) {
                     char front[64];
                     std::snprintf(front, sizeof(front), "http://127.0.0.1:%d/", p);
-                    if (!noOpen) ShellExecuteA(nullptr, "open", front, nullptr, nullptr, SW_SHOWNORMAL);
+                    if (!noOpen) openGameWindow(p);
                     std::printf("[serve] already running at %s%s — exiting\n", front,
                                 noOpen ? "" : " (opened browser)");
                     WSACleanup();
@@ -1503,7 +1536,7 @@ int main(int argc, char** argv) {
         // 失常——服务端口不监听、日志零输出）。单窗口体验改为文档指引：
         // 用户手动最小化控制台即可。诚实记录 LOG。
     }
-    if (serve) return serveMode(opts, servePort, serveTicksGiven, !noOpen);
+    if (serve) return serveMode(opts, servePort, serveTicksGiven, !noOpen, argc == 1 && !noOpen);
 
     std::ofstream statsFile;
     if (opts.stats) {

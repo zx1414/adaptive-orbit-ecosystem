@@ -63,6 +63,7 @@ window.Renderer = (function () {
     // interaction blink: nucleus id -> last interact ts (ms). Frontend approximation (T54).
     var lastInteract = {};
     var cam = { scale: 1, cx: 128, cy: 128, fit: 1 };
+    var fillLandscape = true;
     var dayNight = true;
     var skyDayness = 0;
     var DAYNIGHT_PERIOD = 200;
@@ -97,12 +98,18 @@ window.Renderer = (function () {
       var b = trace.bounds;
       var ww = Math.max(1e-9, b.maxX - b.minX), wh = Math.max(1e-9, b.maxY - b.minY);
       cam.fit = Math.min(W / ww, H / wh);
-      cam.scale = cam.fit;
+      cam.scale = fillLandscape && W > H ? Math.max(W / ww, H / wh) : cam.fit;
       cam.cx = (b.minX + b.maxX) / 2;
       cam.cy = (b.minY + b.maxY) / 2;
     }
 
     function resetView() { fitCamera(); }
+
+    function toggleFullMap() {
+      fillLandscape = !fillLandscape;
+      fitCamera();
+      return !fillLandscape;
+    }
 
     function s2x(x) { return (x - cam.cx) * cam.scale + W / 2; }
     function s2y(y) { return H / 2 - (y - cam.cy) * cam.scale; }
@@ -679,6 +686,7 @@ window.Renderer = (function () {
       if (!trace || !frame || !tcanvas || !tcanvas.getContext) return false;
       try {
         var thumb = create(tcanvas);
+        thumb.toggleFullMap();
         thumb.setTrace(trace);
         thumb.setMinimal(MINIMAL);
         thumb.draw(frame, { w: tcanvas.width, h: tcanvas.height });
@@ -691,6 +699,7 @@ window.Renderer = (function () {
       draw: draw,
       resize: resize,
       resetView: resetView,
+      toggleFullMap: toggleFullMap,
       setDayNight: setDayNight,
       renderThumb: renderThumb,
       panBy: function (dxCss, dyCss) { panBy(dxCss * dpr, dyCss * dpr); },

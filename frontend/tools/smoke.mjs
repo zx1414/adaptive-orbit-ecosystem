@@ -468,13 +468,17 @@ const mapFrame = {
   balls: [{ id: 2, owner: 1, x: 128, y: 128, type: 1, energy: 30 }]
 };
 mapRenderer.draw(mapFrame);
-eq(mapClips[0], [210, 0, 540, 540], "wide canvas displays a square that fills the full short side");
-near(mapRenderer.camera().scale, 540 / 256, 1e-9, "default camera keeps world units square");
+eq(mapClips[0], [0, -210, 960, 960], "landscape map covers the viewport and keeps a square world");
+near(mapRenderer.camera().scale, 960 / 256, 1e-9, "default camera uses an equal scale on both axes");
 ok(energyArcs.some(arc => arc[3] === -Math.PI / 2 &&
    Math.abs(arc[4] - arc[3] - Math.PI * 0.4) < 1e-9), "default render draws the nucleus energy arc at 20%");
 ok(mapFills.some(fill => fill[0] === "rgb(109,125,139)" && fill[4] === fill[3] / 2),
    "scout diamond shows half fill for 30 energy on the 0–60 scale");
 eq(mapRenderer.hitTest(480, 270).kind, "ball", "ball remains selectable above an overlapping nucleus");
+mapRenderer.toggleFullMap();
+mapClips.length = 0;
+mapRenderer.draw(mapFrame);
+eq(mapClips[0], [210, 0, 540, 540], "full map mode exposes the entire square");
 eq(mapRenderer.hitTest(200, 270).kind, "none", "outer backdrop cannot select map entities");
 ok(mapRenderer.renderThumb(mapFrame, makeCanvas()), "thumbnail uses the same renderer");
 eq(mapRenderer.hitTest(480, 270).data.id, 2, "thumbnail leaves map hit coordinates intact");
@@ -819,9 +823,9 @@ sandbox.window.LiveClient.stop();                     // 先停掉 10b 之前的
 sandbox.window.LiveClient.start("", { intervalMs: 1000, onFrame: () => {} });  // 占位停掉
 sandbox.window.LiveClient.stop();
 LM.showPage("menu");
-LM.startRun({ seed: 1234, frames: 300, nuclei: 10, cyano: 40, autosave: true });
+LM.startRun({ seed: 1234, frames: 300, nuclei: 10, cyano: 40, mod: "constant_light", autosave: true });
 await new Promise((r) => setTimeout(r, 400));
-eq(runPosts[0], "seed=1234&nuclei=10&cyano_nodes=40&ticks=300&policy=rule&max_fps=60",
+eq(runPosts[0], "seed=1234&nuclei=10&cyano_nodes=40&ticks=300&policy=rule&mod=constant_light&max_fps=60",
    "POST /run 行式 body 正确（R10：含 policy 键）");
 ok(savePosts.length >= 1 && String(savePosts[0]).indexOf("name=auto-1234-") === 0,
    "自动存档 auto-<seed>-<时间戳> POST /save（" + String(savePosts[0] || "").slice(0, 24) + "…）");
@@ -1044,6 +1048,7 @@ function collectRows(root, cls) {
 }
 let packRows = collectRows(packsBox, "pack-row");
 eq(packRows.length, 3, "renderPacks 渲染 3 行包（在线态）");
+eq(collectRows(elements["menuPacksBox"], "pack-row").length, 3, "the same pack choices are available before starting");
 eq(packRows[0].children[0].checked, true, "ocean 勾选态来自 enabled=true");
 ok(String(collectRows(packsBox, "packs-empty").length) === "0" ||
    collectRows(packsBox, "packs-empty").length === 0, "在线态无「需要本地服务」占位");
@@ -1066,7 +1071,9 @@ sunsetCb.checked = true;
 sunsetCb.fire("change");
 await new Promise((r) => setTimeout(r, 20));
 eq(LM._state.packs[1].enabled, false, "POST /set-packs 失败 → enabled 回滚（服务端权威）");
-eq(sunsetCb.checked, false, "失败 → 勾选 UI 回滚");
+eq(collectRows(packsBox, "pack-row")[1].children[0].checked, false, "失败 → 勾选 UI 回滚");
+eq(collectRows(elements["menuPacksBox"], "pack-row")[1].children[0].checked, false,
+   "the menu also restores the confirmed selection after a failed update");
 ok(String(elements["toast"].textContent).indexOf("材质包切换失败") >= 0, "失败 toast 提示");
 // 离线提示（非假列表）
 LM._state.packsOnline = false;

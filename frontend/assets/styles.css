@@ -501,3 +501,9 @@ body.cinema .aurora { opacity: .22; }
 .tip .tsec, .pcard-head { background: #dae2d0; color: #344b36; }
 .tip .tk, .tip .tv, .pcard-title, .pcard-x { color: #40533f; }
 .toast { background: #f5f2e7; color: #354c37; border-color: #aeb7a1; }
+.start-options { display: grid; gap: 8px; margin-bottom: 12px; }
+.start-options select { padding: 6px; width: 100%; color: var(--text); background: #faf8ef; border: 1px solid var(--border-strong); border-radius: 6px; }
+.start-packs summary { color: var(--text); cursor: pointer; }
+.start-packs .packs-box { margin: 6px 0 0; }
+.start-packs .pack-row { background: #eee9da; }
+.start-packs .pack-name { color: var(--text); }

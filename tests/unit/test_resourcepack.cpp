@@ -140,8 +140,8 @@ TEST(resourcepack_missing_key_falls_back_to_default) {
     CHECK(err.empty());
     const auto merged = agentsim::app::ResourcePackStore::mergeEnabled(packs, {"p"});
     CHECK(colorAt(merged.colors, "background") == "40,50,60");      // 包里有的生效
-    CHECK(colorAt(merged.colors, "ball_shield") == "255,207,94");   // 缺 key → 内置默认
-    CHECK(colorAt(merged.colors, "nucleus") == "255,255,255");
+    CHECK(colorAt(merged.colors, "ball_shield") == "169,119,70");   // 缺 key → 内置默认
+    CHECK(colorAt(merged.colors, "nucleus") == "77,92,70");
     CHECK(colorAt(merged.colors, "mode") == "type_color");
 }
 
@@ -263,12 +263,12 @@ TEST(resourcepack_colors_line_formats) {
 TEST(resourcepack_builtin_defaults_and_utils) {
     const auto d = agentsim::app::ResourcePackStore::builtInDefaults();
     CHECK(d.colors.size() == 7u);
-    CHECK(colorAt(d.colors, "background") == "10,14,26");
-    CHECK(colorAt(d.colors, "ball_shield") == "255,207,94");
-    CHECK(colorAt(d.colors, "ball_worker") == "69,224,216");
-    CHECK(colorAt(d.colors, "ball_scout") == "183,139,255");
-    CHECK(colorAt(d.colors, "free_ball") == "200,200,210");
-    CHECK(colorAt(d.colors, "nucleus") == "255,255,255");
+    CHECK(colorAt(d.colors, "background") == "233,228,211");
+    CHECK(colorAt(d.colors, "ball_shield") == "169,119,70");
+    CHECK(colorAt(d.colors, "ball_worker") == "71,125,109");
+    CHECK(colorAt(d.colors, "ball_scout") == "109,125,139");
+    CHECK(colorAt(d.colors, "free_ball") == "63,76,60");
+    CHECK(colorAt(d.colors, "nucleus") == "77,92,70");
     CHECK(colorAt(d.colors, "mode") == "type_color");
 
     const auto lst = agentsim::app::ResourcePackStore::parseEnabledList(" a , ,b,, c ");

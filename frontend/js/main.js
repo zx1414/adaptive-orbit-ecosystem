@@ -130,16 +130,7 @@ window.Main = (function () {
     }
     if (name === 'saves') refreshSaves();   // R6-D：每次进存档页重读 GET /saves
     // R7-D：进参数页时若在线但还没拉到包列表（boot 时后端未起），补拉一次
-    if (name === 'params' && state.packsOnline !== true &&
-        window.LiveClient && window.LiveClient.getJson && typeof fetch === 'function') {
-      window.LiveClient.getJson('/packs').then(function (j) {
-        if (applyPaletteActive(j && j.active)) {
-          state.packs = Array.isArray(j.packs) ? j.packs : [];
-          state.packsOnline = true;
-          renderPacks();
-        }
-      }).catch(function () {});
-    }
+    if ((name === 'menu' || name === 'params') && state.packsOnline !== true) fetchPalette();
   }
 
   function resizeCharts() {
@@ -649,6 +640,9 @@ window.Main = (function () {
     return true;
   }
 
+  var packUpdate = null;
+  var startingRun = false;
+
   function fetchPalette() {
     var LCX = window.LiveClient;
     if (!LCX || typeof fetch !== 'function' || !LCX.getJson) return;   // 离线：默认色
@@ -670,7 +664,8 @@ window.Main = (function () {
       if (state.packs[i].enabled) enabled.push(state.packs[i].name);
     }
     var body = 'enabled=' + enabled.map(function (n) { return encodeURIComponent(n); }).join(',');
-    return LCX.postForm('/set-packs', body).then(function () {
+    return LCX.postForm('/set-packs', body).then(function (result) {
+      if (result && result.active) return result;
       return LCX.getJson('/packs');
     }).then(function (j) {
       if (applyPaletteActive(j && j.active)) {
@@ -684,7 +679,11 @@ window.Main = (function () {
 
   // 参数页「材质包」区：在线渲染包列表（勾选=enabled），离线显示「需要本地服务」
   function renderPacks() {
-    var box = $('packsBox');
+    ['menuPacksBox', 'packsBox'].forEach(renderPackList);
+  }
+
+  function renderPackList(id) {
+    var box = $(id);
     if (!box) return;
     box.innerHTML = '';
     if (state.packsOnline !== true) {
@@ -703,14 +702,21 @@ window.Main = (function () {
         var cb = document.createElement('input');
         cb.type = 'checkbox';
         cb.checked = !!pk.enabled;
+        cb.disabled = !!packUpdate || startingRun;
         cb.setAttribute('aria-label', '启用材质包 ' + pk.name);
         cb.addEventListener('change', function () {
+          if (packUpdate || startingRun) return;
+          var previous = pk.enabled;
           pk.enabled = cb.checked;
-          postSetPacks().catch(function (e) {
-            pk.enabled = !cb.checked;   // 失败回滚勾选（服务端是权威）
-            cb.checked = pk.enabled;
+          packUpdate = postSetPacks().then(function () { return true; }, function (e) {
+            pk.enabled = previous;
             toast('材质包切换失败：' + (e.message || e));
+            return false;
+          }).finally(function () {
+            packUpdate = null;
+            renderPacks();
           });
+          renderPacks();
         });
         var txt = document.createElement('span');
         txt.className = 'pack-text';
@@ -1349,6 +1355,7 @@ window.Main = (function () {
       frames: intOf('menuFrames', 300, 20, 100000),
       autosave: !(!$('menuAutosave') || !$('menuAutosave').checked),
       policy: ($('menuPolicy') && $('menuPolicy').value) ? $('menuPolicy').value : 'rule',
+      mod: ($('menuMod') && $('menuMod').value) || 'standard',
       fps: intOf('menuFps', 60, 0, 240)
     };
   }
@@ -1518,28 +1525,34 @@ window.Main = (function () {
   }
 
   function startRun(cfg) {
+    if (startingRun) return;
+    startingRun = true;
+    var startButton = $('menuStart');
+    if (startButton) startButton.disabled = true;
+    renderPacks();
     state.cfg = cfg;
     // R4-D 双数据源：探测 /status 在线 → POST /run 开新局 + 实时轮询；失败
     // （file:// 双击打开 / 后端没起）→ 回退演示数据。probe 永不 reject。
     var live = (window.LiveClient && window.LiveClient.probe) ? window.LiveClient.probe('') : Promise.resolve(false);
-    live.then(function (up) {
+    Promise.all([live, packUpdate || Promise.resolve(true)]).then(function (results) {
+      if (!results[1]) return;
+      var up = results[0];
       if (up) {
         // R6-D：卡A「开始」= POST /run（行式 seed=&nuclei=&cyano_nodes=&ticks=）。
         // 旧后端无 /run（404）→ 仅提示，仍进实时轮询/本地兜底，不崩。
         var LCX = window.LiveClient;
-        LCX.postForm('/run', 'seed=' + encodeURIComponent(cfg.seed) +
+        return LCX.postForm('/run', 'seed=' + encodeURIComponent(cfg.seed) +
           '&nuclei=' + cfg.nuclei + '&cyano_nodes=' + cfg.cyano + '&ticks=' + cfg.frames +
           '&policy=' + encodeURIComponent(cfg.policy || 'rule') +
+          '&mod=' + encodeURIComponent(cfg.mod || 'standard') +
           '&max_fps=' + (typeof cfg.fps === 'number' ? cfg.fps : 60))
           .then(function () {
+            enterLiveMode();
             if (!cfg.autosave) return;
             var autoName = 'auto-' + cfg.seed + '-' + U.nowStamp().replace(/[-: ]/g, '');
             return LCX.postForm('/save', 'name=' + encodeURIComponent(autoName))
               .then(function () { toast('已自动存档「' + autoName + '」（POST /save）'); });
-          })
-          .catch(function (e) { toast('POST /run|save 失败：' + (e.message || e)); });
-        enterLiveMode();
-        return;
+          });
       }
       var trace;
       try {
@@ -1555,6 +1568,12 @@ window.Main = (function () {
       showPage('run');
       setPlaying(true);
       toast('开跑：seed ' + cfg.seed + ' · 演示数据（后端未连接）· 调控免费');
+    }).catch(function (e) {
+      toast('开局或自动存档失败：' + (e.message || e));
+    }).finally(function () {
+      startingRun = false;
+      if (startButton) startButton.disabled = false;
+      renderPacks();
     });
   }
 
@@ -1948,7 +1967,11 @@ window.Main = (function () {
 
   // ── 绑定 ─────────────────────────────────────────────────────
   function bindAll() {
-    on('btnMapFit', 'click', function () { renderer.resetView(); updateAll(true); });
+    on('btnMapFit', 'click', function () {
+      var fullMap = renderer.toggleFullMap();
+      this.textContent = fullMap ? '铺满' : '全图';
+      updateAll(true);
+    });
     on('btnMapPlay', 'click', function () { setPlaying(!state.playing); });
     on('btnMapCinema', 'click', function () { setCinema(!state.cinema); });
     // 顶栏
