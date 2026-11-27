@@ -591,7 +591,11 @@ TEST(runtime_env_external_seed_respects_cap_and_injects_declared_energy) {
 
 // 播种后生产者能靠光合自己长起来（不是播种直接给能量）。
 TEST(runtime_env_external_seed_grows_by_photosynthesis) {
-    Fresh f;   // 默认配置：512 节点 / maxNodes 4096，足够形成可存活菌落
+    Fresh f;
+    f.cfg.colony.nuclei = 0;
+    f.cfg.cyanoNodeCount = 48;
+    f.cfg.cyanoTuning.reproductionProbability = 0.0;
+    f.cfg.cyanoTuning.growthPerTick = 0.0;
     agentsim::Simulation sim(f.cfg);
     double energyAtSeed = 0.0;
     for (const agentsim::CyanoNode& c : sim.cyanoNodes()) energyAtSeed += c.energy;
@@ -600,8 +604,8 @@ TEST(runtime_env_external_seed_grows_by_photosynthesis) {
     const double seedEnergy = sim.cyanoParams().seedEnergy;
     CHECK_NEAR(energyAtSeed,
                static_cast<double>(sim.cyanoNodes().size()) * seedEnergy, 1e-9);
-    const double baseline = energyAtSeed;
     CHECK(sim.addCyanoNodes(64) == 64);
+    const double baseline = energyAtSeed + 64.0 * seedEnergy;
     CHECK(sim.runTo(150));
     CHECK(sim.auditOk());
     double energyLater = 0.0;

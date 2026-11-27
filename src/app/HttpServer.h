@@ -1,7 +1,7 @@
 ﻿// agentsim - app/HttpServer.h
 // R1-C：零依赖 HTTP/1.1 实时服务（只绑 127.0.0.1，供浏览器/本地工具访问）。
 //
-// 设计要点（docs/V2-SPEC.md §H + 任务卡 R1-C）：
+// 本地 HTTP 服务边界见 docs/ARCHITECTURE.md。
 //   - 只绑 127.0.0.1，不对外；端口被占自动 +1 重试（最多 20 次）。
 //   - HTTP/1.1 + Connection: close，无 keep-alive；单线程 accept + 每连接同步处理
 //     （本地单客户端足够，换来零锁零竞态）。

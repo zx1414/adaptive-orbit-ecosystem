@@ -1,51 +1,149 @@
-// agentsim - app/Launcher.cpp : 发布形态入口（无控制台窗口）。
-// 双击 agentsimw.exe → 以 CREATE_NO_WINDOW 派生同目录 agentsim.exe（全部参数透传）
-// → 启动器立即退出。真正的服务生命周期/单实例探活/浏览器拉起都在 agentsim.exe 内。
-// 设计取舍：不合并进 agentsim.exe（/SUBSYSTEM:WINDOWS 会让批跑 CLI 的 stdout 契约
-// 和 PowerShell 管道语义复杂化）；启动器是纯 Win32 壳，与仿真零耦合。
 #include <windows.h>
-#pragma comment(lib, "user32.lib")  // MessageBoxW（/SUBSYSTEM:WINDOWS 不自动链 user32）
+#include <shlobj.h>
+
+#include <array>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <string>
-#include <shellapi.h>
 
-int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
-    wchar_t exePath[MAX_PATH];
-    GetModuleFileNameW(nullptr, exePath, MAX_PATH);
-    // 同目录 agentsim.exe
-    std::wstring dir(exePath);
-    const std::size_t slash = dir.find_last_of(L"\\/");
-    if (slash != std::wstring::npos) dir = dir.substr(0, slash + 1);
-    const std::wstring target = dir + L"agentsim.exe";
+#pragma comment(lib, "shell32.lib")
+#pragma comment(lib, "user32.lib")
 
-    // 命令行透传（去掉 argv[0]）
-    LPWSTR cmdRaw = GetCommandLineW();
-    // 简单跳过第一个 token（考虑引号）
-    std::wstring args;
+#ifndef AGENTSIM_VERSION
+#define AGENTSIM_VERSION dev
+#endif
+#define AGENTSIM_VERSION_TEXT(x) #x
+#define AGENTSIM_VERSION_VALUE(x) AGENTSIM_VERSION_TEXT(x)
+
+namespace {
+namespace fs = std::filesystem;
+
+struct Asset {
+    int id;
+    const char* path;
+    bool refresh;
+};
+constexpr Asset kAssets[] = {
+#define ASSET(id, path, refresh) {id, path, refresh},
+#include "StandaloneAssets.inc"
+#undef ASSET
+};
+
+HRSRC findAsset(HMODULE module, int id) {
+    return FindResourceW(module, MAKEINTRESOURCEW(id), MAKEINTRESOURCEW(10));
+}
+
+bool sameBytes(const fs::path& path, const char* data, DWORD size) {
+    std::ifstream input(path, std::ios::binary | std::ios::ate);
+    if (!input || input.tellg() != static_cast<std::streamoff>(size)) return false;
+    input.seekg(0);
+    std::array<char, 8192> chunk{};
+    for (std::size_t offset = 0; offset < size;) {
+        const auto remaining = static_cast<std::size_t>(size) - offset;
+        const auto count = remaining < chunk.size() ? remaining : chunk.size();
+        if (!input.read(chunk.data(), static_cast<std::streamsize>(count)) ||
+            std::memcmp(chunk.data(), data + offset, count) != 0) return false;
+        offset += count;
+    }
+    return true;
+}
+
+bool extractAsset(HMODULE module, const Asset& asset, const fs::path& root, std::wstring& failure) {
+    const auto target = root / asset.path;
+    std::error_code error;
+    if (!asset.refresh && fs::is_regular_file(target, error)) return true;
+    const HRSRC resource = findAsset(module, asset.id);
+    const DWORD size = resource ? SizeofResource(module, resource) : 0;
+    const HGLOBAL payload = size ? LoadResource(module, resource) : nullptr;
+    const auto* data = payload ? static_cast<const char*>(LockResource(payload)) : nullptr;
+    if (!data) {
+        failure = L"无法读取内置资源 #" + std::to_wstring(asset.id);
+        return false;
+    }
+    if (sameBytes(target, data, size)) return true;
+
+    fs::create_directories(target.parent_path(), error);
+    if (error) {
+        failure = L"无法创建目录：" + target.parent_path().native() +
+                  L"（错误 " + std::to_wstring(error.value()) + L"）";
+        return false;
+    }
+    fs::path temporary = target;
+    temporary += L"." + std::to_wstring(GetCurrentProcessId()) + L".tmp";
+    std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
+    const bool written = static_cast<bool>(output.write(data, static_cast<std::streamsize>(size)));
+    output.close();
+    const bool installed = written && output &&
+        MoveFileExW(temporary.c_str(), target.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
+    if (installed) return true;
+    const DWORD moveError = GetLastError();
+    fs::remove(temporary, error);
+    if (sameBytes(target, data, size)) return true;
+    failure = L"无法写入：" + target.native();
+    if (written && output) failure += L"（错误 " + std::to_wstring(moveError) + L"）";
+    return false;
+}
+
+fs::path gameDirectory(HMODULE module, std::wstring& failure) {
+    wchar_t path[MAX_PATH]{};
+    const auto length = GetModuleFileNameW(module, path, MAX_PATH);
+    if (length == 0 || length >= MAX_PATH) {
+        failure = L"无法读取启动器目录。";
+        return {};
+    }
+    const auto executableDir = fs::path(path).parent_path();
+    if (!findAsset(module, kAssets[0].id)) return executableDir;
+
+    constexpr char version[] = AGENTSIM_VERSION_VALUE(AGENTSIM_VERSION);
+    const auto unpack = [&](const fs::path& root) {
+        for (const auto& asset : kAssets) {
+            if (!extractAsset(module, asset, root, failure)) return false;
+        }
+        return true;
+    };
+
+    wchar_t localData[MAX_PATH]{};
+    if (SUCCEEDED(SHGetFolderPathW(nullptr, CSIDL_LOCAL_APPDATA, nullptr, SHGFP_TYPE_CURRENT, localData))) {
+        const auto root = fs::path(localData) / "agentsim" / "portable" / version;
+        if (unpack(root)) return root;
+    }
+    const auto fallback = executableDir / ".agentsim" / version;
+    return unpack(fallback) ? fallback : fs::path{};
+}
+
+const wchar_t* commandTail() {
+    const wchar_t* tail = GetCommandLineW();
     bool inQuote = false;
-    bool started = false;
-    for (const wchar_t* p = cmdRaw; *p; ++p) {
-        if (*p == L'"') inQuote = !inQuote;
-        if (!started && !inQuote && *p == L' ') { started = true; continue; }
-        if (started) args += *p;
+    while (*tail != L'\0') {
+        if (*tail == L'"') inQuote = !inQuote;
+        if (!inQuote && (*tail == L' ' || *tail == L'\t')) break;
+        ++tail;
     }
+    return tail;
+}
+} // namespace
 
-    STARTUPINFOW si{};
-    si.cb = sizeof(si);
-    PROCESS_INFORMATION pi{};
-    std::wstring cmdLine = L"\"" + target + L"\"" +
-        (args.empty() ? std::wstring() : L" " + args);
-    // CREATE_NO_WINDOW：控制台子进程不弹窗；DETACHED_PROCESS 亦可，取 NO_WINDOW 语义更直观。
-    const BOOL ok = CreateProcessW(nullptr, &cmdLine[0], nullptr, nullptr, FALSE,
-                                   CREATE_NO_WINDOW | DETACHED_PROCESS,
-                                   nullptr, dir.c_str(), &si, &pi);
-    if (ok) {
-        CloseHandle(pi.hThread);
-        CloseHandle(pi.hProcess);
-    } else {
-        // 罕见：agentsim.exe 缺失。无控制台可说话——消息框兜底（双击场景用户看得见）。
-        MessageBoxW(nullptr, L"agentsim.exe not found next to this launcher.",
-                    L"agentsim", MB_OK | MB_ICONERROR);
-        return 1;
+int WINAPI WinMain(HINSTANCE module, HINSTANCE, LPSTR, int) {
+    std::wstring failure;
+    const auto root = gameDirectory(module, failure);
+    bool started = false;
+    if (!root.empty()) {
+        const auto executable = root / "agentsim.exe";
+        std::wstring command = L"\"" + executable.native() + L"\"" + commandTail();
+        STARTUPINFOW startup{};
+        startup.cb = sizeof(startup);
+        PROCESS_INFORMATION process{};
+        started = CreateProcessW(executable.c_str(), command.data(), nullptr, nullptr, FALSE,
+                                 CREATE_NO_WINDOW, nullptr, root.c_str(), &startup, &process) != FALSE;
+        if (started) {
+            CloseHandle(process.hThread);
+            CloseHandle(process.hProcess);
+        } else {
+            failure = L"无法启动模拟程序（错误 " + std::to_wstring(GetLastError()) + L"）。\n" +
+                      executable.native();
+        }
     }
-    return 0;
+    if (!started) MessageBoxW(nullptr, failure.c_str(), L"agentsim", MB_OK | MB_ICONERROR);
+    return started ? 0 : 1;
 }

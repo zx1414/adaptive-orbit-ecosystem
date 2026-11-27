@@ -71,8 +71,8 @@ std::string projectRoot() {
 
 }  // namespace
 
-// 1) 真实示例包解析出全部 7 个颜色键（卡面要求）。
-TEST(resourcepack_parse_sample_seven_color_keys) {
+// The sample supplies all six colors used by the renderer.
+TEST(resourcepack_parse_sample_six_color_keys) {
     const std::string root = projectRoot();
     const bool rootOk = !root.empty();
     CHECK(rootOk);
@@ -85,15 +85,13 @@ TEST(resourcepack_parse_sample_seven_color_keys) {
     CHECK(p.version == "1.0");
     CHECK(!p.desc.empty());
     CHECK(!p.author.empty());
-    CHECK(p.colors.size() == 7u);
-    CHECK(p.colors.count("mode") == 1u);
+    CHECK(p.colors.size() == 6u);
     CHECK(p.colors.count("background") == 1u);
     CHECK(p.colors.count("ball_shield") == 1u);
     CHECK(p.colors.count("ball_worker") == 1u);
     CHECK(p.colors.count("ball_scout") == 1u);
     CHECK(p.colors.count("free_ball") == 1u);
     CHECK(p.colors.count("nucleus") == 1u);
-    CHECK(colorAt(p.colors, "mode") == "type_color");
     CHECK(colorAt(p.colors, "background") == "10,14,26");
     CHECK(colorAt(p.colors, "ball_shield") == "255,207,94");
     CHECK(colorAt(p.colors, "ball_worker") == "69,224,216");

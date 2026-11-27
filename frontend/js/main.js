@@ -1,7 +1,7 @@
 /* agentsim 前端主控 — 单页应用（菜单/运行/参数/存档）· 零依赖
  *
  * 页面结构：#page-menu / #page-run / #page-params / #page-saves，showPage() 切换（无刷新）。
- * 运行页：全屏 canvas + 底部环境调控条（四轴五档/事件卡/细调抽屉）+
+ * 运行页：全屏 canvas + 底部环境调控条（档位/事件卡/细调抽屉）+
  *         右侧可折叠状态栏（统计+曲线）+ 播放控制 + 时间轴。
  *
  * R1-AMEND-1 落实：
@@ -48,7 +48,7 @@ window.Main = (function () {
     pinnedCards: {},        // R8-D: nucleusId -> true (pinned param cards)
     pinnedSeq: 0,           // dom id counter
     frameCount: 0,
-    env: { light: 2, nutrient: 2, pressure: 2, producer: 2 },  // 四轴，0..4 五档
+    env: { light: 2, pressure: 2, producer: 2 },
     interventions: 0,     // "已干预 N 次"计数（调控免费，无预算）
     dirty: false,         // 有未提交到"真实后端"的调控（演示轮恒 true after ops）
     params: {},           // 参数页当前值（32 键）
@@ -82,15 +82,20 @@ window.Main = (function () {
   // R4-D：曲线键规格（loadTrace 与实时追加共用，避免两处漂移）
   var CHART_KEYS = {
     pop: [
-      { key: 'nuclei', color: '#5ad1ff', label: '核' },
-      { key: 'cyanoAlive', color: '#48dc80', label: '蓝细菌' }
+      { key: 'nuclei', color: '#2e5b83', label: '核' },
+      { key: 'cyanoAlive', color: '#276343', label: '蓝细菌' }
     ],
-    cyano: [{ key: 'cyanoEnergy', color: '#48dc80', label: '蓝细菌能量' }],
-    energy: [{ key: 'totalEnergy', color: '#ffa656', label: '总能量' }],
-    audit: [{ key: 'auditDelta', color: '#ff6b81', label: '|审计差值|' }],
+    nuclei: [{ key: 'nuclei', color: '#2e5b83', label: '核' }],
+    cyanoPop: [
+      { key: 'cyanoAlive', color: '#276343', label: '成熟节点' },
+      { key: 'spores', color: '#98521d', label: '孢子' }
+    ],
+    cyano: [{ key: 'cyanoEnergy', color: '#276343', label: '蓝细菌能量' }],
+    energy: [{ key: 'totalEnergy', color: '#9a5121', label: '总能量' }],
+    audit: [{ key: 'auditDelta', color: '#a33e4d', label: '|审计差值|' }],
     hue: [
-      { key: 'hueSd', color: '#c792ff', label: '核 hue 圆标准差' },
-      { key: 'cyanoHueSd', color: '#48dc80', label: '蓝细菌 hue 圆标准差' }
+      { key: 'hueSd', color: '#634489', label: '核 hue 圆标准差' },
+      { key: 'cyanoHueSd', color: '#276343', label: '蓝细菌 hue 圆标准差' }
     ]
   };
 
@@ -136,6 +141,7 @@ window.Main = (function () {
   function resizeCharts() {
     var c = state.chart;
     if (c.pop) c.pop.resize();
+    if (c.cyanoPop) c.cyanoPop.resize();
     if (c.cyano) c.cyano.resize();
     if (c.energy) c.energy.resize();
     if (c.audit) c.audit.resize();
@@ -180,7 +186,8 @@ window.Main = (function () {
       o.auditDelta = auditDelta(s);
       return o;
     });
-    if (state.chart.pop) state.chart.pop.setData(state.series, CHART_KEYS.pop);
+    if (state.chart.pop) state.chart.pop.setData(state.series, CHART_KEYS.nuclei);
+    if (state.chart.cyanoPop) state.chart.cyanoPop.setData(state.series, CHART_KEYS.cyanoPop);
     if (state.chart.cyano) state.chart.cyano.setData(state.series, CHART_KEYS.cyano);
     if (state.chart.energy) state.chart.energy.setData(state.series, CHART_KEYS.energy);
     if (state.chart.audit) state.chart.audit.setData(state.series, CHART_KEYS.audit);
@@ -214,6 +221,7 @@ window.Main = (function () {
     updateMetrics(frame);
     updateHud(frame);
     if (state.chart.pop) state.chart.pop.setCursor(state.idx);
+    if (state.chart.cyanoPop) state.chart.cyanoPop.setCursor(state.idx);
     if (state.chart.cyano) state.chart.cyano.setCursor(state.idx);
     if (state.chart.energy) state.chart.energy.setCursor(state.idx);
     if (state.chart.audit) state.chart.audit.setCursor(state.idx);
@@ -240,23 +248,13 @@ window.Main = (function () {
     var auditClass = s.auditOk == null ? '' : (s.auditOk ? 'ok' : 'bad');
     var cyanoAlive = s.cyanoAlive != null ? s.cyanoAlive : frame.cyano.length;
     var cyanoLimit = frame.live && frame.live.cyanoLimit;
-    var atLimit = cyanoLimit > 0 && cyanoAlive >= cyanoLimit;
-    var hueSdStr = (typeof frame.hueSd === 'number' && isFinite(frame.hueSd)) ? frame.hueSd.toFixed(1) + '°' : '—（无 g）';
+    var atLimit = cyanoLimit > 0 && cyanoAlive + (s.spores || 0) >= cyanoLimit;
     box.innerHTML =
       '<div class="metric"><div class="k">核数</div><div class="v cy">' + (s.nuclei != null ? s.nuclei : frame.nuclei.length) + '</div></div>' +
-      '<div class="metric"><div class="k">蓝细菌</div><div class="v ' + (atLimit ? 'bad' : 'ok') + '">' +
-      cyanoAlive + (atLimit ? '（达性能上限）' : '') + '</div></div>' +
+      '<div class="metric"><div class="k">成熟节点 / 孢子</div><div class="v ' + (atLimit ? 'bad' : 'ok') + '">' +
+      cyanoAlive + ' / ' + (s.spores || 0) + '</div></div>' +
       '<div class="metric"><div class="k">总能量</div><div class="v am">' + fmt(s.totalEnergy, 1) + '</div></div>' +
-      '<div class="metric"><div class="k">帧号</div><div class="v cy">' + frame.tick + '</div></div>' +
-      (s.injected == null || s.dissipated == null ? '' :
-        '<div class="metric wide"><div class="k">累计注入 / 耗散</div><div class="v">' +
-        fmt(s.injected, 1) + ' / ' + fmt(s.dissipated, 1) + '</div></div>') +
-      '<div class="metric wide"><div class="k">蓝细菌连线</div><div class="v cy">' + (frame.cyanoLinks ? frame.cyanoLinks.length : 0) + '</div></div>' +
-      '<div class="metric wide"><div class="k">谱系多样性（hue 圆标准差）</div><div class="v">' + hueSdStr + '</div></div>' +
-      '<div class="metric wide"><div class="k">已干预（免费）</div><div class="v">' + state.interventions + '</div></div>' +
-      '<div class="metric wide"><div class="k">能量审计</div><div class="v ' + auditClass + '">' + auditText + '</div></div>' +
-      '<div class="metric wide"><div class="k">数据源</div><div class="v ' + (state.live ? 'ok' : '') + '">' +
-      (state.live ? (state.replay ? '实时 /state · 回放' : '实时 /state') : '离线演示') + '</div></div>';
+      '<div class="metric"><div class="k">能量审计</div><div class="v ' + auditClass + '">' + auditText + '</div></div>';
     if (box) box.innerHTML += END_REASON_METRIC(frame);
     var st = frame.live;
     if (box) box.classList.toggle('replaying', !!(state.live && st && st.replay));
@@ -457,11 +455,14 @@ window.Main = (function () {
     if (hit.kind === 'nucleus') {
       tip.innerHTML = renderTooltip(item);
     } else {
-      var title = hit.kind === 'ball' ? (TYPE_NAMES[item.type] || '资源') + '球' : '蓝细菌';
+      var title = hit.kind === 'ball' ? (TYPE_NAMES[item.type] || '资源') + '球' : (item.spore ? '蓝细菌孢子' : '蓝细菌节点');
       tip.innerHTML = '<div class="tsec">' + title + ' #' + item.id + '</div>' +
         '<div class="trow"><span>当前能量</span><strong>' + fmt(item.energy, 2) + '</strong></div>' +
         (hit.kind === 'ball' ? '<div class="trow"><span>归属</span><span>' +
-          (item.owner ? '核 #' + item.owner : '自由球') + '</span></div>' : '');
+          (item.owner ? '核 #' + item.owner : '自由球') + '</span></div><p class="thint">' +
+          (BALL_EFFECTS[item.type] || BALL_EFFECTS[0]) + '</p>' :
+          '<p class="thint">' + (item.spore ? '可直接摄食，未被吃掉时会成熟。' :
+          '核须保持低速并在附近停留 12 帧才能开始摄食。') + '</p>');
     }
     tip.classList.add('on');
     positionTip(tip, point.x, point.y);
@@ -479,6 +480,7 @@ window.Main = (function () {
   }
 
   var TYPE_NAMES = ['资源', '侦察', '护盾'];
+  var BALL_EFFECTS = ['储存富余能量，核能量较低时逐步回取。', '在球所在位置探查食物，扩展核的视野。', '减轻温度偏离带来的额外呼吸开销。'];
 
   // ── R8-D 参数卡钉住：单击核 → 持久挂载（多卡并存、×关闭、死亡自动解钉）──
   function ensureCardLayer() {
@@ -543,7 +545,8 @@ window.Main = (function () {
     rows += sec('帧态');
     rows += row('核 id', nu.id);
     rows += row('能量 / 上限', fmt(nu.energy, 1) + ' / ' + fmt(nu.cap, 0));
-    rows += row('速度', fmt(nu.speed, 2) + ' px/帧');
+    rows += row('速度', fmt(nu.speed, 2) + ' 单位/帧');
+    if (nu.feedingTicks > 0) rows += row('慢速摄食', nu.feedingTicks + ' / 12 帧');
     rows += row('施力目标', ft);
 
     rows += arr('类型偏好 affinity', 'affinity', 3);
@@ -616,16 +619,14 @@ window.Main = (function () {
   // ── 环境调控条（全部免费）───────────────────────────────────
   var AXES = [
     { id: 'light', label: '光照' },
-    { id: 'nutrient', label: '蓝细菌' },
     { id: 'pressure', label: '环境压力' },
-    { id: 'producer', label: '生产者' }
+    { id: 'producer', label: '光合速率' }
   ];
   var LEVELS = ['很低', '偏低', '中性', '偏高', '很高'];
   var AXIS_DESC = {
     light: '阳光模型档位：sunBase / sunAmplitude',
-    nutrient: '蓝细菌光合与连线传输档位',
-    pressure: '代谢与衰减档位：metabolismCost / decayRate',
-    producer: '生产者存量档位：初始节点与繁殖成本'
+    pressure: '环境压力改变核的基础代谢开销',
+    producer: '光合速率改变蓝细菌在同一光照下的最大产能'
   };
 
   // ── R7-D 调色板消费 + 材质包 UI ─────────────────────────────
@@ -824,9 +825,9 @@ window.Main = (function () {
     { id: 'btnWinter', name: '寒冬', envId: 'winter' }
   ];
   var PRESETS = [
-    { id: 'btnPresetStable', name: '稳定态', lv: [2, 2, 2, 2] },
-    { id: 'btnPresetFrenzy', name: '疯长态', lv: [4, 4, 0, 4] },
-    { id: 'btnPresetBarren', name: '荒芜态', lv: [0, 1, 4, 1] }
+    { id: 'btnPresetStable', name: '稳定态', lv: [2, 2, 2] },
+    { id: 'btnPresetFrenzy', name: '疯长态', lv: [4, 0, 4] },
+    { id: 'btnPresetBarren', name: '荒芜态', lv: [0, 4, 1] }
   ];
 
   // 触发一个环境事件。语义（P0-5）：它只改环境状态（光照基线），不改任何核的能量；
@@ -912,7 +913,7 @@ window.Main = (function () {
         lines.push('axis.' + (LIVE_AXIS_ID[AXES[j].id] || AXES[j].id) + '=' + lv[j]);
       }
       postEnvLines(lines);
-      toast('已套用预设「' + name + '」（免费）→ POST /env 四轴档位');
+      toast('已套用预设「' + name + '」');
     } else {
       toast('已套用预设「' + name + '」（免费）');
     }
@@ -1354,20 +1355,19 @@ window.Main = (function () {
       cyano: intOf('menuCyano', 48, 4, 120),
       frames: intOf('menuFrames', 300, 20, 100000),
       autosave: !(!$('menuAutosave') || !$('menuAutosave').checked),
-      policy: ($('menuPolicy') && $('menuPolicy').value) ? $('menuPolicy').value : 'rule',
+      policy: ($('menuPolicy') && $('menuPolicy').value) ? $('menuPolicy').value : 'grazer',
       mod: ($('menuMod') && $('menuMod').value) || 'standard',
       fps: intOf('menuFps', 60, 0, 240)
     };
   }
 
   // ── R4-D 实时数据源（live-client.js）────────────────────────
-  // 前端轴 id → 后端 EnvControl 轴 id（EnvControl.cpp：light/food/pressure/producer）
-  var LIVE_AXIS_ID = { light: 'light', nutrient: 'food', pressure: 'pressure', producer: 'producer' };
+  var LIVE_AXIS_ID = { light: 'light', pressure: 'pressure', producer: 'producer' };
   // 前端按钮 id → 后端环境事件 id（EnvControl.cpp：规则 v2 之后只有 winter）。
   // harvest / plague / bloom 三个旧事件已撤下：后端对它们返回 retired_event（HTTP 400），
   // 这里刻意不保留映射，前端也没有按钮可点。
   var LIVE_EVENT_ID = { btnWinter: 'winter' };
-  var liveCtl = { warnedNoControl: false, lastPaintTick: -1 };
+  var liveCtl = { warnedNoControl: false, lastPaintTick: -1, lastMatterAt: 0 };
 
   // POST /env 行式协议（HttpServer handleEnvPost：每行一条 key=value）。
   // P0-5 契约变化：有被拒命令时后端返回 **HTTP 400**（不再"200 + ok:false"），
@@ -1435,6 +1435,15 @@ window.Main = (function () {
     if (state.replay) return;   // R6-D 回放锁定：后台轮询帧不推进画面/游标
     if (!state.trace) return;
     var t = state.trace;
+    var matter = $('matterOverview');
+    var now = Date.now();
+    if (matter && window.LiveClient.getJson && now - liveCtl.lastMatterAt >= 1000) {
+      liveCtl.lastMatterAt = now;
+      window.LiveClient.getJson('/matter').then(function (stock) {
+        if (!state.live || state.replay || state.trace !== t) return;
+        matter.textContent = '养分 ' + fmt(stock.nutrient, 1) + ' · 残骸 ' + fmt(stock.debris, 1);
+      }).catch(function () {});
+    }
     var i, dedup = [];
     for (i = 0; i < t.frames.length; i++) {
       if (t.frames[i].tick !== frame.tick) dedup.push(t.frames[i]);
@@ -1444,7 +1453,7 @@ window.Main = (function () {
     t.frames = dedup;
     state.series = t.series = dedup.map(function (f) {
       var s = f.stats || {};
-      return { tick: f.tick, nuclei: s.nuclei, cyanoAlive: s.cyanoAlive,
+      return { tick: f.tick, nuclei: s.nuclei, cyanoAlive: s.cyanoAlive, spores: s.spores,
         cyanoEnergy: s.cyanoEnergy, totalEnergy: s.totalEnergy,
         injected: s.injected, dissipated: s.dissipated, auditOk: s.auditOk,
         auditDelta: auditDelta(s) };
@@ -1452,7 +1461,7 @@ window.Main = (function () {
     state.hueSeries = dedup.map(function (f) {
       return { tick: f.tick, hueSd: f.hueSd, cyanoHueSd: f.cyanoHueSd };
     });
-    var lb = state.liveWorld || { w: 256, h: 256 };
+    var lb = state.liveWorld || { w: 1024, h: 512 };
     var boundsChanged = t.bounds.maxX !== lb.w || t.bounds.maxY !== lb.h;
     t.bounds = { minX: 0, minY: 0, maxX: lb.w, maxY: lb.h };  // 环面世界固定框，尺寸随 /state 头
     var first = (t.meta.liveFirst !== true);
@@ -1462,7 +1471,8 @@ window.Main = (function () {
       t.meta.world = { width: lw.w || 256, height: lw.h || 256 };
     }
     state.idx = dedup.length - 1;
-    if (state.chart.pop) state.chart.pop.setData(state.series, CHART_KEYS.pop);
+    if (state.chart.pop) state.chart.pop.setData(state.series, CHART_KEYS.nuclei);
+    if (state.chart.cyanoPop) state.chart.cyanoPop.setData(state.series, CHART_KEYS.cyanoPop);
     if (state.chart.cyano) state.chart.cyano.setData(state.series, CHART_KEYS.cyano);
     if (state.chart.energy) state.chart.energy.setData(state.series, CHART_KEYS.energy);
     if (state.chart.audit) state.chart.audit.setData(state.series, CHART_KEYS.audit);
@@ -1481,10 +1491,13 @@ window.Main = (function () {
     state.live = true;
     state.replay = false; state.timeline = null; state.seeking = false;
     liveCtl.lastPaintTick = -1;
+    liveCtl.lastMatterAt = 0;
+    var matter = $('matterOverview');
+    if (matter) matter.textContent = '';
     state.trace = {
       schemaVersion: 3,
-      meta: { contractVersion: 3, seed: 'live', world: { width: 256, height: 256 }, policy: 'live' },
-      bounds: { minX: 0, minY: 0, maxX: 256, maxY: 256 },
+      meta: { contractVersion: 3, seed: 'live', world: { width: 1024, height: 512 }, policy: 'live' },
+      bounds: { minX: 0, minY: 0, maxX: 1024, maxY: 512 },
       frames: [], series: [], hasGenome: false,
       stats: { frames: 0, droppedTuples: 0, detail: { nuclei: 0, balls: 0, cyano: 0, links: 0, genomes: 0 } }
     };
@@ -1543,7 +1556,7 @@ window.Main = (function () {
         var LCX = window.LiveClient;
         return LCX.postForm('/run', 'seed=' + encodeURIComponent(cfg.seed) +
           '&nuclei=' + cfg.nuclei + '&cyano_nodes=' + cfg.cyano + '&ticks=' + cfg.frames +
-          '&policy=' + encodeURIComponent(cfg.policy || 'rule') +
+          '&policy=' + encodeURIComponent(cfg.policy || 'grazer') +
           '&mod=' + encodeURIComponent(cfg.mod || 'standard') +
           '&max_fps=' + (typeof cfg.fps === 'number' ? cfg.fps : 60))
           .then(function () {
@@ -1580,6 +1593,8 @@ window.Main = (function () {
   // R6-D：回放态徽标（画布右上角；resume 即隐藏）
   function setReplayBadge(on, text) {
     var b = $('replayBadge');
+    var matter = $('matterOverview');
+    if (matter && on) matter.textContent = '';
     if (!b) return;
     b.classList.toggle('hidden', !on);
     if (on) b.textContent = text || '⏸ 回放态 · 播放键恢复实时';
@@ -1674,7 +1689,7 @@ window.Main = (function () {
         var t = state.trace;
         t.series = frames.map(function (fr) {
           var s = fr.stats || {};
-          return { tick: fr.tick, nuclei: s.nuclei, cyanoAlive: s.cyanoAlive,
+          return { tick: fr.tick, nuclei: s.nuclei, cyanoAlive: s.cyanoAlive, spores: s.spores,
             cyanoEnergy: s.cyanoEnergy, totalEnergy: s.totalEnergy,
             injected: s.injected, dissipated: s.dissipated, auditOk: s.auditOk,
             auditDelta: auditDelta(s) };
@@ -1683,7 +1698,8 @@ window.Main = (function () {
           return { tick: fr.tick, hueSd: fr.hueSd, cyanoHueSd: fr.cyanoHueSd };
         });
         state.idx = Math.max(0, (frames ? frames.length - 1 : 0));
-        if (state.chart.pop) state.chart.pop.setData(state.series, CHART_KEYS.pop);
+        if (state.chart.pop) state.chart.pop.setData(state.series, CHART_KEYS.nuclei);
+        if (state.chart.cyanoPop) state.chart.cyanoPop.setData(state.series, CHART_KEYS.cyanoPop);
         if (state.chart.cyano) state.chart.cyano.setData(state.series, CHART_KEYS.cyano);
         if (state.chart.energy) state.chart.energy.setData(state.series, CHART_KEYS.energy);
         if (state.chart.audit) state.chart.audit.setData(state.series, CHART_KEYS.audit);
@@ -1755,7 +1771,7 @@ window.Main = (function () {
           .then(function () { return LCX.fetchState(''); })
           .then(function (fr) {
             var s = fr.stats || {};
-            rows.push({ tick: fr.tick, nuclei: s.nuclei, cyanoAlive: s.cyanoAlive,
+            rows.push({ tick: fr.tick, nuclei: s.nuclei, cyanoAlive: s.cyanoAlive, spores: s.spores,
               cyanoEnergy: s.cyanoEnergy, totalEnergy: s.totalEnergy,
               hueSd: fr.hueSd, cyanoHueSd: fr.cyanoHueSd });
             idx++;
@@ -1860,6 +1876,27 @@ window.Main = (function () {
     }
   }
 
+  function refreshCatalog() {
+    return window.LiveClient.getJson('/catalog').then(function (catalog) {
+      function updateOptions(id, entries) {
+        var select = $(id);
+        if (!select || !Array.isArray(entries) || !entries.length) return;
+        var current = select.value;
+        select.innerHTML = entries.map(function (entry) {
+          return '<option value="' + U.esc(entry.id) + '">' + U.esc(entry.name) + '</option>';
+        }).join('');
+        if (entries.some(function (entry) { return entry.id === current; })) select.value = current;
+      }
+      updateOptions('menuMod', catalog.scenarios);
+      updateOptions('menuPolicy', catalog.policies);
+      var error = $('catalogError');
+      if (error && Array.isArray(catalog.errors)) {
+        error.textContent = catalog.errors.join(' · ');
+        error.classList.toggle('hidden', catalog.errors.length === 0);
+      }
+    }).catch(function () {});
+  }
+
   function checkDemo() {
     var chips = $('menuChips');
     try {
@@ -1889,6 +1926,7 @@ window.Main = (function () {
         if (state.online === true) return;
         applyOnline(true);
         if (window.LiveClient.getJson) {
+          refreshCatalog();
           window.LiveClient.getJson('/saves').then(function (j) {
             var n = (j && Array.isArray(j.saves)) ? j.saves.length : 0;
             if (chips && state.online) {
@@ -2173,7 +2211,8 @@ window.Main = (function () {
     if (!canvas || !window.Renderer) return;
     renderer = window.Renderer.create(canvas);
     if (window.Charts) {
-      state.chart.pop = window.Charts.create($('chartPop'), {});
+      state.chart.pop = window.Charts.create($('chartPop'), { counts: true });
+      if ($('chartCyanoPop')) state.chart.cyanoPop = window.Charts.create($('chartCyanoPop'), { counts: true });
       state.chart.cyano = window.Charts.create($('chartCyano'), {});
       state.chart.energy = window.Charts.create($('chartEnergy'), {});
       state.chart.audit = window.Charts.create($('chartAudit'), {});
@@ -2188,7 +2227,7 @@ window.Main = (function () {
     bindAll();
     checkDemo();
     fetchPalette();   // R7-D：GET /packs → active 覆盖默认色（失败保持默认，不崩）
-    // R4-D：开机探测一次后端；在线则拉 GET /env 把四轴档位同步到调控条，
+    // R4-D：开机探测一次后端；在线则拉 GET /env 把档位同步到调控条，
     // 并在顶栏挂常驻数据源徽标。失败静默（演示模式不受影响）。
     if (window.LiveClient && window.LiveClient.probe) {
       window.LiveClient.probe('').then(function (up) {
@@ -2210,7 +2249,7 @@ window.Main = (function () {
     raf(tick);
   }
 
-  // R4-D：GET /env → 同步四轴档位（后端是权威；level ∈ [0,4]）
+  // R4-D：GET /env → 同步档位（后端是权威；level ∈ [0,4]）
   function syncEnvFromServer() {
     try {
       fetch('/env', { cache: 'no-store' }).then(function (r) {

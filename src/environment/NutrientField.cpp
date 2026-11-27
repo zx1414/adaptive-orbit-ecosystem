@@ -3,6 +3,7 @@
 // 隐式状态。分区/分解数学的定义见 NutrientField.h 的文件头注释。
 #include "NutrientField.h"
 
+#include <algorithm>
 #include <cmath>
 
 namespace agentsim {
@@ -140,6 +141,31 @@ double NutrientField::decompose(double ratePerTick) {
         convertedTotal += converted;
     }
     return convertedTotal;
+}
+
+void NutrientField::diffuse(double rate) {
+    if (!acceptableAmount(rate) || cells_.size() <= 1) return;
+    rate = std::min(rate, 1.0);
+    const int neighbourCount = (cols_ > 1 ? 2 : 0) + (rows_ > 1 ? 2 : 0);
+    std::vector<double> next(cells_.size(), 0.0);
+    for (int y = 0; y < rows_; ++y) {
+        for (int x = 0; x < cols_; ++x) {
+            const auto index = indexOf(x, y);
+            const double stock = cells_[index].nutrient;
+            const double distributed = stock * rate;
+            const double share = distributed / neighbourCount;
+            next[index] += stock - distributed;
+            if (cols_ > 1) {
+                next[indexOf((x + cols_ - 1) % cols_, y)] += share;
+                next[indexOf((x + 1) % cols_, y)] += share;
+            }
+            if (rows_ > 1) {
+                next[indexOf(x, (y + rows_ - 1) % rows_)] += share;
+                next[indexOf(x, (y + 1) % rows_)] += share;
+            }
+        }
+    }
+    for (std::size_t i = 0; i < cells_.size(); ++i) cells_[i].nutrient = next[i];
 }
 
 double NutrientField::totalDebris() const {

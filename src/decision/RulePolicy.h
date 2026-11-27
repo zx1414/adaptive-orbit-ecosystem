@@ -31,6 +31,13 @@ private:
     double wU_;  // 紧迫度权重：能量代理量越低越急迫，压过对齐项
 };
 
+class GrazerPolicy : public IDecisionPolicy {
+public:
+    ActionVector decide(const SensorVector& sensors, const TargetList& targets,
+                        PolicyMemory& memory) override;
+    const char* name() const override { return "grazer"; }
+};
+
 class StubPolicy : public IDecisionPolicy {
 public:
     // R2 三参接口：Stub 什么都不做——默认保守契约的完整性由此测试：

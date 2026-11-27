@@ -597,8 +597,10 @@ TEST(gene_cyano_preference_zero_never_eats) {
     cfg.cyanoTuning.reproductionProbability = 0.0;
     cfg.cyanoTuning.metabolismRate = 0.0;
     cfg.cyanoTuning.cyanoColonies = 0;   // 均匀撒点：让节点散布在核可及的范围里
+    cfg.policy.name = "stub";
     Simulation sim(cfg);
     for (Nucleus& n : const_cast<std::vector<Nucleus>&>(sim.nuclei())) {
+        n.pos = sim.cyanoNodes().front().pos;
         n.genome.cyanoPreference = 0.0; // 严格哨兵：绝不吃
         n.genome.energyThreshold = 1e9; // 不繁殖，隔离观测
     }
@@ -624,6 +626,7 @@ TEST(gene_cyano_preference_zero_never_eats) {
     // 更强的判据：核吸收了组织 → bodyMass 增长（初始 bodyMass 是定值）。
     Simulation eater(cfg);
     for (Nucleus& n : const_cast<std::vector<Nucleus>&>(eater.nuclei())) {
+        n.pos = eater.cyanoNodes().front().pos;
         n.genome.cyanoPreference = 1.0;
         n.genome.cyanoDigestion = 1.0;   // 消化冷却最短 -> 尽量多吃
         n.genome.energyThreshold = 1e9;

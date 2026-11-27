@@ -34,7 +34,7 @@ public:
     explicit PerceptronPolicy(const Params& p);
 
     // 用 PCG32 生成随机初值（仅构造期，不算决策期用 RNG）。
-    explicit PerceptronPolicy(std::uint64_t seed, double scale);
+    explicit PerceptronPolicy(std::uint64_t seed, double scale, bool legacyTail = false);
 
     // 内部绝不用 RNG：Z = sum_j w[i][j]*s[j] + b[i]（j 遍历全部 kDim 维，
     // 含 R2 新增的 s[18..23]），y = sign(Z)。
@@ -50,6 +50,7 @@ public:
     // "perceptron <kOutputs> <kDim>\n" + 每个神经元一行 "b w0 w1 ... w<kDim-1>"。
     std::string serialize() const;
     static PerceptronPolicy deserialize(const std::string& text);
+    static bool readWeights(const std::string& text, Params& params);
 
 private:
     double Z(int i, const SensorVector& s) const; // Z = sum_j w[i][j]*s[j] + b[i]
@@ -58,6 +59,7 @@ private:
     int kOutputs_ = 2;
     double w_[2][SensorVector::kDim] = {};
     double b_[2] = {};
+    bool legacyTail_ = false;
 };
 
 } // namespace agentsim

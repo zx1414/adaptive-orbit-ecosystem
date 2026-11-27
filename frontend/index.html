@@ -62,13 +62,7 @@
             </label>
             <label class="field"><span>决策策略</span>
               <select id="menuPolicy">
-                <option value="rule">规则（默认保守）</option>
-                <option value="thermal">热感知</option>
-                <option value="hysteresis">迟滞</option>
-                <option value="foragebank">觅食储蓄</option>
-                <option value="bandit">多臂老虎机</option>
-                <option value="riskaverse">风险规避</option>
-                <option value="perceptron">感知机</option>
+                <option value="grazer">孢子巡游与慢速摄食</option>
               </select>
             </label>
             <label class="field field-check"><span>自动存档</span>
@@ -79,8 +73,6 @@
             <label class="field">生态 Mod
               <select id="menuMod">
                 <option value="standard">标准生态</option>
-                <option value="constant_light">恒定光照 · 关闭自然昼夜波动</option>
-                <option value="rich_nutrients">富营养水域 · 开局养分翻倍</option>
               </select>
             </label>
             <details class="start-packs">
@@ -92,6 +84,7 @@
             <button class="btn-hero" id="menuStart" type="button">▶ 开始模拟</button>
             <button class="btn-ghost btn-mini" id="menuParams" type="button">⚙ 参数预设</button>
           </div>
+          <p id="catalogError" class="menu-note mono hidden" role="status"></p>
           <p class="menu-note mono">勾选自动存档：开局即存 <b>auto-&lt;seed&gt;-&lt;时间戳&gt;</b>；总帧数到 200 后自动打检查点，进度条可回放。</p>
         </section>
         <section class="menu-card glass" id="cardSaves">
@@ -119,10 +112,11 @@
         <div class="stage-readout">
           <div class="hud mono" id="hud">等待轨迹…</div>
           <div class="energy-overview" id="energyOverview" aria-label="地图能量分布"></div>
+          <div class="energy-overview" id="matterOverview" aria-label="世界物质分布"></div>
         </div>
         <div class="stage-actions">
           <button class="btn btn-mini" id="btnMapPlay" type="button" title="播放（空格）" aria-label="播放">▶</button>
-          <button class="btn btn-mini" id="btnMapFit" type="button" title="切换铺满与全图">全图</button>
+          <button class="btn btn-mini" id="btnMapFit" type="button" title="切换铺满与全图">铺满</button>
           <button class="btn btn-mini" id="btnMapCinema" type="button" title="切换地图铺屏 (F)" aria-expanded="false">展开面板</button>
         </div>
         <div class="legend mono">
@@ -132,6 +126,7 @@
           <span><i class="sw ball-shield"></i>护盾球</span>
           <span><i class="sw ball-free"></i>自由球</span>
           <span><i class="sw cyano"></i>蓝细菌 · 越深能量越高</span>
+          <span><i class="sw spore"></i>孢子 · 可直接摄食</span>
           <span><i class="sw link"></i>能量连线</span>
           <span>球内填充 0–60 能量</span>
         </div>
@@ -159,30 +154,43 @@
           <button class="btn btn-mini" id="btnStatus" type="button" title="折叠状态栏 (H)">⇥</button>
         </div>
         <div class="metrics" id="metrics">—</div>
-        <h2 class="gap-top">曲线</h2>
+        <h2 class="gap-top">生态曲线 <span class="chart-axis">横轴为模拟帧</span></h2>
         <div class="chartbox">
-          <canvas id="chartPop"></canvas>
-          <div class="chart-cap mono"><i class="dot" style="background:#5ad1ff"></i>核<i class="dot" style="background:#48dc80"></i>蓝细菌</div>
+          <h3>核种群 <small>个</small></h3>
+          <canvas id="chartPop" aria-label="存活核数量随模拟帧的变化"></canvas>
+          <p class="chart-note">存活核数。曲线上升表示出生多于死亡。</p>
         </div>
         <div class="chartbox">
-          <canvas id="chartCyano"></canvas>
-          <div class="chart-cap mono"><i class="dot" style="background:#48dc80"></i>蓝细菌能量</div>
+          <h3>蓝细菌生命周期 <small>个</small></h3>
+          <canvas id="chartCyanoPop" aria-label="蓝细菌节点与孢子数量随模拟帧的变化"></canvas>
+          <div class="chart-cap"><span><i class="dot series-node"></i> 成熟节点</span><span><i class="dot series-spore"></i> 孢子</span></div>
+          <p class="chart-note">孢子未被摄食时会成熟为节点。</p>
         </div>
         <div class="chartbox">
-          <canvas id="chartEnergy"></canvas>
-          <div class="chart-cap mono"><i class="dot" style="background:#ffa656"></i>总能量</div>
+          <h3>蓝细菌储能 <small>能量</small></h3>
+          <canvas id="chartCyano" aria-label="蓝细菌和孢子储能随模拟帧的变化"></canvas>
+          <p class="chart-note">节点与孢子的储能之和。</p>
         </div>
         <div class="chartbox">
-          <canvas id="chartAudit"></canvas>
-          <div class="chart-cap mono"><i class="dot" style="background:#ff6b81"></i>|注入−耗散−存量| 应恒≈0</div>
+          <h3>世界总能量 <small>能量</small></h3>
+          <canvas id="chartEnergy" aria-label="世界总能量随模拟帧的变化"></canvas>
+          <p class="chart-note">核、球、蓝细菌与孢子的储能之和。</p>
+        </div>
+        <div class="chartbox">
+          <h3>能量账本误差 <small>能量</small></h3>
+          <canvas id="chartAudit" aria-label="注入减耗散与存量的差值"></canvas>
+          <p class="chart-note">累计注入减耗散与当前存量的差值，应接近零。</p>
         </div>
         <div class="chartbox chartbox-tall">
-          <canvas id="chartScatter"></canvas>
-          <div class="chart-cap mono"><i class="dot" style="background:#c792ff"></i>基因散点：X=maxSpeed · Y=energyThreshold · 点=核 · 颜色=血统 hue（悬停看 24 基因）</div>
+          <h3>基因散点</h3>
+          <canvas id="chartScatter" aria-label="核的速度上限与繁殖门槛"></canvas>
+          <p class="chart-note">横轴为速度上限，纵轴为繁殖能量门槛。每个点代表一个核，颜色表示谱系。</p>
         </div>
         <div class="chartbox">
-          <canvas id="chartHue"></canvas>
-          <div class="chart-cap mono"><i class="dot" style="background:#c792ff"></i>谱系多样性（hue 圆标准差，>30° 即分化）<i class="dot" style="background:#48dc80"></i>蓝细菌色相多样性</div>
+          <h3>谱系离散度 <small>度</small></h3>
+          <canvas id="chartHue" aria-label="核和蓝细菌谱系色相的圆标准差"></canvas>
+          <div class="chart-cap"><span><i class="dot series-hue"></i> 核</span><span><i class="dot series-node"></i> 蓝细菌</span></div>
+          <p class="chart-note">色相圆标准差。数值越高，谱系颜色越分散。</p>
         </div>
         <label class="lgtoggle" title="昼夜天空循环（相位 = tick / 200）">
           <input type="checkbox" id="dayNightToggle" checked>昼夜天空
@@ -224,7 +232,7 @@
 
     <!-- 底部环境调控条 -->
     <div class="toolbar glass" id="envToolbar">
-      <div class="env-axes" id="envAxes"><!-- 四轴五档由 main.js 生成 --></div>
+      <div class="env-axes" id="envAxes"></div>
       <div class="env-events">
         <span class="ev-title mono">环境事件</span>
         <!-- P0-5：普通玩法只剩"有持续时间的环境变化"。收获/瘟疫/藻华三个直接
@@ -236,7 +244,7 @@
                 title="外部输入：显式播种蓝细菌节点（不是自然生长，也不是事件奖励）">🌱 播种蓝细菌</button>
       </div>
       <div class="envside">
-        <button class="btn btn-mini" id="btnPresetStable" type="button" title="四轴回中性">⚖ 稳定态</button>
+        <button class="btn btn-mini" id="btnPresetStable" type="button" title="恢复标准档位">⚖ 稳定态</button>
         <button class="btn btn-mini" id="btnPresetFrenzy" type="button" title="光足压低：疯长">🔥 疯长态</button>
         <button class="btn btn-mini" id="btnPresetBarren" type="button" title="光灭压高：荒芜">🪨 荒芜态</button>
         <button class="btn btn-mini" id="btnCyanoToggle" type="button" title="蓝细菌子系统开关（免费）">🧪 蓝细菌：开</button>
@@ -252,7 +260,7 @@
           <p class="mono env-desc" id="envDesc">—</p>
           <p class="mono env-hint" id="envHint">—</p>
           <p class="mono">全部调控 <b>免费、无限、立即生效</b>，不限次数。
-             数值级细调（≈40 键）请进 <b>⚙ 参数</b> 页；本抽屉展示当前四轴档位与干预计数。</p>
+             数值级细调请进 <b>⚙ 参数</b> 页。</p>
         </div>
       </div>
     </div>

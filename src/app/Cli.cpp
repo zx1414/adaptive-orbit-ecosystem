@@ -2,6 +2,8 @@
 // R1-B：--food / --regrow / --no-regrow 已删除（Food 实体不存在）；新增
 // --cyano-nodes / --cyano-max-nodes / --sun-base / --sun-amplitude。
 #include "app/Cli.h"
+#include "app/ExtensionCatalog.h"
+#include "decision/PolicyRegistry.h"
 #include <cerrno>
 #include <cmath>
 #include <cstdint>
@@ -65,6 +67,7 @@ bool parseCli(int argc, char** argv, CliOptions& out, std::string& err) {
         if (arg == "--help") { out.help = true; return true; }
         if (arg == "--version") { out.version = true; return true; }
         if (arg == "--audit") { out.audit = true; continue; }
+        if (arg == "--research") { out.research = true; continue; }
         if (arg == "--render") { out.render = true; continue; }
         if (arg == "--no-render") { out.render = false; continue; }
         if (arg == "--width" || arg == "--height") {
@@ -140,25 +143,27 @@ bool parseCli(int argc, char** argv, CliOptions& out, std::string& err) {
             }
             continue;
         }
+        if (arg == "--mod" || arg == "--extensions-dir") {
+            if (i + 1 >= argc || argv[i + 1][0] == '-') { err = "missing value for " + arg; return false; }
+            const std::string value = argv[++i];
+            if (arg == "--mod") {
+                if (!app::validExtensionId(value)) { err = "invalid --mod: " + value; return false; }
+                out.scenario = value;
+            } else {
+                out.extensionsDirectory = value;
+            }
+            continue;
+        }
         if (arg == "--policy") {
             if (i + 1 >= argc) { err = "missing value for --policy"; return false; }
             const std::string val = argv[++i];
-            if (val != "rule" && val != "stub" && val != "perceptron" && val != "thermal" &&
-                val != "hysteresis" && val != "foragebank" && val != "bandit" &&
-                val != "riskaverse") {
-                err = "invalid --policy: " + val +
-                      " (expected rule|stub|perceptron|thermal|hysteresis|foragebank|bandit|riskaverse)";
+            const bool installedModel = val.rfind("model.", 0) == 0 &&
+                                        app::validExtensionId(val.substr(6));
+            if (!selectPolicy(val, out.config.policy) && !installedModel) {
+                err = "invalid --policy: " + val;
                 return false;
             }
             out.policy = val;
-            out.config.policy.name = val; // F2: consumed by Simulation composition root
-            if (val == "perceptron") {
-                out.config.policy.usePerceptron = true; // composition root assembles PerceptronPolicy
-            }
-            if (val == "thermal") {
-                out.config.policy.useThermal = true; // composition root assembles ThermalPolicy
-            }
-            out.config.policy.mutation = (val == "rule") ? 0.05 : 0.0;
             continue;
         }
         if (arg == "--perceptron-seed" || arg == "--perceptron-scale") {

@@ -63,7 +63,7 @@ window.Renderer = (function () {
     // interaction blink: nucleus id -> last interact ts (ms). Frontend approximation (T54).
     var lastInteract = {};
     var cam = { scale: 1, cx: 128, cy: 128, fit: 1 };
-    var fillLandscape = true;
+    var fillLandscape = false;
     var dayNight = true;
     var skyDayness = 0;
     var DAYNIGHT_PERIOD = 200;
@@ -329,6 +329,18 @@ window.Renderer = (function () {
           var sxm = sxArr[jm], sym = syArr[jm];
           if (sxm < -8 || sxm > W + 8 || sym < -8 || sym > H + 8) continue;
           var cnm2 = list[jm];
+          if (cnm2.spore) {
+            var sporeSize = Math.max(2.7 * dpr, rArr[jm] * 0.65);
+            ctx.fillStyle = '#bd732b';
+            ctx.beginPath();
+            ctx.moveTo(sxm, sym - sporeSize);
+            ctx.lineTo(sxm + sporeSize, sym);
+            ctx.lineTo(sxm, sym + sporeSize);
+            ctx.lineTo(sxm - sporeSize, sym);
+            ctx.closePath();
+            ctx.fill();
+            continue;
+          }
           var huem = ((isFiniteNum(cnm2.hue) ? cnm2.hue : 130) % 360 + 360) % 360;
           var enNm = Math.min(1, (isFiniteNum(cnm2.energy) ? Math.max(0, cnm2.energy) : 0) / eScale);
           ctx.beginPath();
@@ -510,6 +522,14 @@ window.Renderer = (function () {
           ctx.fillStyle = gray;
           ctx.arc(sx, sy, Math.max(1.6, r * 0.30), 0, TAU); ctx.fill();
           if (ratio !== null) drawEnergyRing(sx, sy, r + 3 * dpr, ratio);
+          if (nu.feedingTicks > 0) {
+            ctx.beginPath();
+            ctx.strokeStyle = '#a14b2a';
+            ctx.lineWidth = 2 * dpr;
+            ctx.arc(sx, sy, r + 7 * dpr, -Math.PI / 2,
+                    -Math.PI / 2 + TAU * Math.min(1, nu.feedingTicks / 12));
+            ctx.stroke();
+          }
           continue;
         }
         // 外发光（同色）

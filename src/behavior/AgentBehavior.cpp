@@ -426,7 +426,6 @@ void AgentBehavior::apply(Nucleus& n, ActionVector action, AgentEnvironment& env
     double d = tempDistortion;
     if (!(d >= 0.0)) d = 0.0; // NaN/负值防御
     if (d > 1.0) d = 1.0;
-    const double tempFactor = 1.0 + bp.respirationTempK * d;
     // ---- R7-B §6：Shield 球减代谢（V2-SPEC B 段：旧版只给了速度上限差异，
     // 本项目规格要求真实机制）——基础呼吸项 × 1/(1 + 0.35 × shieldCount)。
     // 只作用于 respirationBase（基础维持），速度项与温度因子不动（护盾隔热
@@ -435,8 +434,10 @@ void AgentBehavior::apply(Nucleus& n, ActionVector action, AgentEnvironment& env
     for (const Ball& sb : n.balls) {
         if (sb.type == BallType::Shield) ++shieldCount;
     }
+    const double insulation = bp.organBalance ? 1.0 + 0.8 * shieldCount : 1.0;
+    const double tempFactor = 1.0 + bp.respirationTempK * d / insulation;
     const double baseResp =
-        (shieldCount > 0) ? bp.respirationBase / (1.0 + 0.35 * shieldCount)
+        (!bp.organBalance && shieldCount > 0) ? bp.respirationBase / (1.0 + 0.35 * shieldCount)
                           : bp.respirationBase;
     const double resp =
         (baseResp + bp.respirationK * n.speed * n.speed) * tempFactor * dt;
@@ -600,13 +601,18 @@ void AgentBehavior::apply(Nucleus& n, ActionVector action, AgentEnvironment& env
             // 打分最高者胜出；同分按类型序号（确定性 tie-break，零 rng）。
             // 建造要花钱：deployBall 扣 kDeployCost + 种子能量——这笔钱本来可以
             // 用于繁殖，所以"多造一个球"与"早一点繁殖"是真实的取舍（A11）。
-            if (n.energy > capRef * kDeployTriggerFrac) {
+            const bool needsScout = bp.organBalance && n.energy > 30.0 &&
+                std::none_of(n.balls.begin(), n.balls.end(),
+                             [](const Ball& ball) { return ball.type == BallType::Scout; });
+            if (needsScout || n.energy > capRef * kDeployTriggerFrac) {
                 const double fill = (n.cap > 0.0) ? (n.energy / n.cap) : 0.0;
                 int nScout = 0;
                 int nResource = 0;
+                int nShield = 0;
                 for (const Ball& b : n.balls) {
                     if (b.type == BallType::Scout) ++nScout;
                     else if (b.type == BallType::Resource) ++nResource;
+                    else if (b.type == BallType::Shield) ++nShield;
                 }
                 // 储备路线：能量越接近满仓，越倾向造资源球（把富余存起来）。
                 const double hoardTrait = geneOr(n.genome.absorbPreference[0], 1.0);
@@ -614,8 +620,9 @@ void AgentBehavior::apply(Nucleus& n, ActionVector action, AgentEnvironment& env
                 const double scoreHoard = fill * hoardTrait * (nResource < 2 ? 1.0 : 0.3);
                 const double scoreScout = (1.0 - fill) * scoutTrait *
                                           (nScout < 1 ? 1.5 : 0.25);
-                const BallType wantType =
-                    (scoreScout > scoreHoard) ? BallType::Scout : BallType::Resource;
+                const double shieldScore = bp.organBalance && nShield == 0 ? d * 1.35 : 0.0;
+                const BallType wantType = needsScout || scoreScout > std::max(scoreHoard, shieldScore)
+                    ? BallType::Scout : (shieldScore > scoreHoard ? BallType::Shield : BallType::Resource);
                 deployBall(n, ledger, rng, env.config().world.width,
                            env.config().world.height, wantType);
             } else if (n.energy < capRef * kRecycleEnergyFrac && !n.balls.empty()) {

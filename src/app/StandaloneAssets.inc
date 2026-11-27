@@ -1,0 +1,8 @@
+ASSET(101, "agentsim.exe", true)
+ASSET(102, "frontend/agentsim.html", true)
+ASSET(103, "mods/constant_light.txt", false)
+ASSET(104, "mods/rich_nutrients.txt", false)
+ASSET(105, "mods/nutrient_diffusion.txt", false)
+ASSET(106, "resourcepacks/classic_flat/pack.txt", false)
+ASSET(107, "resourcepacks/classic_flat/colors.txt", false)
+ASSET(108, "LICENSE", false)

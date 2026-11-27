@@ -1,6 +1,6 @@
 /* agentsim 轨迹契约解析与校验 — v3 为主 · 容错 v2（元组/对象两形态）· 零依赖
  *
- * 契约 v3（docs/TRACE-CONTRACT.md v3，R1-B 蓝细菌取代食物）：
+ * JSON v3 字段见 docs/ARCHITECTURE.md。
  *   frame = { tick, n, b, f, c, g? }   （定长元组形态）
  *     n: [[id,x,y,energy,cap,speed,alive],...]                       7 项
  *     b: [[id,owner,x,y,energy,radius,type],...]                     7 项
@@ -217,6 +217,7 @@ window.TraceParser = (function () {
       x: t[1], y: t[2],
       energy: num(t[3], 5),
       alive: boolish(t[4]),
+      spore: t[6] === true,
       hue: hasHue ? t[5] : 130,
       hueReal: hasHue
     };
@@ -231,6 +232,7 @@ window.TraceParser = (function () {
       x: raw.x, y: raw.y,
       energy: num(raw.energy, 5),
       alive: raw.alive !== false,
+      spore: raw.spore === true,
       hue: hasHue ? raw.hue : 130,
       hueReal: hasHue
     };
@@ -413,7 +415,8 @@ window.TraceParser = (function () {
       : (seriesRow && typeof seriesRow === 'object' ? seriesRow : {});
     frame.stats = {
       nuclei: num(st.nuclei, nuclei.length) | 0,
-      cyanoAlive: num(st.cyanoAlive, cyano.length) | 0,
+      cyanoAlive: num(st.cyanoAlive, cyano.filter(function (node) { return node.alive && !node.spore; }).length) | 0,
+      spores: num(st.spores, cyano.filter(function (node) { return node.alive && node.spore; }).length) | 0,
       cyanoEnergy: num(st.cyanoEnergy, 0),
       totalEnergy: num(st.totalEnergy, 0),
       injected: num(st.injected, 0),

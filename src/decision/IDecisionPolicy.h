@@ -9,7 +9,7 @@
 // 决策层只表达"意图"：有效性校验（slot 存活、球在 forceRange 内）与能量扣费
 // 全部归行为层（唯一写点）。
 //
-// P0-4 契约（docs/NEXT-ECOLOGY-CONTRACT.md §2，验收 A4）：**记忆归个体**。
+// 决策记忆归个体，接口说明见 docs/ARCHITECTURE.md。
 //   主接口是三参版本：
 //     virtual ActionVector decide(const SensorVector&, const TargetList&,
 //                                PolicyMemory& memory) = 0;

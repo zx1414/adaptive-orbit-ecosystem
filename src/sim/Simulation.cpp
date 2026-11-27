@@ -11,13 +11,7 @@
 #include <string>
 #include <cstring>
 
-#include "decision/BanditPolicy.h"
-#include "decision/RiskAversePolicy.h"
-#include "decision/ForageBankPolicy.h"
-#include "decision/HysteresisPolicy.h"
-#include "decision/PerceptronPolicy.h"
-#include "decision/RulePolicy.h"
-#include "decision/ThermalPolicy.h"
+#include "decision/PolicyRegistry.h"
 #include "environment/Terrain.h"
 #include "perception/AgentSensors.h"
 #include <ostream>  // R5-C：存档序列化
@@ -59,6 +53,9 @@ constexpr EntityId kCyanoPoolId = 0; // = kFoodPoolId（AgentBehavior.h）
 // 取值参照 maxMaterial（120）的 1/4——一次咬掉活组织的一小部分，
 // 配合消化冷却构成"吃一口要等一会儿"的节奏。
 constexpr double kGrazeAbilityPerTick = 30.0;
+constexpr std::uint32_t kSporeMaturationTicks = 90;
+constexpr std::uint32_t kAdultFeedingTicks = 12;
+constexpr double kAdultFeedingSpeed = 0.8;
 // 蓝细菌源自由球 id 下界（与 Simulation::nextFreeBallId_ 初值同基，区分球来源）。
 constexpr EntityId kCyanoBallIdBase = 0x40000000ULL;
 // 自由球回收上限：蓝细菌源自由球几乎不会被拾取（核拾取受 kMaxBalls=3 硬上限，
@@ -79,7 +76,7 @@ constexpr double kBallRadiusR7 = 10.0;
 // sunLevel(tick, y) = clamp01( base - gradient*(y/H)
 //                             + amplitude * sin(2*pi*tick/period)
 //                             + noiseAmp * hash01(tick, floor(y*freq), tick/speed) )
-// 计算式的唯一权威实现在此（前端按 docs/TRACE-CONTRACT.md 的 R1-B 附录复算）。
+// 生产者使用这里的光照公式，应用层另提供展示估算。
 // 噪声是纯确定性整数哈希（splitmix64 风格 finalizer），零 rng 消耗——
 // 随机源注释：本函数不触碰任何 PCG32（声明在 Simulation.cpp 顶部 R1-B 注释）。
 constexpr double kTwoPi = 6.283185307179586;
@@ -138,7 +135,9 @@ bool terrainBlockedPredicate(void* ctx, Vec2 pos) {
 }
 } // namespace
 
-Simulation::Simulation(const SimConfig& cfg)
+Simulation::Simulation(const SimConfig& cfg) : Simulation(cfg, nullptr) {}
+
+Simulation::Simulation(const SimConfig& cfg, std::unique_ptr<IDecisionPolicy> policy)
     : cfg_(cfg), rng_(cfg.world.seed),
       // TERRAIN 接线：地形构造即撒点（消耗 rng_），排在一切出生引导之前。
       // 默认三 count 全 0 且无显式 blob 时，generate() 的 scatter 循环上界为 0，
@@ -198,6 +197,7 @@ Simulation::Simulation(const SimConfig& cfg)
         cp.nutrientPerMaterial = ct.nutrientPerMaterial;
         cp.growthEnergyCost = ct.growthEnergyCost;
         cp.assimilation = ct.assimilation;
+        cp.sporeMaturationTicks = cfg_.sporeEcology ? kSporeMaturationTicks : 0;
     }
     // R3-A：NucleusTuning 的三个 R3-B 同义键构造期镜像进 bp_（与 applyConfig 的
     // 行为层同步同一份清单）。此前 bp_ 全用行为层默认，CLI 默认运行从未消费
@@ -209,6 +209,11 @@ Simulation::Simulation(const SimConfig& cfg)
     bp_.cyanoPredationRadius = cfg_.nucleus.cyanoPredationRadius;
     bp_.speedCostExponent = cfg_.nucleus.speedCostExponent; // R11-P1-3 接线镜像
     bp_.damping = cfg_.nucleus.damping;
+    bp_.organBalance = cfg_.sporeEcology;
+    if (bp_.organBalance) {
+        bp_.nativeCap = 125.0;
+        bp_.moveK = 6.0;
+    }
     bp_.reproductionCostRatio = cfg_.nucleus.reproductionCostRatio;
     // R7-B：BallTuning -> 行为层 BallFieldParams 构造期镜像（与 bp_ 同一模式：
     // 组合根参数流，非实体写；applyConfig 同步同一清单）。R6-C Config.h 注释口径：
@@ -242,7 +247,8 @@ Simulation::Simulation(const SimConfig& cfg)
     // 这样"每区域多少养分"随世界尺寸自动缩放，不存在"小世界必然饿死"的隐患。
     const double seedingMass = static_cast<double>(cyano_.nodes().size()) *
                                cfg_.cyanoTuning.initialMaterial;
-    const double nutrientBudget = seedingMass * cfg_.cyanoTuning.nutrientBudgetRatio;
+    const double nutrientBudget = seedingMass * cfg_.cyanoTuning.nutrientBudgetRatio *
+                                  cfg_.scenario.initialNutrientMultiplier;
     // 先用 0 建场拿到区域数，再按区域数反算每区存量（configure 是幂等的）。
     nutrients_.configure(cfg_.world.width, cfg_.world.height,
                          cfg_.cyanoTuning.nutrientRegionSize, 0.0);
@@ -258,37 +264,7 @@ Simulation::Simulation(const SimConfig& cfg)
     for (const Nucleus& n : nuclei_) {
         matterExternalIn_ += n.bodyMass;      // 创始核的身体同理
     }
-    // F2：按配置装配策略（此前无条件 RulePolicy，--policy stub 曾静默失效）。
-    if (cfg_.policy.usePerceptron || cfg_.policy.name == "perceptron") {
-        policy_ = std::make_unique<PerceptronPolicy>(cfg_.policy.perceptronSeed,
-                                                     cfg_.policy.perceptronScale);
-    } else if (cfg_.policy.name == "stub") {
-        policy_ = std::make_unique<StubPolicy>();
-    } else if (cfg_.policy.useThermal || cfg_.policy.name == "thermal") {
-        // ThermalPolicy：显式趋温推理；最适温度取自 PolicyConfig.thermalPreferredTemp。
-        ThermalPolicy::Params tp;
-        tp.preferredTemp = cfg_.policy.thermalPreferredTemp;
-        // R4-P1：--thermal-w-thermal / --thermal-w-caution 的真实落点。
-        tp.wThermal = cfg_.policy.thermalWThermal;
-        tp.wCaution = cfg_.policy.thermalWCaution;
-        policy_ = std::make_unique<ThermalPolicy>(tp);
-    } else if (cfg_.policy.name == "hysteresis") {
-        // S8 新增：滞回策略——抑制两个近距食物之间的每帧方向抖动。
-        policy_ = std::make_unique<HysteresisPolicy>();
-    } else if (cfg_.policy.name == "foragebank") {
-        // S8 新增：觅食-蓄能两态策略——能量代理量决定风险偏好，带滞回防抖。
-        policy_ = std::make_unique<ForageBankPolicy>();
-    } else if (cfg_.policy.name == "bandit") {
-        // T24：BanditPolicy——Hedge/EXP3-lite 在线加权 Rule 与 Thermal 两臂，
-        // 回报由感知（接近度增益 + 速度-能量权衡）驱动，decide() 无 RNG。
-        policy_ = std::make_unique<BanditPolicy>();
-    } else if (cfg_.policy.name == "riskaverse") {
-        // T26：RiskAversePolicy——EROI（能量回报率）EMA 状态机，
-        // 温度失真打折；环境肥沃全速、贫瘠省能巡航，滞回防抖。
-        policy_ = std::make_unique<RiskAversePolicy>();
-    } else {
-        policy_ = std::make_unique<RulePolicy>();
-    }
+    policy_ = policy ? std::move(policy) : makePolicy(cfg_.policy);
 }
 
 Simulation::~Simulation() = default;
@@ -356,139 +332,181 @@ void Simulation::spawnNuclei() {
 }
 
 // 主循环单步：感知 → 决策 → 行为 → 环境推进 → 审计。
+AgentObservation Simulation::observe(const Nucleus& n, PCG32& sensingRng) const {
+    // S17 接线（曾被 A 的 Simulation.cpp 覆盖，现恢复）：侦察球是菌落对外感知的
+    // **唯一**来源。不传 scoutCount 的话每个核都停在"原生盲区"（半径 1/4），
+    // C 实现的 S17 就形同虚设。资源球不计入（用户明确纠正：资源球对感知零影响）。
+    int scoutCount = 0;
+    for (const Ball& sb : n.balls) {
+        if (sb.type == BallType::Scout) ++scoutCount;
+    }
+    // T43：地形传入感知层（s[17] 采样叠加温度区偏移）与行为层（resolveMove + 移动耗能倍率）。
+    // R1-B：感知层"食物特征"维的候选 = 蓝细菌节点容器（唯一食物来源）。
+    // R2-A：TargetList（可施力目标）随感知产出。当前感知层尚未产出 TargetList
+    //（契约已定，决策侧接线由 R2-C 承担），组合根先用确定性自算兜底：
+    // 收集 forceRange 内最近的自由球（targets[0] 最近），不消耗 rng。
+    // 这样 forceSlot 管线今天就是活的：任何决策层写出 forceSlot 即生效。
+    TargetList targets;
+    {
+        const double rangeScan = n.genome.forceRange >= 0.0 && n.genome.forceRange <= 1e300
+                                     ? n.genome.forceRange : bp_.forceRadius;
+        // 性能（R2-A，数学等价）：平方距离预筛，命中才开方。
+        const double range2 = rangeScan * rangeScan;
+        for (const Ball& fb : freeBalls_) {
+            if (fb.ownerId != 0) continue;
+            const Vec2 dv = env_.torusDelta(n.pos, fb.pos);
+            const double d2 = dv.x * dv.x + dv.y * dv.y;
+            if (d2 > range2) continue;
+            const double d = std::sqrt(d2);
+            // 插入排序保持 dist 升序（kMaxForceTargets=8，常数小）。
+            // 整结构赋值（局部 ForceTarget 一次写入）：避开守卫 1c 的
+            // "下标字段写入"形态——TargetList 是组合根局部量而非实体，
+            // 但守卫 regex 分不出容器语义，按形态收敛最省事。
+            ForceTarget item;
+            item.id = fb.id;
+            item.dx = dv.x;
+            item.dy = dv.y;
+            item.dist = d;
+            item.type = static_cast<int>(fb.type);
+            // 注：ForceTarget.energy 已于 2026-11-01 删除（死字段，
+            // 8 个策略无一读取；删除同时消除了守卫的假阳性）。
+            int pos = targets.count < kMaxForceTargets ? targets.count : kMaxForceTargets - 1;
+            if (targets.count < kMaxForceTargets) ++targets.count;
+            while (pos > 0 && targets.items[pos - 1].dist > d) {
+                targets.items[pos] = targets.items[pos - 1];
+                --pos;
+            }
+            targets.items[pos] = item;
+        }
+    }
+    // ---- R2 接线（重建 2026-11-01 08:20）：把 s[18..23] 的六个新维真正喂上 ----
+    // 这段曾在 A 合并时丢失（A 沙箱的 Simulation.cpp 基于旧版同步，覆盖了它），
+    // 导致感知扩展到 24 维但生产路径后 6 维恒哨兵值 = 死代码。
+    // 三处计算全部只读扫描，不消耗 rng：
+    //   · 最近邻核：O(n) 扫描（与下面 socialAccelerations 的 O(n²) 相比可忽略）
+    //   · energyRatio：n.energy / n.cap
+    //   · TargetList：本核 forceRange 内的球（自由球 + 自己的球），按环距升序取前 8
+    NeighborInfo nearest{};
+    {
+        const double sight = (n.genome.nucleusSightRadius > 0.0)
+                                 ? n.genome.nucleusSightRadius : 170.0;
+        double bestD2 = sight * sight;
+        for (const Nucleus& other : nuclei_) {
+            if (other.id == n.id || !other.alive) continue;
+            // 性能：无 fmod 的环距（见 core/Vec2.h torusDeltaWrapped）
+            const Vec2 delta = torusDeltaWrapped(n.pos, other.pos,
+                                                 cfg_.world.width, cfg_.world.height);
+            const double d2 = delta.x * delta.x + delta.y * delta.y;
+            if (d2 > 1e-24 && d2 < bestD2) {
+                bestD2 = d2;
+                const double d = std::sqrt(d2);
+                nearest.found = true;
+                nearest.dist = d;
+                nearest.sightRadius = sight;
+                nearest.dirX = delta.x / d;
+                nearest.dirY = delta.y / d;
+            }
+        }
+    }
+    const double energyRatio = (n.cap > 0.0) ? (n.energy / n.cap) : 0.0;
+    // ---- 规则 v2（P2 / A9）：侦察球从自己的世界坐标采样 ----
+    // 只有同时满足两条的球才进入采样表：
+    //   1) 它是本核的受控球（ownerId == 本核 id）；
+    //   2) 它与宿主的环面最短距离 <= scoutControlRadius（有效控制距离）。
+    // 超出控制范围的球探到的东西回不来——"探得更远更容易失控"的代价因此
+    // 是真实的，而不是注释里的一句话。
+    // 资源球/护盾球在结构上无法进入这张表（按 type 过滤），所以"资源球
+    // 不提供视野"是构造性成立，不靠调用方自觉。
+    std::vector<ScoutSample> scoutSamples;
+    if (scoutCount > 0) {
+        const double controlR = cfg_.ball.scoutControlRadius;
+        scoutSamples.reserve(static_cast<std::size_t>(scoutCount));
+        for (const Ball& sb : n.balls) {
+            if (sb.type != BallType::Scout) continue;
+            if (sb.ownerId != n.id) continue;
+            // 环面最短距离：跨接缝时直线距离会误判为"太远"。
+            const double dScout = env_.torusDistance(n.pos, sb.pos);
+            if (!(dScout <= controlR)) continue;   // 超出控制距离：回不来
+            ScoutSample sample;
+            sample.pos = sb.pos;                   // 球的真实世界坐标
+            sample.radius = cfg_.ball.scoutSenseRadius;
+            scoutSamples.push_back(sample);
+        }
+    }
+    // 可食量口径：把环境层的定义包成回调传进感知层——
+    // 感知、选目标、请求、扣库存因此共用同一份定义（A3）。
+    const CyanoParams& cparForSense = cyano_.params();
+    EdibleFn edibleOf = [&cparForSense](const CyanoNode& node) {
+        return CyanoField::edibleOf(node, cparForSense);
+    };
+    SensorVector sv = sense(env_, n.pos, n.vel, n.speed, cfg_.policy, &sensingRng,
+                            cyano_.nodes(), temp_, &terrain_, 0,
+                            nearest, energyRatio, targets, scoutSamples, edibleOf);
+    if (!cfg_.simultaneousDecisions) sv.foodIds = {};
+    sv.feedingTarget = n.feedingTarget;
+    sv.biteRadius = cfg_.sporeEcology ? bp_.cyanoPredationRadius : 0.0;
+    sv.searchAngle = kTwoPi * hashUnit(cfg_.world.seed, n.id, (tick_ + n.id % 80u) / 80u);
+    return {n.id, sv, targets, n.energy};
+}
+
+ActionVector Simulation::chooseAction(Nucleus& n, const AgentObservation& observation) {
+    ActionVector act = policy_->decide(observation.sensors, observation.targets, n.memory);
+    if (std::string_view(policy_->name()) == "rule" && act.dirX == 0.0 && act.dirY == 0.0) {
+        // 默认核在失去局部目标后转入慢速搜索。每只核在一段时间内
+        // 保持方向，避免每帧乱转或原地等到饿死。
+        const auto leg = (tick_ + n.id % 48u) / 48u;
+        const double angle = kTwoPi * hashUnit(cfg_.world.seed, n.id, leg);
+        act.dirX = std::cos(angle);
+        act.dirY = std::sin(angle);
+        act.speedScale = 0.10;
+    }
+    return act;
+}
+
 void Simulation::step() {
+    (void)advance(nullptr, nullptr);
+}
+
+bool Simulation::stepWithActions(const DecideBatch& decide, std::vector<AgentOutcome>& outcomes) {
+    if (!decide) return false;
+    return advance(&decide, &outcomes);
+}
+
+bool Simulation::advance(const DecideBatch* decide, std::vector<AgentOutcome>* outcomes) {
+    const bool batched = cfg_.simultaneousDecisions || decide != nullptr;
+    std::vector<AgentObservation> observations;
+    std::vector<ActionVector> actions;
+    std::map<EntityId, std::size_t> outcomeIndex;
+    if (batched) {
+        auto sensingRng = rng_;
+        observations.reserve(aliveCount_);
+        for (const Nucleus& n : nuclei_) {
+            if (n.alive) observations.push_back(observe(n, sensingRng));
+        }
+        if (decide && (!(*decide)(tick_, observations, actions) ||
+                       actions.size() != observations.size())) return false;
+        rng_ = sensingRng;
+    }
+    if (outcomes) {
+        outcomes->clear();
+        outcomes->reserve(observations.size());
+        for (const auto& observation : observations) {
+            outcomeIndex.emplace(observation.id, outcomes->size());
+            outcomes->push_back({observation.id, observation.energy});
+        }
+    }
     const double dt = 1.0;
-    // C2: 繁殖接线——循环内收集待繁殖亲代下标，循环后统一执行并按出生数预留容量，
-    // 避免 reproduce 内部 push_back 扩容搬运元素使 nuclei_[i] 引用失效（UB）。
     std::vector<std::size_t> reproParents;
-    // 规则 v2（P0-3）：本帧的摄食请求（循环内只登记，循环后统一分配）。
     std::vector<GrazeRequest> pendingGraze;
+    std::size_t observationIndex = 0;
     for (std::size_t i = 0; i < nuclei_.size(); ++i) {
         Nucleus& n = nuclei_[i];
         if (!n.alive) continue;
         const bool wasAlive = n.alive;
-        // S17 接线（曾被 A 的 Simulation.cpp 覆盖，现恢复）：侦察球是菌落对外感知的
-        // **唯一**来源。不传 scoutCount 的话每个核都停在"原生盲区"（半径 1/4），
-        // C 实现的 S17 就形同虚设。资源球不计入（用户明确纠正：资源球对感知零影响）。
-        int scoutCount = 0;
-        for (const Ball& sb : n.balls) {
-            if (sb.type == BallType::Scout) ++scoutCount;
-        }
-        // T43：地形传入感知层（s[17] 采样叠加温度区偏移）与行为层（resolveMove + 移动耗能倍率）。
-        // R1-B：感知层"食物特征"维的候选 = 蓝细菌节点容器（唯一食物来源）。
-        // R2-A：TargetList（可施力目标）随感知产出。当前感知层尚未产出 TargetList
-        //（契约已定，决策侧接线由 R2-C 承担），组合根先用确定性自算兜底：
-        // 收集 forceRange 内最近的自由球（targets[0] 最近），不消耗 rng。
-        // 这样 forceSlot 管线今天就是活的：任何决策层写出 forceSlot 即生效。
-        TargetList targets;
-        {
-            const double rangeScan = n.genome.forceRange >= 0.0 && n.genome.forceRange <= 1e300
-                                         ? n.genome.forceRange : bp_.forceRadius;
-            // 性能（R2-A，数学等价）：平方距离预筛，命中才开方。
-            const double range2 = rangeScan * rangeScan;
-            for (const Ball& fb : freeBalls_) {
-                if (fb.ownerId != 0) continue;
-                const Vec2 dv = env_.torusDelta(n.pos, fb.pos);
-                const double d2 = dv.x * dv.x + dv.y * dv.y;
-                if (d2 > range2) continue;
-                const double d = std::sqrt(d2);
-                // 插入排序保持 dist 升序（kMaxForceTargets=8，常数小）。
-                // 整结构赋值（局部 ForceTarget 一次写入）：避开守卫 1c 的
-                // "下标字段写入"形态——TargetList 是组合根局部量而非实体，
-                // 但守卫 regex 分不出容器语义，按形态收敛最省事。
-                ForceTarget item;
-                item.id = fb.id;
-                item.dx = dv.x;
-                item.dy = dv.y;
-                item.dist = d;
-                item.type = static_cast<int>(fb.type);
-                // 注：ForceTarget.energy 已于 2026-11-01 删除（死字段，
-                // 8 个策略无一读取；删除同时消除了守卫的假阳性）。
-                int pos = targets.count < kMaxForceTargets ? targets.count : kMaxForceTargets - 1;
-                if (targets.count < kMaxForceTargets) ++targets.count;
-                while (pos > 0 && targets.items[pos - 1].dist > d) {
-                    targets.items[pos] = targets.items[pos - 1];
-                    --pos;
-                }
-                targets.items[pos] = item;
-            }
-        }
-        // ---- R2 接线（重建 2026-11-01 08:20）：把 s[18..23] 的六个新维真正喂上 ----
-        // 这段曾在 A 合并时丢失（A 沙箱的 Simulation.cpp 基于旧版同步，覆盖了它），
-        // 导致感知扩展到 24 维但生产路径后 6 维恒哨兵值 = 死代码。
-        // 三处计算全部只读扫描，不消耗 rng：
-        //   · 最近邻核：O(n) 扫描（与下面 socialAccelerations 的 O(n²) 相比可忽略）
-        //   · energyRatio：n.energy / n.cap
-        //   · TargetList：本核 forceRange 内的球（自由球 + 自己的球），按环距升序取前 8
-        NeighborInfo nearest{};
-        {
-            const double sight = (n.genome.nucleusSightRadius > 0.0)
-                                     ? n.genome.nucleusSightRadius : 170.0;
-            double bestD2 = sight * sight;
-            for (const Nucleus& other : nuclei_) {
-                if (other.id == n.id || !other.alive) continue;
-                // 性能：无 fmod 的环距（见 core/Vec2.h torusDeltaWrapped）
-                const Vec2 delta = torusDeltaWrapped(n.pos, other.pos,
-                                                     cfg_.world.width, cfg_.world.height);
-                const double d2 = delta.x * delta.x + delta.y * delta.y;
-                if (d2 > 1e-24 && d2 < bestD2) {
-                    bestD2 = d2;
-                    const double d = std::sqrt(d2);
-                    nearest.found = true;
-                    nearest.dist = d;
-                    nearest.sightRadius = sight;
-                    nearest.dirX = delta.x / d;
-                    nearest.dirY = delta.y / d;
-                }
-            }
-        }
-        const double energyRatio = (n.cap > 0.0) ? (n.energy / n.cap) : 0.0;
-        // ---- 规则 v2（P2 / A9）：侦察球从自己的世界坐标采样 ----
-        // 只有同时满足两条的球才进入采样表：
-        //   1) 它是本核的受控球（ownerId == 本核 id）；
-        //   2) 它与宿主的环面最短距离 <= scoutControlRadius（有效控制距离）。
-        // 超出控制范围的球探到的东西回不来——"探得更远更容易失控"的代价因此
-        // 是真实的，而不是注释里的一句话。
-        // 资源球/护盾球在结构上无法进入这张表（按 type 过滤），所以"资源球
-        // 不提供视野"是构造性成立，不靠调用方自觉。
-        std::vector<ScoutSample> scoutSamples;
-        if (scoutCount > 0) {
-            const double controlR = cfg_.ball.scoutControlRadius;
-            scoutSamples.reserve(static_cast<std::size_t>(scoutCount));
-            for (const Ball& sb : n.balls) {
-                if (sb.type != BallType::Scout) continue;
-                if (sb.ownerId != n.id) continue;
-                // 环面最短距离：跨接缝时直线距离会误判为"太远"。
-                const double dScout = env_.torusDistance(n.pos, sb.pos);
-                if (!(dScout <= controlR)) continue;   // 超出控制距离：回不来
-                ScoutSample sample;
-                sample.pos = sb.pos;                   // 球的真实世界坐标
-                sample.radius = cfg_.ball.scoutSenseRadius;
-                scoutSamples.push_back(sample);
-            }
-        }
-        // 可食量口径：把环境层的定义包成回调传进感知层——
-        // 感知、选目标、请求、扣库存因此共用同一份定义（A3）。
-        const CyanoParams& cparForSense = cyano_.params();
-        EdibleFn edibleOf = [&cparForSense](const CyanoNode& node) {
-            return CyanoField::edibleOf(node, cparForSense);
-        };
-        SensorVector sv = sense(env_, n.pos, n.vel, n.speed, cfg_.policy, &rng_,
-                                cyano_.nodes(), temp_, &terrain_, 0,
-                                nearest, energyRatio, targets, scoutSamples, edibleOf);
-        // ---- 规则 v2（P0-4）：把**本核自己的**记忆传进决策层 ----
-        // 旧版这里调 decide(sv, targets)：策略实例里存着上一个个体的状态。
-        // 现在记忆随核走：A 核的觅食经历不会被 B 核读写。
-        ActionVector act = policy_->decide(sv, targets, n.memory);
-        if (cfg_.policy.name == "rule" && act.dirX == 0.0 && act.dirY == 0.0) {
-            // 默认核在失去局部目标后转入慢速搜索。每只核在一段时间内
-            // 保持方向，避免每帧乱转或原地等到饿死。
-            const auto leg = (tick_ + n.id % 48u) / 48u;
-            const double angle = kTwoPi * hashUnit(cfg_.world.seed, n.id, leg);
-            act.dirX = std::cos(angle);
-            act.dirY = std::sin(angle);
-            act.speedScale = 0.10;
-        }
+        const AgentObservation observation = batched ? observations[observationIndex] : observe(n, rng_);
+        const ActionVector act = decide ? actions[observationIndex] : chooseAction(n, observation);
+        ++observationIndex;
+        const TargetList& targets = observation.targets;
         // GOAL 呼吸温度接线：取核所在点的温度失真度（与 sense 的 s[16] 同源，
         // 同为 temp.distortion(n.pos)），作为末位实参喂给呼吸耗能温度因子。
         // R2-A §5 两阶段积分：先对全体核算社会加速度（本 pass，只读全种群），
@@ -551,11 +569,13 @@ void Simulation::step() {
         // 现在本循环只收集 (nucleusId, nodeId, wantMaterial, efficiency)：
         // 目标选择仍在本核的局部信息下做（感知半径内、可食量 > 0 的最近节点），
         // 但**分配**推迟到循环结束后由 CyanoField::grazeBatch 统一结算。
-        if (n.alive && n.genome.cyanoPreference > 0.0 && n.digestCooldown == 0) {
+        if (n.alive && n.genome.cyanoPreference > 0.0 &&
+            (cfg_.sporeEcology || n.digestCooldown == 0)) {
             EntityId preyId = 0;
             double bestD2 = 0.0;
             double preyEdible = 0.0;
             double preyEnergyDensity = 0.0;
+            bool preySpore = false;
             const double preyR = bp_.cyanoPredationRadius;
             const CyanoParams& cpar = cyano_.params();
             bestD2 = preyR * preyR;
@@ -573,16 +593,31 @@ void Simulation::step() {
                     preyId = c.id;
                     preyEdible = edible;
                     preyEnergyDensity = c.energy / c.material;
+                    preySpore = c.isSpore();
                 }
             }
-            if (preyId != 0) {
+            bool ready = preyId != 0;
+            if (cfg_.sporeEcology) {
+                if (ready && !preySpore && n.speed <= kAdultFeedingSpeed) {
+                    if (n.feedingTarget != preyId) n.feedingTicks = 0;
+                    n.feedingTarget = preyId;
+                    if (n.feedingTicks < kAdultFeedingTicks) ++n.feedingTicks;
+                    ready = n.feedingTicks >= kAdultFeedingTicks;
+                } else {
+                    n.feedingTarget = 0;
+                    n.feedingTicks = 0;
+                    ready = ready && preySpore;
+                }
+            }
+            if (ready && n.digestCooldown == 0) {
                 // 每口量：基因意愿 × 口粮系数 × **可食量**（不是节点的全部能量）。
                 // 与核自身能量、核的速度/加速度、上一次进食位置都无关——
                 // 这就是 A1 要求的"同一摄食条件"。
                 const double proportionalBite = n.genome.cyanoPreference *
                                                 cfg_.nucleus.grazeBiteFraction * preyEdible;
-                const double want = proportionalBite > 0.0
-                    ? std::min(preyEdible, std::max(1.0, proportionalBite)) : 0.0;
+                const double minBite = cfg_.sporeEcology ? 2.5 : 1.0;
+                const double want = preySpore ? preyEdible : (proportionalBite > 0.0
+                    ? std::min(preyEdible, std::max(minBite, proportionalBite)) : 0.0);
                 // 同化率：**唯一**一条，只由基率与消化基因决定（规则 v2 删除
                 // 了按最高速度/加速度折减与迁移回报两条修正）。
                 double efficiency = cpar.conversionRate * n.genome.cyanoDigestion;
@@ -642,6 +677,11 @@ void Simulation::step() {
             if (eater == nullptr) continue;
             const AgentBehavior::GrazeResult res = AgentBehavior::absorbGraze(
                 *eater, g.material, g.energyTransferred, g.efficiency, ledger_);
+            if (outcomes) {
+                auto& outcome = (*outcomes)[outcomeIndex.at(g.nucleusId)];
+                outcome.materialTaken += res.materialTaken;
+                outcome.energyAbsorbed += res.energyAbsorbed;
+            }
             grazeTaken_ += res.materialTaken;
             grazeAbsorbed_ += res.materialAbsorbed;
             grazeRejected_ += res.materialRejected;
@@ -815,6 +855,7 @@ void Simulation::step() {
     if (cfg_.cyanoTuning.decomposeRate > 0.0) {
         nutrients_.decompose(cfg_.cyanoTuning.decomposeRate);
     }
+    nutrients_.diffuse(cfg_.scenario.nutrientDiffusion);
     // S22：自由球回收（见 kFreeBallCap 注释）。
     if (freeBalls_.size() >= kFreeBallCap) { // >=：稳态下 > 永不触发（红队 R8 P1）
         std::size_t excess = freeBalls_.size() - kFreeBallCap;
@@ -870,11 +911,21 @@ void Simulation::step() {
     grazeAbsorbed_ = 0.0;
     grazeRejected_ = 0.0;
 
+    if (outcomes) {
+        for (const Nucleus& n : nuclei_) {
+            const auto index = outcomeIndex.find(n.id);
+            if (index == outcomeIndex.end()) continue;
+            auto& outcome = (*outcomes)[index->second];
+            outcome.alive = n.alive;
+            outcome.energyAfter = n.alive ? n.energy : 0.0;
+        }
+    }
     ++tick_;
     if (auditEnabled_) {
         const double tol = 1e-9 * std::max(1.0, ledger_.totalInjected());
         auditOk_ = auditOk_ && ledger_.audit(tol, totalEnergy());
     }
+    return true;
 }
 
 
@@ -1071,6 +1122,7 @@ void Simulation::ballOwnership() {
 
 SunConfig Simulation::effectiveSun() const {
     SunConfig sun = cfg_.sun;
+    if (!cfg_.scenario.dayCycle) sun.dayAmplitude = 0.0;
     if (tick_ < lightEffect_.end) {
         sun.baseLevel = std::max(0.0, sun.baseLevel + lightEffect_.offset);
     }
@@ -1178,6 +1230,11 @@ std::uint64_t Simulation::stateHash() const {
         hashU64(h, n.ballSerial);
         hashI32Mix(h, n.memory.forageForaging);
         hashI32Mix(h, n.memory.hysteresisLastChoice);
+        if (n.memory.hysteresisTarget != 0) hashU64(h, n.memory.hysteresisTarget);
+        if (n.feedingTarget != 0) {
+            hashU64(h, n.feedingTarget);
+            hashU64(h, n.feedingTicks);
+        }
         hashDouble(h, n.memory.riskEroi);
         hashDouble(h, n.memory.riskPrevProx);
         hashDouble(h, n.memory.banditLogW[0]);
@@ -1202,6 +1259,7 @@ std::uint64_t Simulation::stateHash() const {
         hashDouble(h, c.material);
         hashU64(h, c.alive ? 1ULL : 0ULL);
         hashDouble(h, c.hue);
+        if (c.isSpore()) hashU64(h, c.sporeTicks);
     }
     // 规则 v2（P1）：物质场（残骸/养分）与外部投入累计必须进哈希——
     // 来源是 A13/A12 的"检查点回放与续跑逐帧一致"判据。
@@ -1234,6 +1292,7 @@ void Simulation::applyConfig(const SimConfig& next) {
     // 的静默错觉，这里显式维持原值（值经 RuntimeEnv 写进 cfg 也被还原）。
     SimConfig merged = next;
     merged.world = cfg_.world;
+    merged.sporeEcology = cfg_.sporeEcology;
     merged.colony.nuclei = cfg_.colony.nuclei;
     merged.cyanoNodeCount = cfg_.cyanoNodeCount;
     merged.cyanoMaxNodes = cfg_.cyanoMaxNodes;
@@ -1357,7 +1416,7 @@ constexpr std::uint32_t kSerMagic = 0x41534153u;    // "ASAV"（小端字节序�
 // 规则 v2 使用 v4 实体格式。v5 增加临时光照的偏移、持续时间和到期帧。
 // 旧的 v3 档（规则 v1）在读取时被明确拒绝：缺养分与行为记忆，没有可解释的
 // 初始分配方式可以转换，因此不做静默转换、也绝不改写原件（A13 的数据保护）。
-constexpr std::uint32_t kSerVersion = 5u;
+constexpr std::uint32_t kSerVersion = 6u;
 constexpr std::size_t kSerMaxCount = 1u << 31;      // 计数护栏：防损坏流 reserve 爆炸
 constexpr std::size_t kSerNameLimit = 64;           // ledger reason 长度护栏
 
@@ -1506,14 +1565,15 @@ bool serWritePolicyMemory(std::ostream& os, const PolicyMemory& m) {
         for (int k = 0; k < 2; ++k) serWriteF64(os, m.banditPrevArm[a][k]);
     }
     for (int k = 0; k < 2; ++k) serWriteF64(os, m.banditPrevOut[k]);
+    serWriteU64(os, m.hysteresisTarget);
     return os.good();
 }
 
 bool serReadPolicyMemory(std::istream& is, PolicyMemory& m) {
     std::int32_t schema = 0;
     if (!serReadI32(is, schema)) return false;
-    if (schema != PolicyMemory::kSchemaVersion) return false; // 记忆布局不符：拒绝
-    m.schemaVersion = schema;
+    if (schema != 1 && schema != PolicyMemory::kSchemaVersion) return false;
+    m = {};
     if (!serReadI32(is, m.forageForaging)) return false;
     if (!serReadI32(is, m.hysteresisLastChoice)) return false;
     if (!serReadF64(is, m.riskEroi)) return false;
@@ -1546,7 +1606,7 @@ bool serReadPolicyMemory(std::istream& is, PolicyMemory& m) {
     for (int k = 0; k < 2; ++k) {
         if (!serReadF64(is, m.banditPrevOut[k])) return false;
     }
-    return true;
+    return schema == 1 || serReadU64(is, m.hysteresisTarget);
 }
 
 bool serWriteBall(std::ostream& os, const Ball& b) {
@@ -1695,6 +1755,8 @@ bool Simulation::serializeState(std::ostream& os) const {
         serWriteF64(os, n.effRepel);
         serWriteF64(os, n.effCohesion);
         serWriteI32(os, static_cast<std::int32_t>(n.digestCooldown));
+        serWriteU64(os, n.feedingTarget);
+        serWriteU32(os, n.feedingTicks);
         serWriteU64(os, n.balls.size());
         for (const Ball& b : n.balls) {
             if (!serWriteBall(os, b)) return false;
@@ -1744,6 +1806,7 @@ bool Simulation::serializeState(std::ostream& os) const {
         serWriteBool(os, c.alive);
         serWritePad(os, 7);
         serWriteF64(os, c.hue);
+        serWriteU32(os, c.sporeTicks);
     }
     serWriteU64(os, cyano_.nextNodeId());
     serWriteI64(os, cyano_.frameIndex());
@@ -1861,6 +1924,10 @@ bool Simulation::deserializeState(std::istream& is, std::string& err) {
         if (!serReadI32(is, cooldown)) { err = "cannot read digestCooldown"; return false; }
         if (cooldown < 0) { err = "negative digestCooldown"; return false; }
         n.digestCooldown = cooldown;
+        if (version >= 6u && (!serReadU64(is, n.feedingTarget) ||
+                             !serReadU32(is, n.feedingTicks) || n.feedingTicks > kAdultFeedingTicks)) {
+            err = "invalid adult feeding progress"; return false;
+        }
         std::uint64_t nBalls = 0;
         if (!serReadCount(is, nBalls)) { err = "bad balls count"; return false; }
         std::size_t ballsSz = 0;
@@ -1938,6 +2005,9 @@ bool Simulation::deserializeState(std::istream& is, std::string& err) {
         if (!serReadBool(is, c.alive)) { err = "cannot read cyano alive"; return false; }
         if (!serReadPad(is, 7)) { err = "corrupt cyano padding"; return false; }
         if (!serReadF64(is, c.hue)) { err = "cannot read cyano hue"; return false; }
+        if (version >= 6u && (!serReadU32(is, c.sporeTicks) || c.sporeTicks > kSporeMaturationTicks)) {
+            err = "invalid spore age"; return false;
+        }
         nodes.push_back(std::move(c));
     }
     std::uint64_t cyanoNextId = 0;

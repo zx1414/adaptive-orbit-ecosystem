@@ -461,32 +461,32 @@ mapCtx.rect = (...rect) => mapClips.push(rect);
 mapCtx.arc = (...arc) => energyArcs.push(arc);
 mapCtx.fillRect = (...rect) => mapFills.push([mapCtx.fillStyle, ...rect]);
 const mapRenderer = sandbox.Renderer.create(mapCanvas);
-mapRenderer.setTrace({ bounds: { minX: 0, maxX: 256, minY: 0, maxY: 256 } });
+mapRenderer.setTrace({ bounds: { minX: 0, maxX: 1024, minY: 0, maxY: 512 } });
 const mapFrame = {
   tick: 0, cyano: [], cyanoLinks: [],
-  nuclei: [{ id: 1, x: 128, y: 128, energy: 20, cap: 100, hue: 228 }],
-  balls: [{ id: 2, owner: 1, x: 128, y: 128, type: 1, energy: 30 }]
+  nuclei: [{ id: 1, x: 512, y: 256, energy: 20, cap: 100, hue: 228 }],
+  balls: [{ id: 2, owner: 1, x: 512, y: 256, type: 1, energy: 30 }]
 };
 mapRenderer.draw(mapFrame);
-eq(mapClips[0], [0, -210, 960, 960], "landscape map covers the viewport and keeps a square world");
-near(mapRenderer.camera().scale, 960 / 256, 1e-9, "default camera uses an equal scale on both axes");
+eq(mapClips[0], [0, 30, 960, 480], "the default camera shows the entire 2:1 world");
+near(mapRenderer.camera().scale, 960 / 1024, 1e-9, "default camera uses an equal scale on both axes");
 ok(energyArcs.some(arc => arc[3] === -Math.PI / 2 &&
    Math.abs(arc[4] - arc[3] - Math.PI * 0.4) < 1e-9), "default render draws the nucleus energy arc at 20%");
 ok(mapFills.some(fill => fill[0] === "rgb(109,125,139)" && fill[4] === fill[3] / 2),
    "scout diamond shows half fill for 30 energy on the 0–60 scale");
 eq(mapRenderer.hitTest(480, 270).kind, "ball", "ball remains selectable above an overlapping nucleus");
+eq(mapRenderer.hitTest(480, 20).kind, "none", "outer backdrop cannot select map entities");
 mapRenderer.toggleFullMap();
 mapClips.length = 0;
 mapRenderer.draw(mapFrame);
-eq(mapClips[0], [210, 0, 540, 540], "full map mode exposes the entire square");
-eq(mapRenderer.hitTest(200, 270).kind, "none", "outer backdrop cannot select map entities");
+eq(mapClips[0], [-60, 0, 1080, 540], "fill mode covers the landscape viewport");
 ok(mapRenderer.renderThumb(mapFrame, makeCanvas()), "thumbnail uses the same renderer");
 eq(mapRenderer.hitTest(480, 270).data.id, 2, "thumbnail leaves map hit coordinates intact");
 mapCanvas.getBoundingClientRect = () => ({ left: 0, top: 0, width: 390, height: 600 });
 mapRenderer.resize();
 mapClips.length = 0;
 mapRenderer.draw(mapFrame);
-eq(mapClips[0], [0, 105, 390, 390], "portrait canvas displays a centered square across the full width");
+eq(mapClips[0], [0, 202.5, 390, 195], "portrait canvas displays a centered 2:1 world");
 
 // 9c. R8-A: /state v2 — 128B nucleus records with 24 genome f32 (genes at +32)
 function buildStateV2Fixture() {
@@ -613,10 +613,13 @@ ok(pd.frames.every(fr => fr.nuclei.every(nu => nu.genomeReal)), "demo nuclei gen
 
 let prReal = null;   // module scope: reused by idempotency section
 console.log("== 7) real v3 trace file from main project exe ==");
-let v3Path = path.join(fe, "..", "build", "v3.json");
+const v3Path = process.argv[2] || path.join(fe, "..", "build", "v3.json");
 let real = null;
-try { real = JSON.parse(readFileSync(v3Path, "utf8")); console.log("  ok  build/v3.json loaded (" + real.frames.length + " frames)"); }
-catch (e) { console.log("  --  build/v3.json not present (" + e.message.slice(0, 60) + ") — generate with agentsim.exe --trace; skipping"); }
+try { real = JSON.parse(readFileSync(v3Path, "utf8")); console.log("  ok  real trace loaded (" + real.frames.length + " frames)"); }
+catch (e) {
+  if (process.argv[2]) throw e;
+  console.log("  --  no build/v3.json — generate with agentsim.exe --trace; skipping");
+}
 if (real) {
   prReal = P.parse(real);
   eq(prReal.schemaVersion, 3, "real trace schemaVersion=3");
@@ -825,7 +828,7 @@ sandbox.window.LiveClient.stop();
 LM.showPage("menu");
 LM.startRun({ seed: 1234, frames: 300, nuclei: 10, cyano: 40, mod: "constant_light", autosave: true });
 await new Promise((r) => setTimeout(r, 400));
-eq(runPosts[0], "seed=1234&nuclei=10&cyano_nodes=40&ticks=300&policy=rule&mod=constant_light&max_fps=60",
+eq(runPosts[0], "seed=1234&nuclei=10&cyano_nodes=40&ticks=300&policy=grazer&mod=constant_light&max_fps=60",
    "POST /run 行式 body 正确（R10：含 policy 键）");
 ok(savePosts.length >= 1 && String(savePosts[0]).indexOf("name=auto-1234-") === 0,
    "自动存档 auto-<seed>-<时间戳> POST /save（" + String(savePosts[0] || "").slice(0, 24) + "…）");

@@ -6,12 +6,11 @@
 //                          [--baseline <trace2.json>] [--genome <genome.json>]
 //                          [--out-genome <path>] [--help] [--version]
 //
-// 输入: agentsim --trace 导出的 JSON（docs/TRACE-CONTRACT.md；v2/v3 都能读，主路径 v3，
+// 输入: agentsim --trace 导出的 JSON（docs/ARCHITECTURE.md；v2/v3 都能读，主路径 v3，
 //        v2 差异: series 多一个 food 键、帧内 c 元组 5 项、无 g 键——都按"缺则跳过"容错）。
-// 优雅降级: 本轮后端还没有 genome 导出，trace 里没有 genome 字段时，
-// 判据 3/4/6 输出 SKIP（不是 FAIL），并在报告里明确写"需要主代理接线 --trace-genome"。
+// 没有基因数据时，相关判据标记为 SKIP。可用 --trace-genome 导出基因。
 //
-// 判据定义: docs/GOAL-ECOLOGY.md §一（6 条硬判据）。
+// 判据说明见 docs/ARCHITECTURE.md 的批跑轨迹与实验判据。
 // 依赖: 零。只用 node 内置模块 + 同目录 svg.mjs（也是零依赖）。
 //
 // 退出码: 0 = 无 FAIL（SKIP 不影响）; 1 = 至少一条判据 FAIL; 2 = 用法/IO/解析错误。
@@ -192,7 +191,7 @@ function printHelp() {
     '  --help                     本帮助',
     '  --version                  版本号',
     '',
-    '6 条判据（定义见 docs/GOAL-ECOLOGY.md §一）:',
+    '生态实验判据（说明见 docs/ARCHITECTURE.md）:',
     '  1 能量紧平衡   |slope(totalEnergy)| * ticks / mean(total) < 0.15',
     '  2 种群波动     末 20% tick 核数 CV ∈ [0.05, 0.6] 且末态核数 > 0',
     '  3 基因多样性   24 参数中 >= 18 个末态 std > 初态 std * 0.3        [需 genome]',
@@ -648,7 +647,7 @@ function judgeAll(ctx) {
     c.push({
       id: 3, name: '基因多样性', status: 'SKIP', value: '—',
       threshold: '24 参数中 >= 18 个末态 std > 初态 std * 0.3',
-      detail: 'trace 无 genome 字段（需要主代理接线 --trace-genome；本轮无法计算）',
+      detail: '此轨迹没有基因数据。使用 --trace-genome 采集。',
     });
   } else {
     const gs = ctx.genomeStats;
@@ -666,7 +665,7 @@ function judgeAll(ctx) {
     c.push({
       id: 4, name: 'hue 发散', status: 'SKIP', value: '—',
       threshold: 'hue 圆标准差 > 30°',
-      detail: 'trace 无 genome 字段（需要主代理接线 --trace-genome；本轮无法计算）',
+      detail: '此轨迹没有基因数据。使用 --trace-genome 采集。',
     });
   } else {
     const gs = ctx.genomeStats;
@@ -943,7 +942,7 @@ function buildReport(ctx) {
   o.push('- 互相关 = corr(nuclei[t], cyano[t+lag])，lag 0..' + Math.min(200, Math.floor(n / 4)) +
     '，两个领先方向都检查过零。');
   o.push('- k-means: 确定性最远点初始化 + Lloyd 迭代，主基因标准化（除以末态总体 std）后欧氏距离。');
-  o.push('- 判据定义: docs/GOAL-ECOLOGY.md §一；工具版本 analyze.mjs v' + VERSION + '。');
+  o.push('- 见 docs/ARCHITECTURE.md 的实验判据。分析工具版本为 ' + VERSION + '。');
   o.push('');
   return o.join('\n');
 }

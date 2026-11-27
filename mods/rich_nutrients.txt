@@ -1,0 +1,3 @@
+version=1
+name=富营养水域
+initial_nutrient_multiplier=2

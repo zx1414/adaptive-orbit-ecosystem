@@ -1,6 +1,6 @@
 ﻿#pragma once
 // agentsim - app/TraceWriter.h : JSON trace exporter for --trace.
-// Contract: docs/TRACE-CONTRACT.md v3（R1-B 蓝细菌取代食物）. schemaVersion=3 且
+// JSON v3 格式见 docs/ARCHITECTURE.md。schemaVersion=3 且
 // meta.contractVersion=3（两处必须同步写入）；top-level key order is fixed
 // (schemaVersion, meta, bounds, series, frames); floats print %.6f;
 // NaN/Inf collapse to 0.000000; entity order follows container index.
@@ -39,7 +39,7 @@ public:
     void addSeries(long long tick, long long nuclei,
                    long long cyanoAlive, double cyanoEnergy,
                    double totalEnergy, double injected, double dissipated,
-                   bool auditOk);
+                   bool auditOk, long long spores = 0);
     // frames: spatial snapshot, downsampled via --trace-interval.
     void setGenomeEnabled(bool v) { genomeEnabled_ = v; }
     void beginFrame(long long tick);
@@ -60,7 +60,7 @@ public:
     void addGenome(long long id, const double* genes, int count, double hue);
     void endGenome();
     void addCyano(long long id, double x, double y, double energy, bool alive,
-                  double hue);
+                  double hue, bool spore = false);
     void endFrame();
     bool finalize();  // writes buffered JSON to disk; false on I/O failure
     bool isOpen() const { return out_.is_open(); }

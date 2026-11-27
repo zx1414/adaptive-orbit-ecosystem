@@ -19,7 +19,7 @@ namespace {
 namespace tl {
 
     constexpr std::uint32_t kMagic = 0x41544D4Cu;  // "ATML"
-    constexpr std::uint32_t kVersion = 2u;
+    constexpr std::uint32_t kVersion = 4u;
     
     void wU32(std::ostream& os, std::uint32_t v) {
         unsigned char b[4] = {static_cast<unsigned char>(v & 0xFFu),
@@ -200,9 +200,9 @@ bool Timeline::importFrom(const std::string& path, std::string& err) {
     std::uint32_t version = 0;
     if (!tl::rU32(is, magic) || !tl::rU32(is, version)) { err = "cannot read header"; return false; }
     if (magic != tl::kMagic) { err = "bad magic (not ATML)"; return false; }
-    if (version != 1u && version != tl::kVersion) {
+    if (version < 1u || version > tl::kVersion) {
         err = "unsupported timeline version: " + std::to_string(version) +
-              " (expected 1 or " + std::to_string(tl::kVersion) + ")";
+              " (expected 1 through " + std::to_string(tl::kVersion) + ")";
         return false;
     }
     std::uint64_t interval = 0;
@@ -212,7 +212,7 @@ bool Timeline::importFrom(const std::string& path, std::string& err) {
     unsigned char pad[7];
     if (!is.read(reinterpret_cast<char*>(pad), 7)) { err = "cannot read pad"; return false; }
     std::string pn;
-    if (!savedetail::readCfgBlock(is, cfg_, pn, err, version >= 2u)) {
+    if (!savedetail::readCfgBlock(is, cfg_, pn, err, version)) {
         err = "cfg block read failed: " + err;
         return false;
     }
@@ -236,7 +236,7 @@ bool Timeline::importFrom(const std::string& path, std::string& err) {
             const int boundary = is.get();
             if (boundary != 0 && boundary != 1) { err = "invalid checkpoint flags"; return false; }
             cp.inputBoundary = boundary != 0;
-            if (!savedetail::readCfgBlock(is, cp.config, pn, err)) return false;
+            if (!savedetail::readCfgBlock(is, cp.config, pn, err, version)) return false;
         }
         if (!tl::rU64(is, len) || len > (1u << 30)) {
             err = "invalid checkpoint size"; return false;

@@ -11,11 +11,12 @@
 window.Charts = (function () {
   'use strict';
   var TAU = Math.PI * 2;
-  var DIM = 'rgba(143,163,200,0.85)';
-  var PALETTE = ['#5ad1ff', '#48dc80', '#ffa656', '#ff6b81', '#c792ff'];
+  var DIM = '#4c5d4a';
+  var PALETTE = ['#2e5b83', '#276343', '#98521d', '#a33e4d', '#634489'];
 
   function fmtNum(v) {
     var a = Math.abs(v);
+    if (a > 0 && a < 0.01) return v.toExponential(1);
     if (a >= 10000) return (v / 1000).toFixed(1) + 'k';
     if (a >= 100) return v.toFixed(0);
     if (a >= 10) return v.toFixed(1);
@@ -34,6 +35,7 @@ window.Charts = (function () {
     var ctx = canvasEl.getContext('2d');
     var dpr = Math.max(1, window.devicePixelRatio || 1);
     var rows = [];    // [{key,color,label,values[]}]
+    var ticks = [];
     var cursor = -1;
 
     function resize() {
@@ -50,6 +52,7 @@ window.Charts = (function () {
     function setData(series, key) {
       var list = Array.isArray(series) ? series : [];
       var keys = Array.isArray(key) ? key : [key];
+      ticks = list.map(function (row, index) { return row && isFinite(row.tick) ? row.tick : index; });
       rows = [];
       for (var i = 0; i < keys.length; i++) {
         var k = keys[i];
@@ -84,7 +87,15 @@ window.Charts = (function () {
         }
       }
       if (!count) return null;
-      if (mx - mn < 1e-9) { mn -= 1; mx += 1; }
+      if (opts.counts) {
+        var low = Math.max(0, Math.floor(mn) - 1);
+        var step = Math.max(1, Math.ceil((Math.ceil(mx) + 1 - low) / 2));
+        return { min: low, max: low + 2 * step };
+      }
+      if (mx === mn) {
+        var floor = Math.max(Math.abs(mx) * 0.06, 1e-12);
+        mn -= floor; mx += floor;
+      }
       var pad = (mx - mn) * 0.12;
       return { min: mn - pad, max: mx + pad };
     }
@@ -93,10 +104,10 @@ window.Charts = (function () {
       var W = canvasEl.width, H = canvasEl.height;
       if (!W || !H) return;
       ctx.clearRect(0, 0, W, H);
-      var padL = 8 * dpr, padR = 10 * dpr, padT = 9 * dpr, padB = 7 * dpr;
+      var padL = 51 * dpr, padR = 8 * dpr, padT = 9 * dpr, padB = 23 * dpr;
       var iw = W - padL - padR, ih = H - padT - padB;
 
-      ctx.strokeStyle = 'rgba(122,152,220,0.14)';
+      ctx.strokeStyle = 'rgba(68,91,65,0.27)';
       ctx.lineWidth = 1;
       ctx.beginPath();
       for (var g = 0; g <= 2; g++) {
@@ -109,14 +120,18 @@ window.Charts = (function () {
       var ext = extent();
       if (!ext) {
         ctx.fillStyle = DIM;
-        ctx.font = (10 * dpr) + 'px Consolas,monospace';
+        ctx.font = (12 * dpr) + 'px sans-serif';
         ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
         ctx.fillText('暂无数据', padL + iw / 2, padT + ih / 2);
         return;
       }
 
       var N = rows[0].values.length;
-      function xAt(i) { return padL + (N <= 1 ? iw / 2 : iw * i / (N - 1)); }
+      var firstTick = ticks[0], lastTick = ticks[N - 1];
+      function xAt(i) {
+        if (N <= 1) return padL + iw / 2;
+        return padL + iw * (lastTick > firstTick ? (ticks[i] - firstTick) / (lastTick - firstTick) : i / (N - 1));
+      }
       function yAt(v) { return padT + ih * (1 - (v - ext.min) / (ext.max - ext.min)); }
 
       for (var r = 0; r < rows.length; r++) {
@@ -146,14 +161,14 @@ window.Charts = (function () {
           else ctx.lineTo(x3, y3);
         }
         ctx.strokeStyle = color;
-        ctx.lineWidth = 1.6 * dpr;
+        ctx.lineWidth = 2.4 * dpr;
         ctx.lineJoin = 'round'; ctx.lineCap = 'round';
         ctx.stroke();
       }
 
       if (cursor >= 0 && N > 0 && cursor < N) {
         var cx = xAt(cursor);
-        ctx.strokeStyle = 'rgba(90,209,255,0.55)';
+        ctx.strokeStyle = 'rgba(71,85,65,0.55)';
         ctx.lineWidth = 1;
         if (ctx.setLineDash) ctx.setLineDash([3 * dpr, 3 * dpr]);
         ctx.beginPath(); ctx.moveTo(cx, padT); ctx.lineTo(cx, padT + ih); ctx.stroke();
@@ -168,20 +183,21 @@ window.Charts = (function () {
         }
       }
 
-      ctx.font = (9.5 * dpr) + 'px Consolas,monospace';
+      ctx.font = (11 * dpr) + 'px Consolas,monospace';
       ctx.fillStyle = DIM;
       ctx.textAlign = 'right';
-      ctx.textBaseline = 'top';
-      ctx.fillText(fmtNum(ext.max), padL + iw, 1 * dpr);
-      ctx.textBaseline = 'alphabetic';
-      ctx.fillText(fmtNum(ext.min), padL + iw, Math.min(H - 1, padT + ih + 8 * dpr));
-      var cur = rows[0].values[cursor];
-      if (typeof cur === 'number' && isFinite(cur)) {
-        ctx.fillStyle = rows[0].color;
-        ctx.textAlign = 'left';
-        ctx.textBaseline = 'top';
-        ctx.fillText(fmtNum(cur), padL, 1 * dpr);
+      ctx.textBaseline = 'middle';
+      for (var mark = 0; mark <= 2; mark++) {
+        var fraction = mark / 2;
+        var value = ext.max + (ext.min - ext.max) * fraction;
+        ctx.fillText(opts.counts ? String(Math.round(value)) : fmtNum(value),
+                     padL - 5 * dpr, padT + ih * fraction);
       }
+      ctx.textBaseline = 'alphabetic';
+      ctx.textAlign = 'left';
+      ctx.fillText(String(firstTick), padL, H - 5 * dpr);
+      ctx.textAlign = 'right';
+      if (N > 1) ctx.fillText(String(lastTick), padL + iw, H - 5 * dpr);
     }
 
     resize();
@@ -245,13 +261,12 @@ window.Charts = (function () {
       ctx.clearRect(0, 0, W, H);
       var padL = 30 * dpr, padR = 8 * dpr, padT = 8 * dpr, padB = 17 * dpr;
       var iw = W - padL - padR, ih = H - padT - padB;
-      var DIM = 'rgba(143,163,200,0.85)';
-      ctx.strokeStyle = 'rgba(122,152,220,0.20)';
+      ctx.strokeStyle = 'rgba(68,91,65,0.32)';
       ctx.lineWidth = 1;
       ctx.strokeRect(padL + 0.5, padT + 0.5, Math.max(1, iw), Math.max(1, ih));
       if (iw < 8 || ih < 8) return;
       var ex = extent('x'), ey = extent('y');
-      ctx.font = (9 * dpr) + 'px Consolas,monospace';
+      ctx.font = (11 * dpr) + 'px Consolas,monospace';
       ctx.fillStyle = DIM;
       if (!ex || !ey) {
         ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
@@ -261,7 +276,7 @@ window.Charts = (function () {
       function px(v) { return padL + iw * (v - ex.min) / (ex.max - ex.min); }
       function py(v) { return padT + ih * (1 - (v - ey.min) / (ey.max - ey.min)); }
       // 网格 + 轴标注
-      ctx.strokeStyle = 'rgba(122,152,220,0.12)';
+      ctx.strokeStyle = 'rgba(68,91,65,0.18)';
       ctx.beginPath();
       for (var g = 1; g < 3; g++) {
         var gx = padL + iw * g / 3; ctx.moveTo(gx, padT); ctx.lineTo(gx, padT + ih);

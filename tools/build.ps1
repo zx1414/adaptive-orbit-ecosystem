@@ -3,20 +3,27 @@ param([string]$OutputDirectory = 'build')
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
+$version = (Get-Content -LiteralPath VERSION -Raw).Trim()
+if ($version -notmatch '^\d+\.\d+\.\d+$') { throw "Invalid project version: $version" }
 
-$vcvars = "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat"
-if (-not (Test-Path $vcvars)) { Write-Error "vcvars64.bat not found"; exit 1 }
+$vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+if (-not (Test-Path -LiteralPath $vswhere)) { throw 'Visual Studio Installer was not found.' }
+$installation = & $vswhere -latest -version '[17.0,18.0)' -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+if (-not $installation) { throw 'Install the C++ x64 build tools for Visual Studio 2022.' }
+$vcvars = Join-Path $installation 'VC\Auxiliary\Build\vcvars64.bat'
+if (-not (Test-Path -LiteralPath $vcvars)) { throw 'vcvars64.bat not found.' }
 Write-Host "vcvars: $vcvars"
 
 New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
 $outputRoot = (Resolve-Path -LiteralPath $OutputDirectory).ProviderPath
 
 $cpps = Get-ChildItem -Path "$root\src" -Recurse -Filter *.cpp |
+    Where-Object { $_.Name -ne 'Launcher.cpp' } |
     ForEach-Object { $_.FullName.Substring($root.Length + 1) }
 $libCpps = $cpps | Where-Object { $_ -notmatch "^src\\app\\" }
 if (-not $cpps) { Write-Error "no .cpp under src"; exit 1 }
 
-$flagList = @("/nologo","/std:c++17","/W4","/WX","/EHsc","/permissive-","/utf-8","/I","src","/DAGENTSIM_HAS_GENOME=1")
+$flagList = @("/nologo","/std:c++17","/W4","/WX","/EHsc","/permissive-","/utf-8","/I","src","/DAGENTSIM_HAS_GENOME=1","/DAGENTSIM_VERSION=$version")
 $clArgs = $flagList -join " "
 Write-Host "flags: $clArgs"
 
@@ -48,7 +55,7 @@ if (Test-Path "$root\tests\unit") {
 $launcherSrc = Join-Path $root "src\app\Launcher.cpp"
 if (Test-Path $launcherSrc) {
     New-Item -ItemType Directory -Force -Path "$outputRoot\obj_launcher" | Out-Null
-    $cmdL = "call `"$vcvars`" >nul && cl /nologo /std:c++17 /W4 /WX /EHsc /permissive- /utf-8 /Fe:`"$outputRoot\agentsimw.exe`" /Fo:`"$outputRoot\obj_launcher\launcher.obj`" `"$launcherSrc`" /link /SUBSYSTEM:WINDOWS"
+    $cmdL = "call `"$vcvars`" >nul && cl /nologo /std:c++17 /W4 /WX /EHsc /permissive- /utf-8 /DAGENTSIM_VERSION=$version /Fe:`"$outputRoot\agentsimw.exe`" /Fo:`"$outputRoot\obj_launcher\launcher.obj`" `"$launcherSrc`" /link /SUBSYSTEM:WINDOWS"
     cmd /c $cmdL
     if ($LASTEXITCODE -ne 0) { Write-Error "cl failed for agentsimw.exe"; exit $LASTEXITCODE }
 }

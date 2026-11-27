@@ -124,6 +124,7 @@ SensorVector sense(const AgentEnvironment& env, Vec2 self, Vec2 vel, double spee
         Vec2 delta{};   // self -> 节点 的最小环距位移（决策消费的量）
         double dist = 0.0;
         EntityId id = 0;
+        bool spore = false;
     };
     Seen seen[3];
     int seenN = 0;
@@ -161,10 +162,12 @@ SensorVector sense(const AgentEnvironment& env, Vec2 self, Vec2 vel, double spee
             seen[2].delta = dSelf;
             seen[2].dist = distSelf;
             seen[2].id = node.id;
+            seen[2].spore = node.isSpore();
         } else {
             seen[seenN].delta = dSelf;
             seen[seenN].dist = distSelf;
             seen[seenN].id = node.id;
+            seen[seenN].spore = node.isSpore();
             ++seenN;
         }
         // 插入排序维持升序（候选数 <= 3，常数极小）。
@@ -180,6 +183,9 @@ SensorVector sense(const AgentEnvironment& env, Vec2 self, Vec2 vel, double spee
     for (int i = 0; i < seenN && i < 3; ++i) {
         cand[i].delta = seen[i].delta;
         cand[i].dist = seen[i].dist;
+        s.foodIds[static_cast<std::size_t>(i)] = seen[i].id;
+        s.foodDistance[static_cast<std::size_t>(i)] = seen[i].dist;
+        s.foodIsSpore[static_cast<std::size_t>(i)] = seen[i].spore;
         candN = i + 1;
     }
 

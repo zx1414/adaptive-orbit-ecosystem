@@ -4,7 +4,7 @@
 // 这个文件与既有的模块单测分工不同：
 //   · test_cyano / test_behavior 等测"函数做什么"；
 //   · 本文件测"设计文档承诺的生态结论是否真的成立"——每条用例的注释直接
-//     引用 docs/生态机制改造执行提示词.md 的验收编号，判据写在 ASSERT 注释里。
+//     生态规则见 docs/ARCHITECTURE.md，具体判据写在各测试中。
 //
 // 全部用例都必须走**生产路径**（Simulation / 正式接口），不靠手工摆放内部
 // 结构体。凡是只能在单测里手工创建对象才能成立的结论，按验收要求属于"未接通"，
@@ -58,6 +58,61 @@ CyanoField makeFieldWithNodes(const CyanoParams& p,
 }
 
 } // namespace
+
+TEST(spores_transfer_stores_and_mature_without_replacing_their_id) {
+    CyanoParams params;
+    params.sporeMaturationTicks = 3;
+    params.reproductionProbability = 1.0;
+    params.reproductionCost = 20.0;
+    params.metabolismRate = 0.0;
+    params.growthPerTick = 0.0;
+    params.maxNodes = 2;
+    auto field = makeFieldWithNodes(params, {{{80.0, 80.0}, 100.0}});
+    PCG32 rng(42);
+    CHECK(field.step(0.0, 256.0, 256.0, rng).births == 1u);
+    CHECK(field.sporeCount() == 1u);
+    CHECK_NEAR(field.totalMaterial(), 100.0, kTol);
+    const auto id = field.nodes().back().id;
+    CHECK_NEAR(field.edibleOf(id), field.nodes().back().material, kTol);
+    auto eaten = field;
+    const auto grants = eaten.grazeBatch({{1, id, 100.0, 1.0}});
+    CHECK(!grants.empty());
+    CHECK(!eaten.nodes().back().alive);
+    for (int frame = 0; frame < 2; ++frame) {
+        field.step(0.0, 256.0, 256.0, rng);
+        CHECK(field.sporeCount() == 1u);
+    }
+    field.step(0.0, 256.0, 256.0, rng);
+    CHECK(field.sporeCount() == 0u);
+    CHECK(field.nodes().back().id == id);
+    CHECK_NEAR(field.totalMaterial(), 100.0, kTol);
+}
+
+TEST(adult_grazing_requires_a_continuous_slow_visit) {
+    SimConfig config;
+    config.colony.nuclei = 1;
+    config.cyanoNodeCount = 1;
+    config.cyanoTuning.reproductionProbability = 0.0;
+    config.cyanoTuning.growthPerTick = 0.0;
+    config.policy.name = "stub";
+    Simulation sim(config);
+    const auto food = sim.cyanoNodes().front().pos;
+    const double material = sim.cyanoNodes().front().material;
+    auto& nucleus = const_cast<Nucleus&>(sim.nuclei().front());
+    nucleus.pos = food;
+    for (int frame = 0; frame < 7; ++frame) sim.step();
+    CHECK(nucleus.feedingTicks == 7u);
+    CHECK_NEAR(sim.cyanoNodes().front().material, material, kTol);
+    nucleus.pos = wrap({food.x + 100.0, food.y}, config.world.width, config.world.height);
+    sim.step();
+    CHECK(nucleus.feedingTicks == 0u);
+    nucleus.pos = food;
+    for (int frame = 0; frame < 11; ++frame) sim.step();
+    CHECK_NEAR(sim.cyanoNodes().front().material, material, kTol);
+    sim.step();
+    CHECK(nucleus.feedingTicks == 12u);
+    CHECK(sim.cyanoNodes().front().material < material);
+}
 
 // ============================================================================
 // A1 —— 统一摄食条件

@@ -49,7 +49,10 @@ public:
     // 该个体上一帧选中的候选下标；-1 = 尚未选择。静态 + 收记忆参数（状态已不在实例里）。
     static int lastChoice(const PolicyMemory& memory) { return memory.hysteresisLastChoice; }
     // 清空本策略的滞回记忆（单测确定性验证用）；只动自己的字段。
-    static void reset(PolicyMemory& memory) { memory.hysteresisLastChoice = -1; }
+    static void reset(PolicyMemory& memory) {
+        memory.hysteresisLastChoice = -1;
+        memory.hysteresisTarget = 0;
+    }
 
 private:
     Params p_; // 构造期标定，不可变

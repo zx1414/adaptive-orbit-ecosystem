@@ -26,9 +26,7 @@ namespace agentsim {
 namespace {
 double clamp01(double v) { return v < 0.0 ? 0.0 : (v > 1.0 ? 1.0 : v); }
 
-// R2 扩展维线性项：s[18..23]（邻居距离/方向、能量比、目标密度/距离）单独求和。
-// w 是完整 kDim 宽度的行引用；18 之前的列在 Z() 里已算过，这里只补尾部，
-// 保证"全部 kDim 维参与"且与维度改动自动跟随（用 kDim 表达式，不硬编码）。
+// Historical saves counted the last six inputs twice.
 double extended(const SensorVector& s, const double (&w)[SensorVector::kDim]) {
     constexpr int kExtFirst = 18; // R2 扩展维起始下标（SensorTypes.h 契约）
     double z = 0.0;
@@ -49,8 +47,8 @@ PerceptronPolicy::PerceptronPolicy(const Params& p)
     }
 }
 
-PerceptronPolicy::PerceptronPolicy(std::uint64_t seed, double scale)
-    : kDim_(SensorVector::kDim), kOutputs_(2) {
+PerceptronPolicy::PerceptronPolicy(std::uint64_t seed, double scale, bool legacyTail)
+    : kDim_(SensorVector::kDim), kOutputs_(2), legacyTail_(legacyTail) {
     // 仅构造期使用 PCG32 生成初值；decide() 内绝无 RNG。
     PCG32 rng(seed);
     for (int i = 0; i < kOutputs_; ++i) {
@@ -70,10 +68,9 @@ double PerceptronPolicy::Z(int i, const SensorVector& s) const {
 ActionVector PerceptronPolicy::decide(const SensorVector& s, const TargetList& /*targets*/,
                                      PolicyMemory& /*memory*/) {
     // kOutputs_ 可能为 1：缺省神经元按 Z=0 -> y=+1 处理（偏置/权重未配置）。
-    // 扩展项恒以完整 kDim 宽度计算：kDim_ < kDim（旧文本反序列化）时 18..23 列
-    // 全 0，extended() 贡献恰为 0，与旧 18 维行为逐位一致。
-    const double z0 = Z(0, s) + extended(s, w_[0]);
-    const double z1 = ((kOutputs_ > 1) ? Z(1, s) : 0.0) + extended(s, w_[1]);
+    const double z0 = Z(0, s) + (legacyTail_ ? extended(s, w_[0]) : 0.0);
+    const double z1 = (kOutputs_ > 1 ? Z(1, s) : 0.0) +
+                      (legacyTail_ ? extended(s, w_[1]) : 0.0);
 
     const double dirX = clamp01((z0 + 1.0) / 2.0) * 2.0 - 1.0;
     const double dirY = clamp01((z1 + 1.0) / 2.0) * 2.0 - 1.0;
@@ -81,6 +78,8 @@ ActionVector PerceptronPolicy::decide(const SensorVector& s, const TargetList& /
 
     ActionVector a;
     a.boost = boost;
+    if (s.foodIds[0] != 0 && s.biteRadius > 0.0 &&
+        s.foodDistance[0] <= 0.85 * s.biteRadius) a.speedScale = 0.0;
     const double len = std::sqrt(dirX * dirX + dirY * dirY);
     if (len < 1e-12) {
         a.dirX = 0.0; // 长度为 0：不产生 NaN/Inf
@@ -114,21 +113,30 @@ std::string PerceptronPolicy::serialize() const {
 
 PerceptronPolicy PerceptronPolicy::deserialize(const std::string& text) {
     Params p;
+    return PerceptronPolicy(readWeights(text, p) ? p : Params{});
+}
+
+bool PerceptronPolicy::readWeights(const std::string& text, Params& params) {
+    Params p;
     std::istringstream in(text);
     std::string tag;
     int outs = 0, dim = 0;
-    if (!(in >> tag >> outs >> dim) || tag != "perceptron") {
-        return PerceptronPolicy(p); // 非法输入：返回全零参数
+    if (!(in >> tag >> outs >> dim) || tag != "perceptron" ||
+        outs < 1 || outs > 2 || dim < 1 || dim > SensorVector::kDim) {
+        return false;
     }
-    p.kOutputs = (outs >= 1 && outs <= 2) ? outs : 2;
-    p.kDim = (dim >= 1 && dim <= SensorVector::kDim) ? dim : SensorVector::kDim;
+    p.kOutputs = outs;
+    p.kDim = dim;
     for (int i = 0; i < p.kOutputs; ++i) {
-        if (!(in >> p.b[i])) return PerceptronPolicy(p);
+        if (!(in >> p.b[i]) || !std::isfinite(p.b[i])) return false;
         for (int j = 0; j < p.kDim; ++j) {
-            if (!(in >> p.w[i][j])) return PerceptronPolicy(p);
+            if (!(in >> p.w[i][j]) || !std::isfinite(p.w[i][j])) return false;
         }
     }
-    return PerceptronPolicy(p);
+    in >> std::ws;
+    if (!in.eof()) return false;
+    params = p;
+    return true;
 }
 
 } // namespace agentsim

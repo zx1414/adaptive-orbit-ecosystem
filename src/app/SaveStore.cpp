@@ -1,11 +1,14 @@
 // agentsim - app/SaveStore.cpp（R5-C 存档系统实现）
 // save.bin 二进制布局（小端）：
-//   u32 magic=0x41534153 ("ASAV") ; u32 version=2
+//   u32 magic=0x41534153 ("ASAV") ; u32 version=4
 //   u8 seedIsDefault ; u8[3] pad                       // 存档时刻上界快照
 //   -- cfg 块（savedetail::writeCfgBlock，save.bin 与 timeline.bin 共用同一节）--
 //   -- Simulation::serializeState 全量实体态（布局见 Simulation.cpp 注释）--
 // 全部标量小端、无对齐填充；f64 按 IEEE-754 位原样。
 #include "app/SaveStore.h"
+#include "app/ExtensionCatalog.h"
+#include "decision/PerceptronPolicy.h"
+#include "decision/PolicyRegistry.h"
 
 #include <algorithm>
 #include <chrono>
@@ -29,7 +32,7 @@ namespace app {
 namespace {
 
 constexpr std::uint32_t kMagic = 0x41534153u;   // "ASAV"
-constexpr std::uint32_t kVersion = 2u;
+constexpr std::uint32_t kVersion = 4u;
 constexpr std::size_t kNameLimit = 64;
 constexpr std::size_t kPolicyNameLimit = 64;
 
@@ -114,19 +117,30 @@ std::string nowTimestamp() {
     return std::string(buf);
 }
 
-bool isKnownPolicy(const std::string& name) {
-    static const char* const kKnown[] = {"rule", "stub", "perceptron", "thermal",
-                                         "hysteresis", "foragebank", "bandit",
-                                         "riskaverse"};
-    return std::any_of(std::begin(kKnown), std::end(kKnown),
-                       [&](const char* k) { return name == k; });
+void writeConfigText(std::ostream& os, const std::string& text) {
+    wU32(os, static_cast<std::uint32_t>(text.size()));
+    wBytes(os, text.data(), text.size());
 }
 
-void applyPolicyName(SimConfig& cfg, const std::string& policyName) {
-    cfg.policy.name = policyName;
-    if (policyName == "perceptron") cfg.policy.usePerceptron = true;
-    if (policyName == "thermal") cfg.policy.useThermal = true;
-    cfg.policy.mutation = (policyName == "rule") ? 0.05 : 0.0;
+bool readConfigText(std::istream& is, std::string& text, std::uint32_t limit) {
+    std::uint32_t length = 0;
+    if (!rU32(is, length) || length > limit) return false;
+    text.resize(length);
+    return length == 0 || rBytes(is, text.data(), length);
+}
+
+bool validExtensions(const SimConfig& cfg, const std::string& policyName) {
+    const auto& scenario = cfg.scenario;
+    if (!validExtensionId(scenario.id) || scenario.version != 1 ||
+        !(scenario.initialNutrientMultiplier >= 0.0 && scenario.initialNutrientMultiplier <= 20.0) ||
+        !(scenario.nutrientDiffusion >= 0.0 && scenario.nutrientDiffusion <= 1.0)) return false;
+    const auto& policy = cfg.policy;
+    if (policy.modelId.empty()) return policy.modelWeights.empty();
+    PerceptronPolicy::Params params;
+    return policyName == "perceptron" && validExtensionId(policy.modelId) &&
+           policy.modelWeights.size() <= 16384 &&
+           PerceptronPolicy::readWeights(policy.modelWeights, params) &&
+           params.kDim == SensorVector::kDim && params.kOutputs == 2;
 }
 
 } // namespace
@@ -184,8 +198,13 @@ bool writeCfgBlock(std::ostream& os, const SimConfig& cfg,
         err = "policy name too long";
         return false;
     }
-    if (!policyName.empty() && !isKnownPolicy(policyName)) {
+    PolicyConfig known;
+    if (!policyName.empty() && !selectPolicy(policyName, known)) {
         err = "unknown policy name: " + policyName;
+        return false;
+    }
+    if (!validExtensions(cfg, policyName)) {
+        err = "invalid scenario or model settings";
         return false;
     }
     wF64(os, cfg.world.width);
@@ -260,11 +279,21 @@ bool writeCfgBlock(std::ostream& os, const SimConfig& cfg,
         }
         return os.good();
     });
+    writeConfigText(os, cfg.scenario.id);
+    wU64(os, cfg.scenario.version);
+    os.put(cfg.scenario.dayCycle ? 1 : 0);
+    wF64(os, cfg.scenario.initialNutrientMultiplier);
+    wF64(os, cfg.scenario.nutrientDiffusion);
+    writeConfigText(os, cfg.policy.modelId);
+    writeConfigText(os, cfg.policy.modelWeights);
+    os.put(cfg.simultaneousDecisions ? 1 : 0);
+    os.put(cfg.policy.legacyPerceptron ? 1 : 0);
+    os.put(cfg.sporeEcology ? 1 : 0);
     return os.good();
 }
 
 bool readCfgBlock(std::istream& is, SimConfig& cfg,
-                  std::string& policyName, std::string& err, bool extended) {
+                  std::string& policyName, std::string& err, std::uint32_t version) {
     err.clear();
     double width = 0.0, height = 0.0;
     std::uint64_t seed = 0, maxTicks = 0, nuclei = 0, maxNuclei = 0;
@@ -358,13 +387,16 @@ bool readCfgBlock(std::istream& is, SimConfig& cfg,
         err = "cannot read policyName bytes"; return false;
     }
     // 白名单：未知策略名读档即报错（装配面不存在静默回退）。
-    if (!isKnownPolicy(policyName)) {
+    if (!selectPolicy(policyName, cfg.policy)) {
         err = "unknown policy in save: " + policyName;
         return false;
     }
-    applyPolicyName(cfg, policyName);
     cfg.policy.mutation = mu;
-    if (!extended) return true;
+    cfg.scenario = {};
+    cfg.simultaneousDecisions = false;
+    cfg.policy.legacyPerceptron = true;
+    cfg.sporeEcology = false;
+    if (version == 1u) return true;
     const bool readTuning = visitTuning(cfg, [&](auto&... fields) {
         const auto readField = [&](auto& value) {
             using T = std::decay_t<decltype(value)>;
@@ -393,6 +425,36 @@ bool readCfgBlock(std::istream& is, SimConfig& cfg,
     if (!readLists) {
         err = "cannot read saved simulation tuning";
         return false;
+    }
+    if (version >= 3u) {
+        auto& scenario = cfg.scenario;
+        if (!readConfigText(is, scenario.id, 48) || !rU64(is, scenario.version)) {
+            err = "cannot read scenario identity";
+            return false;
+        }
+        const int dayCycle = is.get();
+        scenario.dayCycle = dayCycle == 1;
+        if ((dayCycle != 0 && dayCycle != 1) ||
+            !rF64(is, scenario.initialNutrientMultiplier) || !rF64(is, scenario.nutrientDiffusion) ||
+            !readConfigText(is, cfg.policy.modelId, 48) ||
+            !readConfigText(is, cfg.policy.modelWeights, 16384) || !validExtensions(cfg, policyName)) {
+            err = "invalid saved scenario or model";
+            return false;
+        }
+        const int decisions = is.get();
+        const int legacyPerceptron = is.get();
+        if ((decisions != 0 && decisions != 1) ||
+            (legacyPerceptron != 0 && legacyPerceptron != 1)) {
+            err = "invalid saved decision settings";
+            return false;
+        }
+        cfg.simultaneousDecisions = decisions == 1;
+        cfg.policy.legacyPerceptron = legacyPerceptron == 1;
+    }
+    if (version >= 4u) {
+        const int spores = is.get();
+        if (spores != 0 && spores != 1) { err = "invalid saved spore settings"; return false; }
+        cfg.sporeEcology = spores == 1;
     }
     return true;
 }
@@ -504,9 +566,9 @@ bool parseHeaderStream(std::istream& is, SimConfig& cfg,
     std::uint32_t version = 0;
     if (!rU32(is, magic) || !rU32(is, version)) { err = "cannot read header"; return false; }
     if (magic != kMagic) { err = "bad magic (not ASAV)"; return false; }
-    if (version != 1u && version != kVersion) {
+    if (version < 1u || version > kVersion) {
         err = "unsupported save version: " + std::to_string(version) +
-              " (expected 1 or " + std::to_string(kVersion) + ")";
+              " (expected 1 through " + std::to_string(kVersion) + ")";
         return false;
     }
     unsigned char seedIsDefault = 0;
@@ -514,7 +576,7 @@ bool parseHeaderStream(std::istream& is, SimConfig& cfg,
     (void)seedIsDefault;
     unsigned char pad[3];
     if (!rBytes(is, pad, 3)) { err = "cannot read header pad"; return false; }
-    if (!savedetail::readCfgBlock(is, cfg, policyName, err, version >= 2u)) return false;
+    if (!savedetail::readCfgBlock(is, cfg, policyName, err, version)) return false;
     return true;
 }
 

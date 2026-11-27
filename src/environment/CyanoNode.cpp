@@ -80,7 +80,7 @@ CyanoField::CyanoField(const CyanoParams& p) : params_(p) {}
 // 吃掉更多组织就会让节点死亡。这个量在感知、选目标、请求、扣库存四处共用。
 double CyanoField::edibleOf(const CyanoNode& n, const CyanoParams& p) {
     if (!n.alive) return 0.0;
-    const double e = n.material - p.minStructure;
+    const double e = n.material - (n.isSpore() ? 0.0 : p.minStructure);
     return e > 0.0 ? e : 0.0;
 }
 
@@ -267,6 +267,9 @@ CyanoStepReport CyanoField::step(double sunLevel, double worldW, double worldH,
     CyanoStepReport report;
     worldW_ = worldW; // 环面尺寸快照（连线传输 linkTransfer 使用）
     worldH_ = worldH;
+    for (CyanoNode& node : nodes_) {
+        if (node.alive && node.isSpore()) --node.sporeTicks;
+    }
 
     // ---- 阶段 1：光合（不耗 rng）----
     // R3-A 自遮光：localSun = sunLevel * exp(-shadeK * shade_[i])，
@@ -278,7 +281,7 @@ CyanoStepReport CyanoField::step(double sunLevel, double worldW, double worldH,
     if (shade_.size() != nodes_.size()) shade_.resize(nodes_.size(), 0.0);
     for (std::size_t ci = 0; ci < nodes_.size(); ++ci) {
         CyanoNode& node = nodes_[ci];
-        if (!node.alive) continue;
+        if (!node.isProducer()) continue;
         double gain = 0.0;
         if (sunLevel > 0.0) {
             const double localSun =
@@ -309,7 +312,7 @@ CyanoStepReport CyanoField::step(double sunLevel, double worldW, double worldH,
     // 【红队 R8-P0 修正 2026-10-31】饿死清算必须入账：实际耗散 = 死前能量，
     // 记入 metabolismLoss（账面耗散），账实相等。
     for (CyanoNode& node : nodes_) {
-        if (!node.alive) continue;
+        if (!node.isProducer()) continue;
         const double loss = params_.metabolismRate;
         node.energy -= loss;
         if (node.energy <= 0.0) {
@@ -370,7 +373,7 @@ CyanoStepReport CyanoField::step(double sunLevel, double worldW, double worldH,
     // 的"产球判定/产球位置"整段消失同步收缩——见文件头的消耗序声明。
     for (std::size_t i = 0; i < nodes_.size(); ++i) {
         CyanoNode& node = nodes_[i];
-        if (!node.alive) continue;
+        if (!node.isProducer()) continue;
         const double roomMat = params_.maxMaterial - node.material;
         if (roomMat <= 0.0) continue;
         double n = params_.growthPerTick < roomMat ? params_.growthPerTick : roomMat;
@@ -409,7 +412,7 @@ CyanoStepReport CyanoField::step(double sunLevel, double worldW, double worldH,
     const std::size_t frameStartCount = nodes_.size();
     for (std::size_t i = 0; i < frameStartCount; ++i) {
         CyanoNode& node = nodes_[i];
-        if (!node.alive) continue;
+        if (!node.isProducer()) continue;
         // RNG 纪律：无论是否触顶，这里都必须消费一次 nextDouble()，
         // 否则 maxNodes 的取值会改变后续随机流（破坏"同 seed 同轨迹"）。
         // 触顶时把判定结果强制为 false，随机数照抽。
@@ -480,10 +483,12 @@ CyanoStepReport CyanoField::step(double sunLevel, double worldW, double worldH,
         // 规则 v2：物质也要分家——子代拿走亲代一半的可食组织，亲代相应减少。
         // 物质只在两者之间搬家（零和），不会凭空产生（验收 A7）。
         // 判定阶段已验证两半均高于 minStructure。
-        const double childMat = parent.material * 0.5;
+        const double childMat = params_.sporeMaturationTicks == 0 ? parent.material * 0.5
+            : std::min(parent.material * 0.5, params_.minStructure + 4.0);
         parent.material -= childMat;
         child.material = childMat;
         child.alive = true;
+        child.sporeTicks = params_.sporeMaturationTicks;
         // R1-B：遗传色相 = 父 + 高斯抖动（splitJitter[k] 与 splitParents[k] 严格配对），
         // 环绕回 [0,360)。分裂成功才消费抖动样本；放弃分支的样本被丢弃。
         child.hue = wrapHue(parent.hue + params_.hueJitterSigma * splitJitter[k]);
@@ -540,9 +545,9 @@ void CyanoField::linkTransfer() {
         // 保证"关连线"不会顺带静默关闭自遮光）。
         if (wantShade && n >= static_cast<std::size_t>(2)) {
             for (std::size_t si = 0; si < n; ++si) {
-                if (!nodes_[si].alive) continue;
+                if (!nodes_[si].isProducer()) continue;
                 for (std::size_t sj = si + 1; sj < n; ++sj) {
-                    if (!nodes_[sj].alive) continue;
+                    if (!nodes_[sj].isProducer()) continue;
                     const double d = torusDistance(nodes_[si].pos, nodes_[sj].pos,
                                                    worldW_, worldH_);
                     if (d < params_.shadeRadius) {
@@ -575,9 +580,9 @@ void CyanoField::linkTransfer() {
     if (!useGrid) {
         // ---- 旧全对扫描（微型世界/退化配置保底，与 R11 前逐位一致）----
         for (std::size_t i = 0; i < n; ++i) {
-            if (!nodes_[i].alive) continue;
+            if (!nodes_[i].isProducer()) continue;
             for (std::size_t j = 0; j < n; ++j) {
-                if (j == i || !nodes_[j].alive) continue;
+                if (j == i || !nodes_[j].isProducer()) continue;
                 const double d =
                     torusDistance(nodes_[i].pos, nodes_[j].pos, worldW_, worldH_);
                 if (wantShade && j > i && d < params_.shadeRadius) {
@@ -598,7 +603,7 @@ void CyanoField::linkTransfer() {
         std::vector<std::vector<std::size_t>> buckets(
             static_cast<std::size_t>(cellsX) * static_cast<std::size_t>(cellsY));
         for (std::size_t i = 0; i < n; ++i) {
-            if (!nodes_[i].alive) continue;
+            if (!nodes_[i].isProducer()) continue;
             int bx = static_cast<int>(nodes_[i].pos.x / cellSize);
             int by = static_cast<int>(nodes_[i].pos.y / cellSize);
             if (bx < 0) bx = 0;
@@ -612,7 +617,7 @@ void CyanoField::linkTransfer() {
         std::vector<ShadePair> shadePairs;
         if (wantShade) shadePairs.reserve(n);
         for (std::size_t i = 0; i < n; ++i) {
-            if (!nodes_[i].alive) continue;
+            if (!nodes_[i].isProducer()) continue;
             int bx = static_cast<int>(nodes_[i].pos.x / cellSize);
             int by = static_cast<int>(nodes_[i].pos.y / cellSize);
             if (bx < 0) bx = 0;
@@ -656,7 +661,7 @@ void CyanoField::linkTransfer() {
 
     // (2) 双向互选成边并结算：只从小下标侧发起（i<j 有序对，每对至多一次）。
     for (std::size_t i = 0; i < n; ++i) {
-        if (!nodes_[i].alive) continue;
+        if (!nodes_[i].isProducer()) continue;
         for (const std::pair<double, std::size_t>& pr : picks[i]) {
             const std::size_t j = pr.second;
             if (j <= i) continue; // 有序对去重
@@ -719,6 +724,11 @@ double CyanoField::graze(EntityId id, double rawEnergy, double conversionRate) {
         return taken;
     }
     return 0.0;
+}
+
+std::size_t CyanoField::sporeCount() const {
+    return static_cast<std::size_t>(std::count_if(nodes_.begin(), nodes_.end(),
+        [](const CyanoNode& node) { return node.alive && node.isSpore(); }));
 }
 
 std::size_t CyanoField::aliveCount() const {
@@ -792,9 +802,9 @@ void CyanoField::refreshShadeCache() {
         !(params_.shadeSigma > 0.0)) return;
     const double twoSigma2 = 2.0 * params_.shadeSigma * params_.shadeSigma;
     for (std::size_t i = 0; i < n; ++i) {
-        if (!nodes_[i].alive) continue;
+        if (!nodes_[i].isProducer()) continue;
         for (std::size_t j = i + 1; j < n; ++j) {
-            if (!nodes_[j].alive) continue;
+            if (!nodes_[j].isProducer()) continue;
             const double d = torusDistance(nodes_[i].pos, nodes_[j].pos,
                                            worldW_, worldH_);
             if (d < params_.shadeRadius) {

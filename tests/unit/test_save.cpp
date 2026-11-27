@@ -89,13 +89,14 @@ TEST(save_and_timeline_restore_active_winter_and_live_tuning) {
     CHECK(live.runTo(23u));
     const auto savedHash = live.stateHash();
     std::string error;
-    CHECK(agentsim::app::SaveStore::save(scratch.name, live, tuned, "rule", error));
+    CHECK(agentsim::app::SaveStore::save(scratch.name, live, tuned, tuned.policy.name, error));
     const std::string timelineFile = "saves/" + scratch.name + "/timeline.bin";
     CHECK(timeline.exportTo(timelineFile, error));
 
     agentsim::SimConfig loadedConfig;
     std::string policy;
     CHECK(agentsim::app::SaveStore::loadHeader(scratch.name, loadedConfig, policy, error));
+    CHECK(policy == tuned.policy.name);
     CHECK_NEAR(loadedConfig.nucleus.respirationBase, 0.09, 1e-12);
     CHECK_NEAR(loadedConfig.cyanoTuning.photosynthesisRate, 1.42, 1e-12);
     CHECK_NEAR(loadedConfig.ball.scoutSenseRadius, 61.0, 1e-12);

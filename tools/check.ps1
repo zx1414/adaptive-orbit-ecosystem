@@ -1,5 +1,5 @@
 ﻿# agentsim - tools/check.ps1 : guard + build + unit tests + double-run determinism.
-param()
+param([string]$BuildDirectory = 'build/gate')
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
@@ -94,16 +94,21 @@ if ($decRngWarn.Count -gt 0) {
 }
 # 2) build.
 Write-Host "--- build.ps1 ---"
-& powershell -NoProfile -ExecutionPolicy Bypass -File "$root\tools\build.ps1"
+& powershell -NoProfile -ExecutionPolicy Bypass -File "$root\tools\build.ps1" -OutputDirectory $BuildDirectory
 if ($LASTEXITCODE -ne 0) {
     Report "build" $false "build.ps1 exit $LASTEXITCODE"
+    exit 1
 } else {
     Report "build" $true $null
 }
+$outputRoot = (Resolve-Path -LiteralPath $BuildDirectory).ProviderPath
+$exe = Join-Path $outputRoot 'agentsim.exe'
+$unitExe = Join-Path $outputRoot 'unit_tests.exe'
+$tracePath = Join-Path $outputRoot 'v3.json'
 
 # 3) unit tests.
-if (Test-Path "$root\build\unit_tests.exe") {
-    & "$root\build\unit_tests.exe"
+if (Test-Path -LiteralPath $unitExe) {
+    & $unitExe
     $unitExit = $LASTEXITCODE
     Report "unit_tests" ($unitExit -eq 0) "exit $unitExit"
 } else {
@@ -113,23 +118,29 @@ if (Test-Path "$root\build\unit_tests.exe") {
 # 3b) frontend smoke: parser/renderer/DOM stub end-to-end (~1.5s, zero deps).
 #     Without it the frontend is only verified when a human opens a browser,
 #     i.e. effectively never.
-# smoke 第 7 节需要 build/v3.json 做真实 trace 对拍。如果没有就先生成——
-# 否则每次清 build 后 smoke 静默少跑 12 条断言（checks 数会浮动，掩盖回归）。
+# Generate a real trace from this build before the frontend smoke suite.
 if (Test-Path "$root\frontend\tools\smoke.mjs") {
     $traceOk = $false
-    if (Test-Path "$root\build\agentsim.exe") {
+    if (Test-Path -LiteralPath $exe) {
         $previousErrorAction = $ErrorActionPreference
         try {
             $ErrorActionPreference = "Continue"
-            & "$root\build\agentsim.exe" --no-render --ticks 500 --seed 42 --audit --trace "$root\build\v3.json" --trace-interval 20 2>&1 | Out-Null
-            $traceOk = ($LASTEXITCODE -eq 0 -or $LASTEXITCODE -eq 5) -and (Test-Path "$root\build\v3.json")
+            & $exe --no-render --ticks 500 --seed 42 --audit --trace $tracePath --trace-interval 20 2>&1 | Out-Null
+            $traceOk = ($LASTEXITCODE -eq 0 -or $LASTEXITCODE -eq 5) -and (Test-Path -LiteralPath $tracePath)
         } finally {
             $ErrorActionPreference = $previousErrorAction
         }
     }
     if ($traceOk) {
-        & node "$root\frontend\tools\smoke.mjs" 2>&1 | Select-Object -Last 3
-        Report "frontend smoke" ($LASTEXITCODE -eq 0) "exit $LASTEXITCODE"
+        $previousErrorAction = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = "Continue"
+            & node "$root\frontend\tools\smoke.mjs" $tracePath 2>&1 | Select-Object -Last 3
+            $smokeExit = $LASTEXITCODE
+        } finally {
+            $ErrorActionPreference = $previousErrorAction
+        }
+        Report "frontend smoke" ($smokeExit -eq 0) "exit $smokeExit"
     } else {
         Report "frontend smoke" $false "could not generate current audited trace"
     }
@@ -138,7 +149,6 @@ if (Test-Path "$root\frontend\tools\smoke.mjs") {
 }
 
 # 4) double run: same seed twice, byte-identical stdout.
-$exe = "$root\build\agentsim.exe"
 $runOut = @()
 if (Test-Path $exe) {
     $args1 = @("--no-render", "--ticks", "200", "--seed", "42", "--audit")
@@ -161,7 +171,6 @@ if ($runOut.Count -gt 0) { Write-Host ($runOut[-1]) }
 # 5) 死参数守卫（GOAL §6：任何 CLI 参数/配置键，改它必须能观察到输出变化）。
 #    抽样关键参数，改值后 stdout 末行必须变化。
 #    比较前剥掉末尾 policy= 字段：它随 --policy 探测变化，会掩盖其它参数的数值差异。
-$exe = "$root\build\agentsim.exe"
 if (Test-Path $exe) {
     $base = (& $exe --no-render --ticks 1000 --seed 42 2>&1 | Select-Object -Last 1) -replace ' policy=\w+',''
     # R1-B：--food / --regrow 探针已删除（Food 实体不存在）。换成蓝细菌等价

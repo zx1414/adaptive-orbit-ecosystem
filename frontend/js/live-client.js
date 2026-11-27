@@ -109,8 +109,8 @@ window.LiveClient = (function () {
         magic.toString(16) + ' —— 这不是 agentsim /state 快照');
     }
     var version = dv.getUint8(1);
-    if (version !== 1 && version !== 2) {
-      throw new Error('/state 版本不匹配：期望 1 或 2，实际 ' + version +
+    if (version !== 1 && version !== 2 && version !== 3) {
+      throw new Error('/state 版本不匹配：期望 1、2 或 3，实际 ' + version +
         '（请更新前端或后端，两者必须同一版快照格式）');
     }
     var phase = dv.getUint8(2);                       // 0=运行 1=结束 2=暂停
@@ -152,7 +152,8 @@ window.LiveClient = (function () {
     }
 
     // stride 自检（卡面公式）：不符 → 警告不崩。R8-A：核步长随 version（v2=128B 含 24 基因）
-    var need = 80 + nB * 25 + nN * ((version >= 2) ? 128 : 32) + nC * 20 + nL * 8;
+    var CYANO_REC = version >= 3 ? 21 : 20;
+    var need = 80 + nB * 25 + nN * ((version >= 2) ? 128 : 32) + nC * CYANO_REC + nL * 8 + (version >= 3 ? 24 : 0);
     var strideWarn = (need !== dv.byteLength);
     if (strideWarn) {
       warn('stride 不匹配：头部计数需要 ' + need + ' 字节，实际载荷 ' + dv.byteLength +
@@ -203,6 +204,7 @@ window.LiveClient = (function () {
         cap: dv.getFloat32(off + 16, LE),
         speed: dv.getFloat32(off + 20, LE),
         alive: dv.getUint8(off + 28) !== 0,
+        feedingTicks: version >= 3 ? dv.getUint8(off + 29) : 0,
         forceTarget: -1, forceX: 0, forceY: 0,   // /state 无施力字段 → 渲染层安全默认
         hue: dv.getFloat32(off + 24, LE),
         hueReal: true,                            // 后端 genome.hue 是真遗传色相
@@ -238,9 +240,9 @@ window.LiveClient = (function () {
     }
 
     // 蓝细菌 20B：id(u32) x y energy hue(f32×4)
-    var tc = fit(Math.min(nC, MAX_SANE_ENTITIES), 20, '蓝细菌');
+    var tc = fit(Math.min(nC, MAX_SANE_ENTITIES), CYANO_REC, '蓝细菌');
     for (var c = 0; c < tc; c++) {
-      if (off + 20 > dv.byteLength) break;
+      if (off + CYANO_REC > dv.byteLength) break;
       cyano.push({
         id: dv.getUint32(off, LE),
         x: dv.getFloat32(off + 4, LE),
@@ -248,9 +250,10 @@ window.LiveClient = (function () {
         energy: dv.getFloat32(off + 12, LE),
         alive: true,                              // 快照只含活节点（帧末压缩语义）
         hue: dv.getFloat32(off + 16, LE),
+        spore: version >= 3 && dv.getUint8(off + 20) !== 0,
         hueReal: true
       });
-      off += 20;
+      off += CYANO_REC;
     }
 
     // 连线 8B：idA(u32) idB(u32)；自环防御性丢弃（与 parseLinks 语义一致）
@@ -263,10 +266,15 @@ window.LiveClient = (function () {
     }
 
     // 统计：totalEnergy/cyanoEnergy 由实体逐个加总（display-only；账目权威在后端）
-    var totalE = 0, cyanoE = 0;
+    var totalE = 0, cyanoE = 0, injected = null, dissipated = null;
     for (var s1 = 0; s1 < nuclei.length; s1++) totalE += nuclei[s1].energy;
     for (var s2 = 0; s2 < balls.length; s2++) totalE += balls[s2].energy;
     for (var s3 = 0; s3 < cyano.length; s3++) { cyanoE += cyano[s3].energy; totalE += cyano[s3].energy; }
+    if (version >= 3 && off + 24 <= dv.byteLength) {
+      injected = dv.getFloat64(off, LE);
+      dissipated = dv.getFloat64(off + 8, LE);
+      totalE = dv.getFloat64(off + 16, LE);
+    }
 
     // 多样性（真 hue）：核与蓝细菌各算圆标准差
     var nucHues = [], cyHues = [];
@@ -284,7 +292,10 @@ window.LiveClient = (function () {
       cyanoHueSd: circSdDeg(cyHues),
       stats: {
         nuclei: (nAlive > 0 ? nAlive : nuclei.length),
-        cyanoAlive: (cyano.length || nC),
+        cyanoAlive: cyano.filter(function (node) { return !node.spore; }).length,
+        spores: cyano.filter(function (node) { return node.spore; }).length,
+        injected: injected,
+        dissipated: dissipated,
         cyanoEnergy: cyanoE,
         totalEnergy: totalE,
         auditOk: audit === 1 ? true : (audit === 2 ? false : null)

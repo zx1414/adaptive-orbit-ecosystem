@@ -451,28 +451,16 @@ TEST(ball_radius_grows_with_energy_and_gain_drops_below_0_2) {
 // 32 节点 / 4 聚落让养分/组织回到 2.67（与默认 1024² 世界同量级）。
 // 断言（种群必须增长）一字未改。
 TEST(simulation_reproduction_grows_population_over_ticks) {
-    agentsim::SimConfig cfg{}; // 默认 12 核
-    cfg.world.width = 256.0; cfg.world.height = 256.0;  // R8-T53：钉 256 小世界（机制测繁殖，长跑需快）
-    // R10/R11：256 世界必须同时钉 256 时代的播种密度（默认已随 1024 世界放大——
-    // 64 聚落×spread45 塞进 256² 会互相遮蔽，光合崩溃，机制测试失真）。
-    // 规则 v2 追加约束：密度还要与**养分场**的尺度匹配（见上方注释）。
-    cfg.cyanoNodeCount = 32; cfg.cyanoTuning.cyanoColonies = 4;
+    agentsim::SimConfig cfg{};
+    cfg.cyanoNodeCount = 48;  // Match the standard game opening.
     agentsim::Simulation sim(cfg);
+    sim.setAuditEnabled(true);
     CHECK(sim.nucleusCount() == 12);
-    // 【2026-11-25 迁移到规则 v2】本用例要守的是"繁殖真的在组合根循环里发生"，
-    // 不是某个特定的期末种群数。规则 v2 改变了净增长的数值（不再是旧版的
-    // 276 核爆发），但这不等于繁殖没接通——旧断言用"期末 > 12"把**繁殖**与
-    // **净增长**混为一谈，死亡率一高就误报成"繁殖断了"。
-    // 现在直接盯繁殖本身：记录创始个体的最大 id，跑完后若出现更大的 id，
-    // 就证明组合根确实调用了 reproduce 并产出了子代（id 由 nextNucleusId_ 单调分配）。
-    // 期末净种群数则如实记录在注释里：规则 v2 下消费者死亡率高于出生率，
-    // 净种群收缩（实测 seed42/6000 tick：出生 4 个、期末存活 2 个）。
-    // "让种群稳定增长"属于后续决策层优化的工作，不在本轮机制验收范围内。
     agentsim::EntityId founderMaxId = 0;
     for (const agentsim::Nucleus& n : sim.nuclei()) {
         if (n.id > founderMaxId) founderMaxId = n.id;
     }
-    CHECK(sim.runTo(6000));
+    CHECK(sim.runTo(1200));
     CHECK(sim.auditOk());
     agentsim::EntityId maxSeenId = founderMaxId;
     for (const agentsim::Nucleus& n : sim.nuclei()) {
@@ -508,16 +496,25 @@ TEST(apply_respects_energy_conservation_with_balls) {
 // ---- T43-5：组合根轨迹在有无地形下不同，但两跑 audit 全程 ok ----
 TEST(terrain_changes_trajectory_but_audit_ok) {
     agentsim::SimConfig cfg{}; // 默认无地形
-    agentsim::SimConfig cfgOn{};
+    agentsim::Simulation simOff(cfg);
+    simOff.setAuditEnabled(true);
+    const auto start = simOff.nuclei().front().pos;
+    CHECK(simOff.runTo(1));
+    const auto destination = simOff.nuclei().front().pos;
+    const double distance = agentsim::length(agentsim::torusDeltaWrapped(
+        start, destination, cfg.world.width, cfg.world.height));
+    CHECK(distance > 0.0);
+
+    agentsim::SimConfig cfgOn = cfg;
     agentsim::TerrainConfig tc = makeEmptyTerrainConfig();
     agentsim::TerrainBlob b;
-    b.x = 128.0;
-    b.y = 128.0;
-    b.radius = 60.0;
+    b.x = destination.x;
+    b.y = destination.y;
+    b.radius = distance * 0.5;
     tc.obstacles.push_back(b);
     cfgOn.terrain = tc;
-    agentsim::Simulation simOff(cfg);
     agentsim::Simulation simOn(cfgOn);
+    simOn.setAuditEnabled(true);
     CHECK(simOff.runTo(200)); // 每 tick 末审计通过才返回 true
     CHECK(simOn.runTo(200));
     CHECK(simOff.auditOk());

@@ -37,7 +37,7 @@ constexpr double kPolicyLogHalfWeight = -0.69314718055994530941723212145817657;
 
 struct PolicyMemory {
     // 记忆布局版本。存档接好后：版本不符 -> 提示并拒绝；本版 = 1。
-    static constexpr int kSchemaVersion = 1;
+    static constexpr int kSchemaVersion = 2;
     int schemaVersion = kSchemaVersion;
 
     // ================= ForageBankPolicy（觅食 / 蓄能两态滞回） =================
@@ -49,6 +49,7 @@ struct PolicyMemory {
     // 上帧选中的候选下标 0/1/2（滞回的"现任"）；-1 = 尚未选择。
     // 无候选帧刻意不改它（食物只是暂时离开视野），该语义也随记忆归个体。
     int hysteresisLastChoice = -1;
+    EntityId hysteresisTarget = 0;
 
     // ================= RiskAversePolicy（EROI 状态机） =================
     double riskEroi = 0.0;                // EMA 后含温度折扣的 EROI 估计，恒 >= 0

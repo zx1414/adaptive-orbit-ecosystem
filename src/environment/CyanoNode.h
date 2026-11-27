@@ -141,6 +141,7 @@ struct CyanoParams {
     // 摄食同化率：咬下的组织里 assimilated 部分进入核体（物质）与核能量，
     // 其余回到环境（残骸/养分，P1 接线）。A2 的"取走量"与"吸收量"分开结算。
     double assimilation = 0.7;
+    std::uint32_t sporeMaturationTicks = 0;
 };
 
 struct CyanoNode {
@@ -158,6 +159,9 @@ struct CyanoNode {
     double material = 120.0;
     bool alive = true;
     double hue = 0.0;   // R1-B：遗传色相 ∈ [0,360)（seed 均匀采样；分裂 = 父 + 高斯抖动）
+    std::uint32_t sporeTicks = 0;
+    bool isSpore() const { return sporeTicks != 0; }
+    bool isProducer() const { return alive && !isSpore(); }
 };
 
 // 一帧的收支报告：本模块不碰账本，只报数字，由组合根记账。
@@ -262,6 +266,7 @@ public:
 
     const std::vector<CyanoNode>& nodes() const { return nodes_; }
     std::size_t aliveCount() const;
+    std::size_t sporeCount() const;
     double totalEnergy() const;
     // 规则 v2：全图存活节点的组织总量（物质账审计用；与能量账完全独立）。
     double totalMaterial() const;

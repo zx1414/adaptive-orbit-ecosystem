@@ -1,6 +1,6 @@
 // agentsim - app/RuntimeEnv.cpp
 // R3-B：EnvChange{key,value} -> SimConfig 字段映射的实现（映射唯一权威）。
-// 总账对 docs/PARAM-MAPPING.md：
+// 下方表格记录可调键到配置字段的映射。
 //   genome 24 键 -> colony.genomeRanges（Init 收敛到 v + Clamp 扩到包含 v，见 genomeRange）
 //   light 10 键 -> 7 键 sun.* / 半饱和 -> cyanoTuning / warmth+grid -> runtime.*
 //   food 12 键 -> ball_* 7 键 -> ball.*；spawn_probability/cost/min/max -> cyanoTuning

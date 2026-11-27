@@ -4,20 +4,25 @@
 // ——确定性门禁（check.ps1 双跑）以本文件批跑输出为契约，serve 模式是旁路。
 #include "app/Cli.h"
 #include "app/EnvControl.h"
+#include "app/ExtensionCatalog.h"
 #include "app/HttpServer.h"
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN  // R8-A：防 windows.h 拖入 winsock.h 与下方 winsock2.h 冲突
 #endif
-#include <windows.h>  // R8-A：ShellExecuteA 自动拉起浏览器（无参双击模式）
+#include <windows.h>
 #include <shellapi.h>
-#pragma comment(lib, "shell32.lib")  // R8-A：ShellExecuteA 链接
+#include <shlobj.h>
+#pragma comment(lib, "shell32.lib")
+#pragma comment(lib, "user32.lib")
 #include "app/ParamSchema.h"
+#include "app/ResearchEpisode.h"
 #include "app/ResourcePack.h"
 #include "app/RuntimeEnv.h"
 #include "app/SaveStore.h"
 #include "app/Timeline.h"
 #include "app/TraceWriter.h"
+#include "decision/PolicyRegistry.h"
 #include "sim/Simulation.h"
 
 #include <algorithm>
@@ -31,6 +36,7 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <iostream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -44,6 +50,16 @@
 #endif
 
 namespace {
+
+#ifndef AGENTSIM_VERSION
+#define AGENTSIM_VERSION dev
+#endif
+#define AGENTSIM_STRINGIFY_VALUE(value) #value
+#define AGENTSIM_STRINGIFY(value) AGENTSIM_STRINGIFY_VALUE(value)
+constexpr char kAppVersion[] = AGENTSIM_STRINGIFY(AGENTSIM_VERSION);
+constexpr char kLaunchReadyPath[] = "/launch-ready/" AGENTSIM_STRINGIFY(AGENTSIM_VERSION);
+#undef AGENTSIM_STRINGIFY
+#undef AGENTSIM_STRINGIFY_VALUE
 
 // serve 段的短名（本文件匿名命名空间内；批跑函数体不用这些短名）。
 using agentsim::Ball;
@@ -62,6 +78,7 @@ using agentsim::app::EnvEffectState;
 using agentsim::app::EnvEffectStatus;
 using agentsim::app::EnvSeedRequest;
 using agentsim::app::EnvState;
+using agentsim::app::ExtensionCatalog;
 using agentsim::app::HttpServer;
 using agentsim::app::ParamSchema;
 using agentsim::app::ResourcePackStore;
@@ -77,7 +94,10 @@ void printHelp() {
     std::printf("  --cyano-nodes N            initial cyanobacteria node count (default 512)\n");
     std::printf("  --cyano-max-nodes N        cyanobacteria node hard cap (default 1024)\n");
     std::printf("  --sun-base F  --sun-amplitude F   sunlight baseline / day-cycle amplitude\n");
-    std::printf("  --policy rule|stub|perceptron|thermal  decision policy\n");
+    std::printf("  --policy ID                built-in policy or model.<id>\n");
+    std::printf("  --mod ID                   ecology scenario from mods/<id>.txt\n");
+    std::printf("  --extensions-dir PATH      override the directory containing mods/ and models/\n");
+    std::printf("  --research                 step navigation actions through stdin/stdout\n");
     std::printf("  --perceptron-seed S        perceptron policy init RNG seed\n");
     std::printf("  --perceptron-scale F       perceptron init weight/bias scale\n");
     std::printf("  --thermal-pref F           thermal policy preferred temperature\n");
@@ -170,6 +190,42 @@ std::string envJsonEscapeLocal(const std::string& s) {
         }
     }
     return out;
+}
+
+std::filesystem::path extensionRoot(const CliOptions& opts) {
+    if (!opts.extensionsDirectory.empty()) return std::filesystem::path(opts.extensionsDirectory);
+    wchar_t exePath[MAX_PATH] = {};
+    const auto length = GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+    if (length > 0 && length < MAX_PATH) {
+        const auto exeDir = std::filesystem::path(exePath).parent_path();
+        for (const auto& dir : {exeDir, exeDir.parent_path()}) {
+            std::error_code error;
+            if (std::filesystem::is_directory(dir / "mods", error)) return dir;
+        }
+    }
+    return ".";
+}
+
+std::string catalogJson(const ExtensionCatalog& catalog) {
+    std::string json = "{\"scenarios\":[";
+    const auto addEntry = [&](const std::string& id, const std::string& name) {
+        json += "{\"id\":\"" + envJsonEscapeLocal(id) + "\",\"name\":\"" +
+                envJsonEscapeLocal(name) + "\"},";
+    };
+    for (const auto& scenario : catalog.scenarios) addEntry(scenario.config.id, scenario.label);
+    json.pop_back();
+    json += "],\"policies\":[";
+    for (const auto& policy : agentsim::policies()) {
+        if (policy.visible) addEntry(policy.id, policy.label);
+    }
+    for (const auto& model : catalog.models) addEntry("model." + model.id, model.id);
+    json.pop_back();
+    json += "],\"errors\":[";
+    for (std::size_t i = 0; i < catalog.errors.size(); ++i) {
+        if (i != 0) json += ',';
+        json += "\"" + envJsonEscapeLocal(catalog.errors[i]) + "\"";
+    }
+    return json + "]}";
 }
 
 bool parseIntArg(const std::string& s, int& out) {
@@ -277,13 +333,14 @@ public:
     }
     void publish(std::uint64_t tick,
                  const std::vector<unsigned char>& state,
-                 int cyanoNodes, int cyanoLinks) {
+                 int cyanoNodes, int cyanoLinks, const Simulation::MatterLedger& matter) {
         std::lock_guard<std::mutex> lk(m_);
         tick_ = tick;
         EnvControl::expireEffect(effect_, static_cast<long long>(tick_));
         state_ = state;
         cyanoNodes_ = cyanoNodes;
         cyanoLinks_ = cyanoLinks;
+        matter_ = matter;
     }
     // P0-5：GET /env 改成"请求时现算"——主循环只出版计数与 tick，JSON 由 HTTP 线程
     // 用 EnvControl::toJson 现场拼。这样触发命令一落地，下一次 GET /env 立刻就能
@@ -293,6 +350,7 @@ public:
         int cyanoNodes = 0;
         int cyanoLinks = 0;
         bool paused = false;
+        Simulation::MatterLedger matter;
     };
     EnvCounts counts() const {
         std::lock_guard<std::mutex> lk(m_);
@@ -301,6 +359,7 @@ public:
         c.cyanoNodes = cyanoNodes_;
         c.cyanoLinks = cyanoLinks_;
         c.paused = paused_;   // 播放控制真值（用户按的是这个）
+        c.matter = matter_;
         return c;
     }
     std::uint64_t tick() const {
@@ -450,6 +509,7 @@ private:
     std::string worldError_;
     int cyanoNodes_ = 0;   // 主循环每帧出版：GET /env 现算用
     int cyanoLinks_ = 0;
+    Simulation::MatterLedger matter_{};
     // R6-C：/load 载入请求（HTTP 线程已 loadHeader 拿 cfg，主循环构造 sim 并恢复实体）。
     // R6-C：load 请求。
     bool loadPending_ = false;
@@ -609,12 +669,12 @@ void executeSeedRequests(Simulation& sim, const std::vector<EnvSeedRequest>& req
 }
 
 
-// ---- GET /state 二进制快照（格式定义见交付报告；任务卡 §4 契约）----
-// 小端，头 80 字节：magic 'A'(1) + version=1(1) + 状态(1) + 保留(1) + 帧号 i32(4)
+// ---- GET /state v3 二进制快照（见 docs/ARCHITECTURE.md）----
+// 小端，头 80 字节：magic 'A'(1) + version=3(1) + 状态(1) + 审计(1) + 帧号 i32(4)
 //   + 世界宽 f32(4) + 世界高 f32(4) + 球数 i32(4) + 核数 i32(4) + 存活核数 i32(4)
 //   + 自由球数 i32(4) + 蓝细菌节点数 i32(4) + 蓝细菌连线数 i32(4) + 蓝细菌平均能量 f32(4)
-//   + 全局阳光 f32(4) + 保留 i32(4) + 保留 char[28] = 80
-// 记录顺序：球(24B) -> 核(28B) -> 蓝细菌节点(20B) -> 蓝细菌连线(8B)。
+//   + 全局阳光 f32(4) + 节点上限 i32(4) + 状态说明 char[28] = 80
+// 记录顺序：球(25B) -> 核(128B) -> 蓝细菌(21B) -> 连线(8B) -> 能量账本(24B)。
 // 记录数与字节流的一致性：本函数在主循环线程内、step() 之外调用，函数执行期间
 // 世界状态不可变（detached_/alive 只在 step() 内变化），两遍遍历天然一致——
 // 头部计数字段从实际写入的字节统计而来，恒与总长自洽。
@@ -638,6 +698,11 @@ std::vector<unsigned char> buildStateSnapshot(const Simulation& sim,
         pushU32(static_cast<unsigned int>(v));
     };
     const auto pushU8 = [&out](unsigned char v) { out.push_back(v); };
+    const auto pushF64 = [&out](double value) {
+        std::uint64_t bits = 0;
+        std::memcpy(&bits, &value, sizeof(bits));
+        for (int i = 0; i < 8; ++i) out.push_back(static_cast<unsigned char>(bits >> (8 * i)));
+    };
 
     // ---- 球记录（隶属球按核序；自由球与 detached 交接球 owner=0）----
     std::size_t ballCount = 0;
@@ -682,8 +747,8 @@ std::vector<unsigned char> buildStateSnapshot(const Simulation& sim,
         ++freeBallCount;
     }
 
-    // ---- 核记录（只含存活核；v2：32B 头（id x y energy cap speed hue alive+pad3）+ 24×f32 基因 = 128B）----
-    // v2 基因区起始于记录 +32（alive+pad3 之后）；24 值顺序（Genome.h 声明顺序，前端 live-client.js 按此解析）：
+    // 核记录只含存活核。32B 头含存活标记、驻留帧数和两个保留字节。
+    // 基因区起始于记录 +32，24 值顺序见 Genome.h 和前端 live-client.js：
     //   [0..2]   affinity[Resource,Scout,Shield]
     //   [3..5]   orbitRadius[Resource,Scout,Shield]
     //   [6..8]   absorbPreference[Resource,Scout,Shield]
@@ -706,8 +771,8 @@ std::vector<unsigned char> buildStateSnapshot(const Simulation& sim,
         pushF32(static_cast<float>(n.speed));
         pushF32(static_cast<float>(n.genome.hue));  // 用户点名：核用色相变化
         pushU8(1);
-        pushU8(0); pushU8(0); pushU8(0);  // pad 到 4 字节边界
-        // R8-A /state v2：24 基因 f32（顺序契约见函数头注释；Genome.h 声明顺序）
+        pushU8(static_cast<unsigned char>(n.feedingTicks));
+        pushU8(0); pushU8(0);
         const agentsim::Genome& g = n.genome;
         for (int t = 0; t < 3; ++t) pushF32(static_cast<float>(g.affinity[t]));
         for (int t = 0; t < 3; ++t) pushF32(static_cast<float>(g.orbitRadius[t]));
@@ -737,6 +802,7 @@ std::vector<unsigned char> buildStateSnapshot(const Simulation& sim,
         pushF32(static_cast<float>(c.pos.y));
         pushF32(static_cast<float>(c.energy));
         pushF32(static_cast<float>(c.hue));
+        pushU8(c.isSpore() ? 1 : 0);
         ++cyanoCount;
         cyanoEnergy += c.energy;
     }
@@ -748,6 +814,9 @@ std::vector<unsigned char> buildStateSnapshot(const Simulation& sim,
         pushU32(static_cast<unsigned int>(lk.second & 0xFFFFFFFFu));
         ++linkCount;
     }
+    pushF64(sim.ledger().totalInjected());
+    pushF64(sim.ledger().totalDissipated());
+    pushF64(sim.totalEnergy());
 
     // ---- 头部：记录已写完，头部前插（记录区整体平移到 [80, end)）----
     std::vector<unsigned char> recs;
@@ -756,7 +825,7 @@ std::vector<unsigned char> buildStateSnapshot(const Simulation& sim,
     out.reserve(80 + recs.size());
 
     pushU8(0x41);                 // magic 'A'
-    pushU8(2);                    // version=2（R8-A：核记录 128B = 32B 头 + 24 基因；v1=32B 无基因）
+    pushU8(3);                    // v3 adds producer stage and adult feeding progress.
     const bool snapEnded = reason && std::strcmp(reason, "max_ticks") == 0;
     pushU8(paused ? 2 : (snapEnded ? 1 : 0));  // 状态：0=运行 1=已结束 2=暂停
     pushU8(sim.auditEnabled() ? (sim.auditOk() ? 1 : 2) : 0);
@@ -860,31 +929,42 @@ EnvEffectState restoredEffect(const Simulation& sim) {
             static_cast<long long>(effect.end)};
 }
 
-// ---- --serve 模式主循环 ----
-// 线程模型（数据竞争免疫的归属设计）：
-// HTTP 线程解析命令和维护控件状态；模拟线程推进世界、管理时间轴和生成快照。
-// ServeBridge 用同一把锁交换配置、命令及已发布的只读状态。
 void openGameWindow(int port) {
-    char url[64];
-    std::snprintf(url, sizeof(url), "http://127.0.0.1:%d/", port);
-    const char* edgePaths[] = {
-        "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
-        "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
+    const std::wstring url = L"http://127.0.0.1:" + std::to_wstring(port) + L"/";
+    const wchar_t* edgePaths[] = {
+        L"C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+        L"C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
     };
-    const std::string args = std::string("--app=") + url + " --start-maximized";
-    for (const char* edge : edgePaths) {
-        if (GetFileAttributesA(edge) == INVALID_FILE_ATTRIBUTES) continue;
-        const HINSTANCE opened = ShellExecuteA(nullptr, "open", edge, args.c_str(),
-                                               nullptr, SW_SHOWMAXIMIZED);
+    bool foundEdge = false;
+    for (const wchar_t* edge : edgePaths) {
+        if (GetFileAttributesW(edge) == INVALID_FILE_ATTRIBUTES) continue;
+        foundEdge = true;
+
+        // Edge instances share a lock for each user data directory.
+        std::error_code error;
+        const auto gameDir = std::filesystem::current_path(error);
+        if (error) break;
+        const auto profile = gameDir / "edge-profile";
+        std::filesystem::create_directories(profile, error);
+        if (error) break;
+        const std::wstring args = L"--user-data-dir=\"" + profile.native() +
+                                  L"\" --no-first-run --app=" + url + L" --start-maximized";
+        const HINSTANCE opened = ShellExecuteW(nullptr, L"open", edge, args.c_str(),
+                                                nullptr, SW_SHOWMAXIMIZED);
         if (reinterpret_cast<INT_PTR>(opened) > 32) return;
     }
-    const HINSTANCE opened = ShellExecuteA(nullptr, "open", url, nullptr, nullptr, SW_SHOWMAXIMIZED);
-    if (reinterpret_cast<INT_PTR>(opened) <= 32) {
-        MessageBoxA(nullptr, url, "Open agentsim in your browser", MB_OK | MB_ICONINFORMATION);
+    if (!foundEdge) {
+        const HINSTANCE opened = ShellExecuteW(nullptr, L"open", url.c_str(),
+                                               nullptr, nullptr, SW_SHOWMAXIMIZED);
+        if (reinterpret_cast<INT_PTR>(opened) > 32) return;
     }
+    const auto message = std::wstring(L"在已打开的浏览器中访问以下地址\n\n") + url;
+    MessageBoxW(nullptr, message.c_str(), L"agentsim", MB_OK | MB_ICONINFORMATION);
 }
 
-int serveMode(const CliOptions& opts, int port, bool ticksGiven, bool openBrowser, bool startPaused) {
+// HTTP 线程持有调控状态，模拟线程推进世界。ServeBridge 负责交换请求与快照。
+int serveMode(const CliOptions& opts, const ExtensionCatalog& catalog, int port,
+              bool ticksGiven, bool openBrowser, bool startPaused) {
     // R6-C：sim 改为 unique_ptr——/run /load 需要"原子替换世界"（关旧开新/换存档态），
     // 栈对象做不到。独占权在主循环；HTTP 线程只碰 bridge（既有模式不变）。
     auto simPtr = std::make_unique<agentsim::Simulation>(opts.config);
@@ -936,10 +1016,31 @@ int serveMode(const CliOptions& opts, int port, bool ticksGiven, bool openBrowse
                          std::string& resp, std::string& contentType,
                          int& status) -> bool {
         (void)query;
-        if (method == "GET" && (path == "/status" || path == "/launch-ready-v31")) {
+        if (method == "GET" && (path == "/status" || path == kLaunchReadyPath)) {
             // 只读 bridge 发布的 tick（锁内拷出的原子快照）。
-            resp = "{\"ok\":true,\"phase\":\"running\",\"tick\":" +
+            resp = std::string("{\"ok\":true,\"version\":\"") + kAppVersion +
+                   "\",\"phase\":\"running\",\"tick\":" +
                    std::to_string(bridge.tick()) + "}";
+            contentType = "application/json; charset=utf-8";
+            status = 200;
+            return true;
+        }
+        if (method == "GET" && path == "/catalog") {
+            resp = catalogJson(catalog);
+            contentType = "application/json; charset=utf-8";
+            status = 200;
+            return true;
+        }
+        if (method == "GET" && path == "/matter") {
+            const auto snapshot = bridge.counts();
+            const auto& matter = snapshot.matter;
+            char json[512];
+            std::snprintf(json, sizeof(json),
+                          "{\"tick\":%lld,\"nutrient\":%.17g,\"debris\":%.17g,"
+                          "\"cyanoMaterial\":%.17g,\"nucleusMass\":%.17g,\"externalIn\":%.17g}",
+                          snapshot.tick, matter.nutrient, matter.debris, matter.nodeMaterial,
+                          matter.nucleusMass, matter.externalIn);
+            resp = json;
             contentType = "application/json; charset=utf-8";
             status = 200;
             return true;
@@ -1028,19 +1129,19 @@ int serveMode(const CliOptions& opts, int port, bool ticksGiven, bool openBrowse
         if (method == "POST" && path == "/run") {
             // 开新局：按 body 参数构造新 SimConfig，经 bridge 入队，主循环原子换世界。
             agentsim::SimConfig next = bridge.config();
+            next.world = opts.config.world;
+            next.sporeEcology = opts.config.sporeEcology;
+            next.simultaneousDecisions = opts.config.simultaneousDecisions;
             const std::string seedS = formValue(body, "seed");
             const std::string nucleiS = formValue(body, "nuclei");
             const std::string cyanoS = formValue(body, "cyano_nodes");
             if (!seedS.empty()) next.world.seed = static_cast<std::uint64_t>(std::stoull(seedS));
             if (!nucleiS.empty()) next.colony.nuclei = static_cast<std::size_t>(std::stoul(nucleiS));
             if (!cyanoS.empty()) next.cyanoNodeCount = static_cast<std::size_t>(std::stoul(cyanoS));
-            // R10 框架键：决策策略选择（rule/perceptron/thermal/hysteresis/foragebank/
-            // bandit/riskaverse/stub——装配路由按名匹配，未知名回落 rule）。
             const std::string policyS = formValue(body, "policy");
-            if (!policyS.empty()) {
-                next.policy.name = policyS;
-                next.policy.usePerceptron = (policyS == "perceptron");
-                next.policy.useThermal = (policyS == "thermal");
+            if (!policyS.empty() && !catalog.selectDecision(policyS, next.policy)) {
+                resp = "{\"ok\":false,\"error\":\"unknown decision policy\"}";
+                contentType = "application/json; charset=utf-8"; status = 400; return true;
             }
             // R10：帧率上限随开局设置（0 = 不限帧，模拟全速跑）
             const std::string fpsS = formValue(body, "max_fps");
@@ -1048,14 +1149,9 @@ int serveMode(const CliOptions& opts, int port, bool ticksGiven, bool openBrowse
                 try { next.runtime.maxFps = std::stod(fpsS); } catch (...) {}
             }
             const std::string mod = formValue(body, "mod");
-            if (!mod.empty()) {
-                if (mod != "standard" && mod != "constant_light" && mod != "rich_nutrients") {
-                    resp = "{\"ok\":false,\"error\":\"unknown ecology mod\"}";
-                    contentType = "application/json; charset=utf-8"; status = 400; return true;
-                }
-                next.sun.dayAmplitude = mod == "constant_light" ? 0.0 : opts.config.sun.dayAmplitude;
-                next.cyanoTuning.nutrientBudgetRatio = opts.config.cyanoTuning.nutrientBudgetRatio *
-                    (mod == "rich_nutrients" ? 2.0 : 1.0);
+            if (!mod.empty() && !catalog.selectScenario(mod, next.scenario)) {
+                resp = "{\"ok\":false,\"error\":\"unknown ecology mod\"}";
+                contentType = "application/json; charset=utf-8"; status = 400; return true;
             }
             bridge.requestRun(next);
             std::string runError;
@@ -1258,7 +1354,7 @@ int serveMode(const CliOptions& opts, int port, bool ticksGiven, bool openBrowse
                                           serveSunEstimate(simRaw->effectiveSun(), simRaw->tick()),
                                           reason),
                        static_cast<int>(simRaw->cyanoNodes().size()),
-                       static_cast<int>(simRaw->cyanoLinks().size()));
+                       static_cast<int>(simRaw->cyanoLinks().size()), simRaw->matter());
     };
     const auto syncRestoredWorld = [&] {
         bridge.setConfig(simRaw->cfgProbe(), false);
@@ -1437,7 +1533,6 @@ int main(int argc, char** argv) {
                     int p = 0;
                     if (parseIntArg(argv[i + 1], p)) {
                         servePort = p;
-                        serveTicksGiven = true;
                         ++i;
                     }
                 }
@@ -1457,6 +1552,7 @@ int main(int argc, char** argv) {
                 servePort = p;
                 continue;
             }
+            if (a == "--ticks") serveTicksGiven = true;
             rest.push_back(argv[i]);
         }
         argc = static_cast<int>(rest.size());
@@ -1470,7 +1566,23 @@ int main(int argc, char** argv) {
         return 2;
     }
     if (opts.help) { printHelp(); return 0; }
-    if (opts.version) { std::printf("agentsim 3.1.0\n"); return 0; }
+    if (opts.version) { std::printf("agentsim %s\n", kAppVersion); return 0; }
+    const auto catalog = ExtensionCatalog::load(extensionRoot(opts));
+    if (!catalog.selectScenario(opts.scenario, opts.config.scenario)) {
+        std::fprintf(stderr, "unknown ecology mod: %s\n", opts.scenario.c_str());
+        return 2;
+    }
+    if (!catalog.selectDecision(opts.policy, opts.config.policy)) {
+        std::fprintf(stderr, "unknown decision policy: %s\n", opts.policy.c_str());
+        return 2;
+    }
+    if (opts.research) {
+        if (serve || opts.stats || opts.trace || opts.policy != "grazer") {
+            std::fprintf(stderr, "--research accepts external actions and cannot be combined with --serve, --stats, --trace or a built-in policy choice\n");
+            return 2;
+        }
+        return agentsim::app::runResearchEpisode(opts.config, opts.audit, std::cin, std::cout);
+    }
 
     // R8-A：无参双击 = 实时服务模式（此前走批跑 maxTicks=1000 即退，被用户判为"秒退"）。
     // 任何显式参数（含 --help/--version）保持既有批跑语义；--no-open 仅抑制浏览器拉起。
@@ -1504,8 +1616,9 @@ int main(int argc, char** argv) {
                     }
                 } else alive = true;
                 if (alive) {
-                    const char* req = "GET /launch-ready-v31 HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n";
-                    send(sock, req, static_cast<int>(strlen(req)), 0);
+                    const std::string req = std::string("GET ") + kLaunchReadyPath +
+                                            " HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n";
+                    send(sock, req.data(), static_cast<int>(req.size()), 0);
                     char rsp[64] = {};
                     // 读侧恢复阻塞语义前先给接收一个短窗（仍非阻塞，select 等待）
                     fd_set rset;
@@ -1536,7 +1649,8 @@ int main(int argc, char** argv) {
         // 失常——服务端口不监听、日志零输出）。单窗口体验改为文档指引：
         // 用户手动最小化控制台即可。诚实记录 LOG。
     }
-    if (serve) return serveMode(opts, servePort, serveTicksGiven, !noOpen, argc == 1 && !noOpen);
+    if (serve) return serveMode(opts, catalog, servePort, serveTicksGiven,
+                                !noOpen, argc == 1 && !noOpen);
 
     std::ofstream statsFile;
     if (opts.stats) {
@@ -1601,17 +1715,18 @@ int main(int argc, char** argv) {
                       << sim.stateHash() << '\n';
         }
         if (traceW.isOpen()) {
+            const auto spores = static_cast<long long>(sim.cyano().sporeCount());
             // series: one row per tick, never downsampled (contract v2).
             // T29：追加 cyanoAlive/cyanoEnergy（存活蓝细菌数/能量总和，
             // CyanoField::aliveCount()/totalEnergy() 已只算 alive，口径与账本一致）。
             traceW.addSeries(static_cast<long long>(sim.tick()),
                              static_cast<long long>(sim.nucleusCount()),
-                             static_cast<long long>(sim.cyano().aliveCount()),
+                             static_cast<long long>(sim.cyano().aliveCount()) - spores,
                              sim.cyano().totalEnergy(),
                              sim.totalEnergy(),
                              sim.ledger().totalInjected(),
                              sim.ledger().totalDissipated(),
-                             sim.auditOk());
+                             sim.auditOk(), spores);
             // frames: spatial snapshot, downsampled by --trace-interval.
             if ((sim.tick() % static_cast<std::uint64_t>(opts.traceInterval)) == 0) {
                 const double w = opts.config.world.width;
@@ -1649,7 +1764,7 @@ int main(int argc, char** argv) {
                 // 存活节点（饿死/被捕食节点帧末即压缩）。顺序 = nodes_ 下标（双跑一致）。
                 for (const agentsim::CyanoNode& cn : sim.cyanoNodes()) {
                     traceW.addCyano(static_cast<long long>(cn.id), cn.pos.x,
-                                    cn.pos.y, cn.energy, cn.alive, cn.hue);
+                                    cn.pos.y, cn.energy, cn.alive, cn.hue, cn.isSpore());
                 }
                 // v3+（--trace-genome）：每核 24 个基因 + hue，顺序 = Genome.h 声明序。
                 // 与 addNucleus 同源同序（都遍历 sim.nuclei()），双跑一致。

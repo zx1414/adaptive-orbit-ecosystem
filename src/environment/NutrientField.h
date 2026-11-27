@@ -1,7 +1,7 @@
 // agentsim - environment/NutrientField.h
 // P1 物质循环的环境侧：残骸（debris）/ 可吸收养分（nutrient）的固定网格场。
 //
-// 职责边界（契约 docs/NEXT-ECOLOGY-CONTRACT.md 第 4 节）：
+// 职责边界见 docs/ARCHITECTURE.md 的能量与物质。
 //   - 只记录"物质"，不涉及能量：本模块不认识 AgentLedger，不产生/扣减任何能量；
 //     残骸与养分都不能替代光照凭空给生产者增加可用能量。
 //   - 纯确定性、**零 RNG**：不 include core/PCG32.h，不抽随机数，不依赖遍历顺序
@@ -95,6 +95,9 @@ public:
     // 每帧分解：每区域 debris -> nutrient，rate 由调用方给定（先 clamp 到 [0,1]）。
     // 返回本帧转化总量 Σ(debris * rate)。rate <= 0 或 NaN 时无操作、返回 0。
     double decompose(double ratePerTick);
+    // Redistribute a fraction of each cell's available nutrient across its
+    // toroidal neighbours at once. Debris stays where it was deposited.
+    void diffuse(double rate);
 
     // ---- 总量（观测/审计/守恒断言用；全部 O(n)，不与其它模块共享状态）----
     double totalDebris() const;

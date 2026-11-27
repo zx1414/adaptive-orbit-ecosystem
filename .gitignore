@@ -1,4 +1,3 @@
-# ── agentsim 1.0.0 ──────────────────────────────────────────────
 # Build artifacts (never commit)
 build/
 build-cmake/
@@ -23,6 +22,11 @@ saves/
 *.profraw
 tests/artifacts/
 frontend/build/
+frontend/agentsim.html
+release/
+resourcepacks.list
+__pycache__/
+*.py[cod]
 
 # Editor / OS
 .vs/
@@ -34,15 +38,7 @@ Thumbs.db
 # Dead merge leftovers
 *.mergebak
 
-# ── Published binaries: TRACKED ON PURPOSE ──
-# release/ contains the Windows build shipped with each tagged version.
-# Do not blanket-ignore *.exe; only keep build/ exes out above.
-!release/agentsim.exe
-!release/agentsimw.exe
-
 .zcode_auto/
-
-# legacy/ IS tracked (reference-only old EcoCore v3 source, see legacy/README.md)
 
 # ── accidental scan/cache artifacts (never commit) ──
 .dsh_scan/
@@ -51,3 +47,6 @@ Thumbs.db
 
 # ── release zips: rebuilt by tools/package.ps1, distributed via GitHub Releases ──
 agentsim-*-win64*.zip
+agentsim-*-win64.exe
+/.agentsim/
+/edge-profile/

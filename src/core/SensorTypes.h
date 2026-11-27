@@ -8,6 +8,8 @@
 // 子代理只读不改（要改先在报告里提）。
 #pragma once
 
+#include <array>
+
 #include "core/Types.h"
 
 namespace agentsim {
@@ -45,6 +47,12 @@ struct SensorVector {
     // 所有按下标遍历的代码自动适配；PerceptronPolicy::Params::w 必须同步扩到 [2][kDim]。
     static constexpr int kDim = 24;
     double v[kDim] = {};
+    std::array<EntityId, 3> foodIds{}; // Same order as the three direction/proximity channels.
+    std::array<double, 3> foodDistance{};
+    std::array<bool, 3> foodIsSpore{};
+    EntityId feedingTarget = 0;
+    double biteRadius = 0.0;
+    double searchAngle = 0.0;
     double& operator[](int i) { return v[i]; }
     double operator[](int i) const { return v[i]; }
 };

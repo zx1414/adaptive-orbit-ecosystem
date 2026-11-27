@@ -62,7 +62,7 @@ bool TraceWriter::frameOverflow() {
 void TraceWriter::addSeries(long long tick, long long nuclei,
                             long long cyanoAlive, double cyanoEnergy,
                             double totalEnergy, double injected,
-                            double dissipated, bool auditOk) {
+                            double dissipated, bool auditOk, long long spores) {
     if (!seriesFirst_) series_ << ',';
     seriesFirst_ = false;
     series_ << "{\"tick\":" << tick
@@ -72,7 +72,8 @@ void TraceWriter::addSeries(long long tick, long long nuclei,
             << ",\"totalEnergy\":" << safe(totalEnergy)
             << ",\"injected\":" << safe(injected)
             << ",\"dissipated\":" << safe(dissipated)
-            << ",\"auditOk\":" << jbool(auditOk) << '}';
+            << ",\"auditOk\":" << jbool(auditOk)
+            << ",\"spores\":" << spores << '}';
 }
 
 // v3+（--trace-genome）: 每核 25 个数 [id, 24 基因..., hue]。
@@ -144,13 +145,15 @@ void TraceWriter::addLink(long long idA, long long idB) {
 }
 
 void TraceWriter::addCyano(long long id, double x, double y, double energy,
-                           bool alive, double hue) {
+                           bool alive, double hue, bool spore) {
     if (frameDropped_) return;
     if (!cFirst_) c_ << ',';
     cFirst_ = false;
     // v3 六元组：[id, x, y, energy, alive, hue]（R1-B 遗传色相）。
     c_ << '[' << id << ',' << safe(x) << ',' << safe(y) << ',' << safe(energy)
-       << ',' << jbool(alive) << ',' << safe(hue) << ']';
+       << ',' << jbool(alive) << ',' << safe(hue);
+    if (spore) c_ << ",true";
+    c_ << ']';
 }
 
 void TraceWriter::endFrame() {

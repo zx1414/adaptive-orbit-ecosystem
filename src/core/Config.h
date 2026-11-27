@@ -16,7 +16,7 @@ namespace agentsim {
 
 struct WorldConfig {
     double width = 1024.0;  // 环面宽（R10：512→1024，用户验收"世界太小"；面积 16× 原版）
-    double height = 1024.0; // 环面高（R10）
+    double height = 512.0;
     std::uint64_t maxTicks = 1000;
     std::uint64_t seed = 42;
 };
@@ -46,7 +46,7 @@ struct PolicyConfig {
     double damping = 0.9;      // 速度阻尼
     double mutation = 0.05;    // 初版占位：规则扰动幅度
     // ---- 追加字段（F2）：策略名，组合根按此装配 RulePolicy/StubPolicy ----
-    std::string name = "rule";
+    std::string name = "grazer";
     // ---- 追加字段（感知机策略）：字段仅声明，接线由下一轮完成（不改 Cli/Simulation）。----
     bool usePerceptron = false;            // 组合根按此装配 PerceptronPolicy（当前未接线）
     std::uint64_t perceptronSeed = 12345;  // 构造期 PCG32 初值种子
@@ -57,6 +57,9 @@ struct PolicyConfig {
     // 打分权重（--thermal-w-thermal / --thermal-w-caution 的真实落点）。
     double thermalWThermal = 1.2;          // 温度适宜度权重
     double thermalWCaution = 0.8;          // 失真规避权重
+    std::string modelId;
+    std::string modelWeights;             // Resolved weights, embedded in saves for replay.
+    bool legacyPerceptron = false;        // Old checkpoints used a second sum over the last six inputs.
 };
 
 // ---- 追加结构（F2）：agent-mode 契约。仅 1（自治体范式）已实现；0（轨道范式）解析期拒绝。----
@@ -244,7 +247,7 @@ struct BallTuning {
 // 两边字段必须同名同义，CyanoNode.h 头部注释为准）。新增 CyanoParams 字段时
 // 两边同步加，漏一侧会被 applyConfig 的编译期逐字段赋值当场暴露。
 struct CyanoTuning {
-    // R3-A 标定回滚说明：曾按 docs/ECOLOGY-DESIGN.md 常数表试过 0.35/0.05
+    // 曾用 0.35/0.05 标定光合与代谢。
     //（参数扫描实测：光合注入不足 -> 12 核创始种群饿到只剩 3 -> 消费端起不来，
     // 组合根生态健全性测试 reproduction_grows_population 失败）。该表按旧的
     // 捕食口粮系数标定，与现行 kGrazeBiteFraction=0.5 基因驱动口径不匹配。
@@ -339,6 +342,14 @@ constexpr int kRulesVersion = 2;
 // 规则版本的名字，写进存档头与前端快照，便于人眼辨别。
 constexpr const char* kRulesVersionName = "ecology-v2";
 
+struct ScenarioConfig {
+    std::string id = "standard";
+    std::uint64_t version = 1;
+    bool dayCycle = true;
+    double initialNutrientMultiplier = 1.0;
+    double nutrientDiffusion = 0.0;
+};
+
 struct SimConfig {
     WorldConfig world;
     SunConfig sun;             // R1-B：可配置阳光（替代硬编码昼夜正弦）
@@ -362,6 +373,9 @@ struct SimConfig {
     NucleusTuning nucleus{};   // pressure + nucleus 组（basal_cost 等经 applyConfig 进 bp_）
     BallTuning ball{};         // food 组球能量键 + ball 组力场键（R4 消费）
     CyanoTuning cyanoTuning{}; // producer + cyano 组 + light 组半饱和（applyConfig 直通 CyanoField）
+    ScenarioConfig scenario;
+    bool simultaneousDecisions = true;   // Older saves use the original interleaved tick order.
+    bool sporeEcology = true;
 };
 
 } // namespace agentsim

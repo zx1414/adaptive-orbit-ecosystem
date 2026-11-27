@@ -64,7 +64,7 @@ namespace savedetail {
 bool writeCfgBlock(std::ostream& os, const SimConfig& cfg,
                    const std::string& policyName, std::string& err);
 bool readCfgBlock(std::istream& is, SimConfig& cfg,
-                  std::string& policyName, std::string& err, bool extended = true);
+                  std::string& policyName, std::string& err, std::uint32_t version);
 } // namespace savedetail
 
 } // namespace app

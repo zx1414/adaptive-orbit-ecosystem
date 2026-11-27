@@ -152,6 +152,8 @@ struct Nucleus {
     // 要求 energy 已耗尽，从剩余能量里抽 30% 做尸体，那笔量恒为零。
     // 现在：饿死也留下 nonzero 残骸（验收 A6）。
     double bodyMass = 20.0;
+    EntityId feedingTarget = 0;
+    std::uint32_t feedingTicks = 0;
     // ---- 规则 v2（P0-4）：本核自己的决策记忆 ----
     // 由决策层定义（decision/PolicyMemory.h）；组合根每帧传进来，行为层只持有。
     // 新生核默认构造（不继承亲代记忆），读档时逐个恢复已存在个体的记忆。
@@ -196,6 +198,7 @@ struct BehaviorParams {
     // n.cap = 200.0 同源：Simulation::spawnNuclei 现改为 n.cap = bp_.nativeCap，
     // 魔数只此一处定义。
     double nativeCap = 200.0;
+    bool organBalance = false;
     // ---- S19/S20：自由球拾取与自然脱离 ----
     double adoptRadius = 18.0;   // 拾取自由球的半径（环面距离 <= 此值才可收编）
     double detachEnergy = 120.0; // 球能量超过此值才允许自然脱离（避免小球乱飞）

@@ -7,6 +7,7 @@
 #include <iosfwd>  // R5-C：序列化流参数
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <vector>
 
@@ -26,14 +27,36 @@ namespace agentsim {
 
 class IDecisionPolicy;
 
+struct AgentObservation {
+    EntityId id = 0;
+    SensorVector sensors;
+    TargetList targets;
+    double energy = 0.0;
+};
+
+struct AgentOutcome {
+    EntityId id = 0;
+    double energyBefore = 0.0;
+    double energyAfter = 0.0;
+    double materialTaken = 0.0;
+    double energyAbsorbed = 0.0;
+    bool alive = false;
+};
+
 class Simulation {
 public:
     explicit Simulation(const SimConfig& cfg);
+    Simulation(const SimConfig& cfg, std::unique_ptr<IDecisionPolicy> policy);
     ~Simulation();
     Simulation(const Simulation&) = delete;
     Simulation& operator=(const Simulation&) = delete;
 
     void step();
+    // All observations describe the same tick. A provider may decline a
+    // frame without advancing the world. Outputs must match observation order.
+    using DecideBatch = std::function<bool(Tick, const std::vector<AgentObservation>&,
+                                            std::vector<ActionVector>&)>;
+    bool stepWithActions(const DecideBatch& decide, std::vector<AgentOutcome>& outcomes);
     bool runTo(std::uint64_t endTick);
     // ---- R5-C：存档序列化（实现见 Simulation.cpp 尾部）----
     // 全量实体状态（含 genome/rng 流水/账本）小端写读。读回后 stateHash 与
@@ -139,6 +162,9 @@ public:
     }
 
 private:
+    AgentObservation observe(const Nucleus& n, PCG32& sensingRng) const;
+    ActionVector chooseAction(Nucleus& n, const AgentObservation& observation);
+    bool advance(const DecideBatch* decide, std::vector<AgentOutcome>* outcomes);
     void spawnNuclei();
 
     // ---- R7-B：球世界积分（本卡实现）----

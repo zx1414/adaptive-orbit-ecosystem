@@ -24,7 +24,10 @@ struct CliOptions {
     bool render = false;
     int agentMode = 1;            // mirror of config.agent.agentMode
     bool audit = false;           // --audit：开启运行时账目核对（默认关，见 Simulation::setAuditEnabled）
-    std::string policy = "rule";  // mirror of config.policy.name
+    std::string scenario = "standard";
+    std::string extensionsDirectory;
+    bool research = false;
+    std::string policy = config.policy.name;
     int nuclei = -1;              // mirror of config.colony.nuclei; -1 = not specified
     double thermalWThermal = -1.0; // mirror of --thermal-w-thermal; <0 = not specified
     double thermalWCaution = -1.0; // mirror of --thermal-w-caution; <0 = not specified

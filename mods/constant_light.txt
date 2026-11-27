@@ -1,0 +1,3 @@
+version=1
+name=恒定光照
+day_cycle=off

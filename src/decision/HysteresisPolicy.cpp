@@ -89,11 +89,18 @@ ActionVector HysteresisPolicy::decide(const SensorVector& s, const TargetList& /
     }
     // (2) 滞回：现任仍有效且挑战者优势不足 gap 时保持现任。
     //     P0-4：现任下标来自本个体的记忆（每个核一份），不再来自策略实例。
-    const int cur = memory.hysteresisLastChoice;
+    const bool hasIds = s.foodIds[0] != 0;
+    int cur = hasIds ? -1 : memory.hysteresisLastChoice;
+    if (hasIds && memory.hysteresisTarget != 0) {
+        for (int i = 0; i < 3; ++i) {
+            if (s.foodIds[static_cast<std::size_t>(i)] == memory.hysteresisTarget) cur = i;
+        }
+    }
     if (cur >= 0 && cur <= 2 && clean(s[6 + cur]) > 0.0) {
         if (bestScore <= candidateScore(s, cur) + p_.hysteresisGap) best = cur;
     }
     memory.hysteresisLastChoice = best;
+    memory.hysteresisTarget = s.foodIds[static_cast<std::size_t>(best)];
     // (3) 输出：选中候选方向重新归一化；boost 与其接近度挂钩。
     const double dx = clean(s[2 * best]);
     const double dy = clean(s[2 * best + 1]);

@@ -3,7 +3,7 @@
 //
 // 职责边界（任务卡 R3-B）：
 //   - EnvControl（R1-C）只产出"参数变更描述"，不知道任何 Config 字段；
-//   - 本模块是**唯一**知道 key -> 字段映射的地方（docs/PARAM-MAPPING.md 的执行者）；
+//   - 本模块把 HTTP 调控键映射到 SimConfig；
 //   - 不 include simulation/世界状态：调用方（main.cpp --serve 循环）拿着
 //     SimConfig 来，改完交给 Simulation::applyConfig 下一帧生效。
 //

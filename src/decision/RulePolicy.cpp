@@ -21,6 +21,7 @@
 #include "decision/RulePolicy.h"
 
 #include <algorithm>
+#include <cmath>
 
 namespace agentsim {
 
@@ -106,6 +107,41 @@ ActionVector RulePolicy::decide(const SensorVector& s, const TargetList& /*targe
 ActionVector StubPolicy::decide(const SensorVector& /*sensors*/, const TargetList& /*targets*/,
                                 PolicyMemory& /*memory*/) {
     return {};
+}
+
+ActionVector GrazerPolicy::decide(const SensorVector& sensors, const TargetList&, PolicyMemory&) {
+    ActionVector action;
+    int best = -1;
+    double cost = 0.0;
+    for (std::size_t i = 0; i < sensors.foodIds.size(); ++i) {
+        const auto id = sensors.foodIds[i];
+        if (id == 0) continue;
+        const double distance = sensors.foodDistance[i];
+        double score = distance * (sensors.foodIsSpore[i] ? 0.65 : 1.0);
+        if (id == sensors.feedingTarget && distance <= sensors.biteRadius) score = -1.0;
+        if (best < 0 || score < cost) {
+            best = static_cast<int>(i);
+            cost = score;
+        }
+    }
+    if (best < 0) {
+        action.dirX = std::cos(sensors.searchAngle);
+        action.dirY = std::sin(sensors.searchAngle);
+        action.speedScale = 0.65;
+        return action;
+    }
+    const auto index = static_cast<std::size_t>(best);
+    const double distance = sensors.foodDistance[index];
+    if (distance <= sensors.biteRadius * 0.85) {
+        action.speedScale = 0.0;
+        action.mod[1] = -0.75;
+        action.mod[2] = -0.75;
+        return action;
+    }
+    action.dirX = sensors[2 * best];
+    action.dirY = sensors[2 * best + 1];
+    action.speedScale = std::clamp((distance - sensors.biteRadius * 0.5) / 22.0, 0.18, 1.0);
+    return action;
 }
 
 } // namespace agentsim
