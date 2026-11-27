@@ -43,7 +43,7 @@ window.Main = (function () {
     idx: 0,
     playing: false, loop: true, speed: 1, accum: 0, lastTs: 0,
     FPS_BASE: 24,
-    cinema: true,
+    cinema: false,
     hoverPoint: null,
     pinnedCards: {},        // R8-D: nucleusId -> true (pinned param cards)
     pinnedSeq: 0,           // dom id counter
@@ -602,8 +602,8 @@ window.Main = (function () {
     if (document.body) document.body.classList.toggle('cinema', state.cinema && state.page === 'run');
     var button = $('btnMapCinema');
     if (button) {
-      button.setAttribute('aria-expanded', String(!state.cinema));
-      button.textContent = state.cinema ? '展开面板' : '地图铺屏';
+      button.setAttribute('aria-pressed', String(state.cinema));
+      button.textContent = state.cinema ? '恢复面板' : '专注地图';
     }
   }
 
@@ -844,9 +844,8 @@ window.Main = (function () {
         var off = (j && j.effect && typeof j.effect.lightOffset === 'number')
           ? j.effect.lightOffset : null;
         toast(off === null
-          ? ('已触发「' + name + '」→ POST /env event.' + liveId + '=1')
-          : ('「' + name + '」生效：光照基线 ' + (off > 0 ? '+' : '') + off.toFixed(2) +
-             ' · 到点自动恢复（不直接改核的能量）'));
+          ? ('已触发「' + name + '」')
+          : ('「' + name + '」已生效，光照基线 ' + (off > 0 ? '+' : '') + off.toFixed(2)));
         refreshEnvStatus();
       });
     } else {
@@ -1163,7 +1162,7 @@ window.Main = (function () {
     grid.innerHTML = '';
     var saves = state.saves || [];
     if (!saves.length) {
-      grid.innerHTML = '<div class="saves-empty">还没有存档：菜单「① 实时开新局」勾选自动存档，或运行页点「⬤ 存为快照」。</div>';
+      grid.innerHTML = '<div class="saves-empty">还没有存档。可以在运行页点「保存进度」。</div>';
       return;
     }
     var thumbs = loadThumbMap();   // R7-D：name → dataURL（无缩略图 → 占位）
@@ -1183,11 +1182,11 @@ window.Main = (function () {
           if (!nn || nn === s.name) { nameInput.value = s.name; return; }
           var LCX = window.LiveClient;
           if (state.savesOnline && LCX && LCX.postForm) {
-            // 后端 /saves 无 rename 路由 → 删除旧名 + 存新名（同文件夹等价改名）
-            LCX.postForm('/delete-save', 'name=' + encodeURIComponent(s.name))
-              .then(function () { return LCX.postForm('/save', 'name=' + encodeURIComponent(nn)); })
-              .then(function () { s.name = nn; toast('已重命名为「' + nn + '」'); refreshSaves(); })
-              .catch(function (e) { nameInput.value = s.name; toast('重命名失败：' + (e.message || e)); });
+            nameInput.disabled = true;
+            LCX.postForm('/rename', 'old=' + encodeURIComponent(s.name) + '&new=' + encodeURIComponent(nn))
+              .then(function () { s.name = nn; toast('已重命名为「' + nn + '」'); return refreshSaves(); })
+              .catch(function (e) { nameInput.value = s.name; toast('重命名失败：' + (e.message || e)); })
+              .finally(function () { nameInput.disabled = false; });
           } else {
             s.name = nn;   // 本地兜底列表
             toast('已重命名为「' + nn + '」');
@@ -1224,7 +1223,7 @@ window.Main = (function () {
         loadB.type = 'button';
         loadB.className = 'btn btn-primary';
         loadB.textContent = '载入';
-        loadB.title = 'POST /load 载入并存档帧继续';
+        loadB.title = '从保存的帧继续';
         loadB.addEventListener('click', function () {
           var LCX = window.LiveClient;
           if (!state.savesOnline || !LCX || !LCX.postForm) { toast('载入需要本地服务（离线兜底无存档文件）'); return; }
@@ -1305,7 +1304,6 @@ window.Main = (function () {
     });
   }
 
-  // ⬤ 存为快照：在线 POST /save（auto-<seed>-<时间戳> 命名建议可改名）；离线 toast
   function makeSaveFromCurrent() {
     if (!state.trace) { toast('还没有可存的世界：先「开始模拟」'); return; }
     var LCX = window.LiveClient;
@@ -1315,22 +1313,16 @@ window.Main = (function () {
       var name = 'auto-' + base + '-' + U.nowStamp().replace(/[-: ]/g, '');
       LCX.postForm('/save', 'name=' + encodeURIComponent(name))
         .then(function () {
-          toast('已保存「' + name + '」→ saves\\ 文件夹（POST /save）' + (f ? '（t' + f.tick + '）' : ''));
+          toast('已保存「' + name + '」' + (f ? '（第 ' + f.tick + ' 帧）' : ''));
           if (state.page === 'saves') refreshSaves();
         })
-        .catch(function (e) { toast('POST /save 失败：' + (e.message || e)); });
+        .catch(function (e) { toast('保存失败：' + (e.message || e)); });
       return;
     }
-    toast('离线兜底不写真实存档：需要本地服务（POST /save）');
+    toast('实时模拟可以保存进度。');
   }
 
-  // ── 快速存档（断点续跑，sessionStorage）──────────────────────
-  function pushQuicksave() {
-    if (!state.trace) return;
-    try {
-      sessionStorage.setItem('agentsim.quicksave.v2', JSON.stringify({ tick: state.idx, seed: (state.trace.meta || {}).seed }));
-    } catch (e) {}
-  }
+  // 读取已有浏览器会话保存的离线回放位置。
   function peekQuicksave() {
     try {
       var raw = sessionStorage.getItem('agentsim.quicksave.v2');
@@ -1353,7 +1345,7 @@ window.Main = (function () {
       seed: seed,
       nuclei: intOf('menuNuclei', 12, 1, 24),
       cyano: intOf('menuCyano', 48, 4, 120),
-      frames: intOf('menuFrames', 300, 20, 100000),
+      frames: 300,
       autosave: !(!$('menuAutosave') || !$('menuAutosave').checked),
       policy: ($('menuPolicy') && $('menuPolicy').value) ? $('menuPolicy').value : 'grazer',
       mod: ($('menuMod') && $('menuMod').value) || 'standard',
@@ -1508,7 +1500,7 @@ window.Main = (function () {
     var chips = $('metaChips');
     if (chips) {
       var sd = (state.cfg && typeof state.cfg.seed !== 'undefined') ? state.cfg.seed : '—';
-      chips.textContent = '实时模式 · seed ' + sd + ' · 数据源 agentsim --serve · POST /env 调控直通';
+      chips.textContent = '实时模拟 · seed ' + sd;
     }
     var mc2 = $('menuChips');
     if (mc2) mc2.textContent = '实时后端已连接（GET /status 探测成功）— 开跑即看实时模拟';
@@ -1915,8 +1907,8 @@ window.Main = (function () {
       if (b) b.classList.toggle('offline', !up);
       if (chips) {
         chips.textContent = up
-          ? '本地服务在线（agentsim --serve）— 选「实时开新局」或「载入存档」'
-          : '未检测到本地服务 — 两卡暂不可用，仅留离线演示兜底';
+          ? '可以开始模拟'
+          : '暂未连接到本地游戏服务';
       }
     }
     applyOnline(false);   // 先按离线渲染（探测中置灰，避免闪出可点按钮）
@@ -1930,7 +1922,7 @@ window.Main = (function () {
           window.LiveClient.getJson('/saves').then(function (j) {
             var n = (j && Array.isArray(j.saves)) ? j.saves.length : 0;
             if (chips && state.online) {
-              chips.textContent = '本地服务在线 · saves\\ 已有 ' + n + ' 个存档 — 选「实时开新局」或「载入存档」';
+              chips.textContent = n ? ('已有 ' + n + ' 个存档') : '可以开始模拟';
             }
           }).catch(function () {});
         }
@@ -2033,7 +2025,6 @@ window.Main = (function () {
       showPage('saves');
     });
     on('menuDemoLink', 'click', function () { startRun(readMenuCfg()); });   // 离线兜底
-    on('menuParams', 'click', function () { showPage('params'); });
     // 回放：进度条拖动/输入帧号 → pause → /seek → 拉 /state 渲染
     on('btnAnalyze', 'click', runAnalysis);
     on('btnAnalysisClose', 'click', closeAnalysis);
@@ -2064,10 +2055,6 @@ window.Main = (function () {
       state.loop = !state.loop;
       this.classList.toggle('active', state.loop);
       toast(state.loop ? '循环播放：开' : '循环播放：关');
-    });
-    on('btnStops', 'click', function () {
-      setPlaying(false);
-      toast(state.live ? '已暂停：POST /control cmd=pause' : '已全部停止：回放暂停 · 本轮演示无实时模拟在跑');
     });
     var seg = $('speedSeg');
     if (seg) {
@@ -2123,7 +2110,6 @@ window.Main = (function () {
     });
     on('btnRunParams', 'click', function () { showPage('params'); });
     on('btnNewSave', 'click', makeSaveFromCurrent);
-    on('btnStopRun', 'click', function () { setPlaying(false); pushQuicksave(); toast('已暂停并存断点（sessionStorage）'); });
     on('btnResetRun', 'click', resetRun);
     // 参数页
     buildParams();
@@ -2188,7 +2174,7 @@ window.Main = (function () {
       else if (k === 'End' && state.page === 'run') { setPlaying(false); stepTo(state.trace ? state.trace.frames.length - 1 : 0); }
       else if (k === 'r' || k === 'R') { renderer.resetView(); updateAll(true); toast('视角已复位'); }
       else if (k === 'l' || k === 'L') { var lb = $('btnLoop'); if (lb) lb.click(); }
-      else if ((k === 'f' || k === 'F') && state.page === 'run') { setCinema(!state.cinema); }
+      else if ((k === 'f' || k === 'F') && state.page === 'run') { var fit = $('btnMapFit'); if (fit) fit.click(); }
       else if (k === 'h' || k === 'H') {
         setStatusCollapsed(!(document.body && document.body.classList.contains('statushidden')));
       }

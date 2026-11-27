@@ -38,6 +38,7 @@ public:
 
     // 请求体（Content-Length 声明值）上限：1 MiB。
     static constexpr std::size_t kMaxBodyBytes = 1024u * 1024u;
+    static constexpr int kBindAttempts = 20;
 
     HttpServer();
     ~HttpServer();

@@ -4,14 +4,16 @@
 
 在环面世界里观察蓝细菌光合生长、核觅食和繁殖，以及死亡组织如何经分解回到养分场。可以调节光照和代谢压力、触发寒冬或播种蓝细菌，也可以在同一场景里比较不同的决策策略。
 
-**当前版本 3.2.0 · Windows 10/11 x64 · MIT**
+**当前版本 3.2.1 · Windows 10/11 x64 · MIT**
 
 ## 开始游戏
 
-1. 从 GitHub 下载 [Windows 单文件版](https://github.com/zx1414/adaptive-orbit-ecosystem/releases/download/v3.2.0/agentsim-3.2.0-win64.exe)，双击打开。
+1. 从 GitHub 下载 [Windows 单文件版](https://github.com/zx1414/adaptive-orbit-ecosystem/releases/download/v3.2.1/agentsim-3.2.1-win64.exe)，双击打开。
 2. 选择场景、策略和材质包，点击「开始模拟」。默认地图为 1024×512，开局展示完整地图。
 
-单文件版在 `%LOCALAPPDATA%\agentsim\portable\3.2.0\` 准备游戏文件。应用数据目录无法写入时，使用 EXE 旁的 `.agentsim\3.2.0\`。游戏以独立 Edge 配置开窗，存档在游戏目录的 `saves/`。需要命令行、开发示例或独立的运行目录时，可下载 [Windows ZIP](https://github.com/zx1414/adaptive-orbit-ecosystem/releases/download/v3.2.0/agentsim-3.2.0-win64.zip)，全部解压后双击 `agentsimw.exe`。ZIP 版的 `saves/` 与启动器同目录。手动开服可运行 `agentsim.exe --serve 8080 --no-open`。
+单文件版在 `%LOCALAPPDATA%\agentsim\portable\3.2.1\` 准备游戏文件。应用数据目录无法写入时，使用 EXE 旁的 `.agentsim\3.2.1\`。游戏以独立 Edge 配置开窗，存档在游戏目录的 `saves/`。需要命令行、开发示例或独立的运行目录时，可下载 [Windows ZIP](https://github.com/zx1414/adaptive-orbit-ecosystem/releases/download/v3.2.1/agentsim-3.2.1-win64.zip)，全部解压后双击 `agentsimw.exe`。ZIP 版的 `saves/` 与启动器同目录。手动开服可运行 `agentsim.exe --serve 8080 --no-open`，并访问命令输出的地址。
+
+迁移旧存档时，把整个 `saves/<存档名>/` 复制到新版的 `saves/`，再从「打开存档」选择它。
 
 | 游戏中看到的内容 | 含义 |
 | --- | --- |
@@ -22,7 +24,7 @@
 | 养分和残骸 | 当前世界的可吸收库存和待分解库存 |
 | 时间轴 | 检查点回放，暂停后可选取历史帧并从那里继续 |
 
-拖拽移动地图，滚轮缩放，`F` 切换铺屏和全图，`R` 复位视角，空格暂停或继续。展开侧边面板可以查看带量纲、图例和说明的曲线，以及时间轴和环境调控。
+拖拽移动地图，滚轮缩放，`F` 切换铺满和全图，`R` 复位视角，空格暂停或继续。开局即显示侧栏和时间轴。「专注地图」收起周边面板，按 `Esc` 恢复。用时间轴旁的「保存进度」保存当前世界。
 
 ## 生态规则
 
@@ -58,6 +60,6 @@ node frontend/tools/bundle.mjs
 node tools/analyze.mjs build/trace.json --out build/analysis.md
 ```
 
-运行 `cmd /d /c tools\gate.bat` 可以构建并执行项目门禁。运行 `powershell -NoProfile -ExecutionPolicy Bypass -File tools/package.ps1` 可以从 `build/` 生成单文件 EXE 和 ZIP。
+运行 `cmd /d /c tools\gate.bat` 可以构建并执行项目门禁。运行 `powershell -NoProfile -ExecutionPolicy Bypass -File tools/package.ps1` 会将单文件 EXE 放在仓库根目录，ZIP 放在 `build/`。
 
 [版本记录](CHANGELOG.md) · [MIT 许可证](LICENSE)

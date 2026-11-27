@@ -295,6 +295,23 @@ TEST(http_stop_is_idempotent_and_reusable) {
     srv.stop();
 }
 
+TEST(http_live_instances_use_distinct_ports) {
+    HttpServer first;
+    HttpServer second;
+    const int firstPort = startServerWithRouter(first);
+    CHECK(firstPort > 0);
+    const int secondPort = second.start(firstPort);
+    CHECK(secondPort > firstPort);
+
+    std::string firstResponse;
+    std::string secondResponse;
+    const char* request = "GET /status HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n";
+    CHECK(clientSend(firstPort, request, firstResponse));
+    CHECK(clientSend(secondPort, request, secondResponse));
+    CHECK(statusLineOf(firstResponse) == "HTTP/1.1 200 OK");
+    CHECK(statusLineOf(secondResponse) == "HTTP/1.1 404 Not Found");
+}
+
 // HTTP → EnvControl 端到端（本轮两个模块的接缝冒烟）：
 // 构造一个用 EnvControl 做 router 的服务器，验证"POST /env 改档位"全链路。
 // 路由接缝冒烟：验证"行式 key=value 请求体 -> JSON 响应 + 状态码"这一

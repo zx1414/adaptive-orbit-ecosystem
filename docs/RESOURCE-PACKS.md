@@ -6,7 +6,7 @@
 
 在游戏目录的 `resourcepacks/` 下建立独立的目录。建议使用 ASCII 目录名与名称 ID，说明和作者可以写中文。两个文件均为 UTF-8 文本。
 
-ZIP 版以解压后的目录为游戏目录。单文件版首次启动后使用 `%LOCALAPPDATA%\agentsim\portable\3.2.0\`，该位置无法写入时使用 EXE 旁的 `.agentsim\3.2.0\`。
+ZIP 版以解压后的目录为游戏目录。单文件版首次启动后使用 `%LOCALAPPDATA%\agentsim\portable\3.2.1\`，该位置无法写入时使用 EXE 旁的 `.agentsim\3.2.1\`。
 
 ```text
 resourcepacks/

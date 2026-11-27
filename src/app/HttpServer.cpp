@@ -165,7 +165,7 @@ int HttpServer::start(int port) {
     if (!wsaReady_) return -1;
 #endif
     // 端口占用自动 +1 重试，最多 20 次。
-    for (int attempt = 0; attempt < 20; ++attempt) {
+    for (int attempt = 0; attempt < kBindAttempts; ++attempt) {
         const int p = port + attempt;
         if (p > 65535) break;
         const NativeSocket s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
@@ -174,9 +174,17 @@ int HttpServer::start(int port) {
         addr.sin_family = AF_INET;
         addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);  // 只绑 127.0.0.1，不对外
         addr.sin_port = htons(static_cast<std::uint16_t>(p));
-        const int reuse = 1;
-        setsockopt(s, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char*>(&reuse),
-                   sizeof(reuse));
+        const int enabled = 1;
+#ifdef _WIN32
+        // Winsock SO_REUSEADDR can share an active TCP listener with another process.
+        if (setsockopt(s, SOL_SOCKET, SO_EXCLUSIVEADDRUSE,
+                       reinterpret_cast<const char*>(&enabled), sizeof(enabled)) != 0) {
+            closesocket(s);
+            return -1;
+        }
+#else
+        setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &enabled, sizeof(enabled));
+#endif
         if (bind(s, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
             closesocket(s);
             continue;  // 端口被占，试下一个

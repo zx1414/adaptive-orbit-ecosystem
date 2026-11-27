@@ -650,11 +650,11 @@ ok(sandbox.window.Main._state.demoTrace && sandbox.window.Main._state.demoTrace.
   "boot generated demo trace");
 ok(!sandbox.document.body.classList.contains("cinema"), "map layout is scoped to the run page");
 sandbox.window.Main.showPage("run");
-ok(sandbox.document.body.classList.contains("cinema"), "run opens with the map filling the viewport");
+ok(!sandbox.document.body.classList.contains("cinema"), "run opens with map controls and status visible");
 elements.btnMapCinema.click();
-ok(!sandbox.document.body.classList.contains("cinema"), "map controls can reopen the full panels");
+ok(sandbox.document.body.classList.contains("cinema"), "map focus hides surrounding panels");
 elements.btnMapCinema.click();
-ok(sandbox.document.body.classList.contains("cinema"), "map controls can restore the full viewport");
+ok(!sandbox.document.body.classList.contains("cinema"), "map focus can restore the panels");
 sandbox.window.Main.showPage("menu");
 ok(!sandbox.document.body.classList.contains("cinema"), "returning to the menu restores normal navigation");
 // 载入真实 v3 trace 走完整 loadTrace（charts setData + 派生序列）
@@ -769,7 +769,7 @@ ok(sandbox.window.document.getElementById("menuDemoLink") !== undefined || eleme
    "离线演示小链接 #menuDemoLink 存在（兜底）");
 
 // 在线态：注入 fetch stub → checkDemo → 两卡恢复 + 横幅隐藏
-const savePosts = [], seekPosts = [], loadPosts = [], delPosts = [], runPosts = [];
+const savePosts = [], seekPosts = [], loadPosts = [], delPosts = [], renamePosts = [], runPosts = [];
 const envPosts = [], controlPosts = [];   // R4-D 段遗留共用（本段 stub 也要喂）
 // R7-D：动态存档库（10d 用；/save /delete-save 维护，/saves 读取）
 const savesDb = [
@@ -787,6 +787,13 @@ sandbox.fetch = function (url, init) {
     // R7-D：动态存档库（重命名=删旧+存新 后，GET /saves 必须反映新名——
     // innerHTML stub 修正后 re-render 是真清空重建，静态快照会名实不符）
     return Promise.resolve({ ok: true, json: () => Promise.resolve({ saves: savesDb.slice() }) });
+  }
+  if (u.endsWith("/rename") && method === "POST") {
+    renamePosts.push(body);
+    const match = /^old=([^&]*)&new=(.*)$/.exec(body);
+    const item = match && savesDb.find((x) => x.name === decodeURIComponent(match[1]));
+    if (item) item.name = decodeURIComponent(match[2]);
+    return Promise.resolve({ ok: true, json: () => Promise.resolve({ ok: true }) });
   }
   if (u.endsWith("/save") && method === "POST") {
     savePosts.push(body);
@@ -859,17 +866,17 @@ ok(String(grid.children[0].children[0].children[0].value).indexOf("演示 · see
    String(grid.children[0].querySelectorAll && "") !== "",
    "首卡名字输入框值为「演示 · seed 7」");
 
-// 重命名：行内改名输入框 change → delete-save(旧名) + save(新名)
+// 重命名应保留存档帧与其余元数据。
 const firstCard = grid.children[0];
 const renameInput = firstCard.children[0].children[0];
 ok(renameInput.value === "演示 · seed 7", "行内重命名输入框存在且带原名");
 renameInput.value = "演示改名";
 renameInput.fire("change");
 await new Promise((r) => setTimeout(r, 30));
-ok(delPosts.some((b) => b.indexOf("name=" + encodeURIComponent("演示 · seed 7")) === 0),
-   "重命名触发 DELETE 旧名 POST /delete-save");
-ok(savePosts.some((b) => b.indexOf("name=" + encodeURIComponent("演示改名")) === 0),
-   "重命名触发 POST /save 新名（后端无 rename 路由 → 删旧+存新 等价改名）");
+eq(renamePosts[0], "old=" + encodeURIComponent("演示 · seed 7") + "&new=" + encodeURIComponent("演示改名"),
+   "重命名只提交原名和新名给 POST /rename");
+ok(delPosts.length === 0 && savesDb[0].name === "演示改名" && savesDb[0].frame === 240,
+   "重命名保留原存档帧，不删除旧存档再保存当前世界");
 
 // 删除：确认框 → POST /delete-save（先装 confirm stub，卡片渲染在 sandbox 内执行）
 const delBtnCard = grid.children[0];

@@ -2,7 +2,7 @@
 
 一个场景 Mod 是一份 UTF-8 文本，放在游戏目录的 `mods/`。它定义开局参数和当前内核提供的机制组合。游戏启动时扫描目录，菜单列出可用场景，并显示格式有误的文件。
 
-ZIP 版以解压后的目录为游戏目录。单文件版首次启动后使用 `%LOCALAPPDATA%\agentsim\portable\3.2.0\`，该位置无法写入时使用 EXE 旁的 `.agentsim\3.2.0\`。
+ZIP 版以解压后的目录为游戏目录。单文件版首次启动后使用 `%LOCALAPPDATA%\agentsim\portable\3.2.1\`，该位置无法写入时使用 EXE 旁的 `.agentsim\3.2.1\`。
 
 ## 创建场景
 

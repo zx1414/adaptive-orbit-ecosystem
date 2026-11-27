@@ -93,7 +93,7 @@ try {
         }
     }
 
-    $zipPath = Join-Path $root $zipName
+    $zipPath = Join-Path $buildRoot $zipName
     Move-Item -LiteralPath $stagedZip -Destination $zipPath -Force
     $singlePath = Join-Path $root $singleName
     Move-Item -LiteralPath $singleExe -Destination $singlePath -Force

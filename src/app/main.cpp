@@ -58,6 +58,7 @@ namespace {
 #define AGENTSIM_STRINGIFY(value) AGENTSIM_STRINGIFY_VALUE(value)
 constexpr char kAppVersion[] = AGENTSIM_STRINGIFY(AGENTSIM_VERSION);
 constexpr char kLaunchReadyPath[] = "/launch-ready/" AGENTSIM_STRINGIFY(AGENTSIM_VERSION);
+constexpr int kDefaultServePort = 8080;
 #undef AGENTSIM_STRINGIFY
 #undef AGENTSIM_STRINGIFY_VALUE
 
@@ -935,10 +936,8 @@ void openGameWindow(int port) {
         L"C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
         L"C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
     };
-    bool foundEdge = false;
     for (const wchar_t* edge : edgePaths) {
         if (GetFileAttributesW(edge) == INVALID_FILE_ATTRIBUTES) continue;
-        foundEdge = true;
 
         // Edge instances share a lock for each user data directory.
         std::error_code error;
@@ -947,17 +946,21 @@ void openGameWindow(int port) {
         const auto profile = gameDir / "edge-profile";
         std::filesystem::create_directories(profile, error);
         if (error) break;
-        const std::wstring args = L"--user-data-dir=\"" + profile.native() +
-                                  L"\" --no-first-run --app=" + url + L" --start-maximized";
-        const HINSTANCE opened = ShellExecuteW(nullptr, L"open", edge, args.c_str(),
-                                                nullptr, SW_SHOWMAXIMIZED);
-        if (reinterpret_cast<INT_PTR>(opened) > 32) return;
+        std::wstring command = L"\"" + std::wstring(edge) + L"\" --user-data-dir=\"" + profile.native() +
+                               L"\" --no-first-run --app=" + url + L" --start-maximized";
+        STARTUPINFOW startup{};
+        startup.cb = sizeof(startup);
+        PROCESS_INFORMATION process{};
+        if (CreateProcessW(edge, command.data(), nullptr, nullptr, FALSE, 0,
+                           nullptr, gameDir.c_str(), &startup, &process)) {
+            CloseHandle(process.hThread);
+            CloseHandle(process.hProcess);
+            return;
+        }
     }
-    if (!foundEdge) {
-        const HINSTANCE opened = ShellExecuteW(nullptr, L"open", url.c_str(),
-                                               nullptr, nullptr, SW_SHOWMAXIMIZED);
-        if (reinterpret_cast<INT_PTR>(opened) > 32) return;
-    }
+    const HINSTANCE opened = ShellExecuteW(nullptr, L"open", url.c_str(),
+                                           nullptr, nullptr, SW_SHOWNORMAL);
+    if (reinterpret_cast<INT_PTR>(opened) > 32) return;
     const auto message = std::wstring(L"在已打开的浏览器中访问以下地址\n\n") + url;
     MessageBoxW(nullptr, message.c_str(), L"agentsim", MB_OK | MB_ICONINFORMATION);
 }
@@ -1518,7 +1521,7 @@ int main(int argc, char** argv) {
     // argument: <乱码>"）。
     bool serve = false;
     bool serveTicksGiven = false;
-    int servePort = 8080;
+    int servePort = kDefaultServePort;
     bool noOpen = false;  // R8-A：--no-open 抑制自动拉起浏览器
     std::vector<char*> argvStore;
     {
@@ -1584,17 +1587,13 @@ int main(int argc, char** argv) {
         return agentsim::app::runResearchEpisode(opts.config, opts.audit, std::cin, std::cout);
     }
 
-    // R8-A：无参双击 = 实时服务模式（此前走批跑 maxTicks=1000 即退，被用户判为"秒退"）。
-    // 任何显式参数（含 --help/--version）保持既有批跑语义；--no-open 仅抑制浏览器拉起。
-    // R10：单实例——已有实例在跑时，第二个双击不再起第二个服务（端口回退只会堆进程），
-    // 而是：向已有实例的 HTTP 打一个 /state 探活，活着就拉起浏览器指向它并退出。
+    // 无参启动先寻找同版本的实时服务，再决定是否创建新世界。
     if (argc == 1) {
-        // 探活 8080..8090（R10：单 WSAStartup + 非阻塞 connect/300ms select 超时。
-        // 同步 connect 在防火墙静默丢 SYN 的环境里每个端口要 20s+，11 个端口 = 数分钟假死。）
+        // 非阻塞探测覆盖服务可能使用的全部端口。
         {
             WSADATA wsa;
             bool wsaOk = (WSAStartup(MAKEWORD(2, 2), &wsa) == 0);
-            for (int p = 8080; wsaOk && p <= 8090; ++p) {
+            for (int p = kDefaultServePort; wsaOk && p < kDefaultServePort + HttpServer::kBindAttempts; ++p) {
                 SOCKET sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
                 if (sock == INVALID_SOCKET) break;
                 // 非阻塞 connect + select 300ms
@@ -1643,11 +1642,7 @@ int main(int argc, char** argv) {
             if (wsaOk) WSACleanup();
         }
         serve = true;
-        servePort = 8080;
-        // R10 发布形态：无参双击 = 单窗口（浏览器 UI）。
-        // FreeConsole 尝试已回退（疑似导致 spawn 场景下 HTTP 线程/stdio 初始化
-        // 失常——服务端口不监听、日志零输出）。单窗口体验改为文档指引：
-        // 用户手动最小化控制台即可。诚实记录 LOG。
+        servePort = kDefaultServePort;
     }
     if (serve) return serveMode(opts, catalog, servePort, serveTicksGiven,
                                 !noOpen, argc == 1 && !noOpen);
