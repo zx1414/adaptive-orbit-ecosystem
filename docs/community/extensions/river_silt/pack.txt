@@ -1,0 +1,4 @@
+name = river_silt
+version = 1.0
+author = agentsim
+desc = Warm silt colors with high-contrast organ markers

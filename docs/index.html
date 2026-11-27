@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="下载 agentsim 的生态机制 Mod、决策模型和材质包，分享你的生态实验与扩展。">
+  <title>社区扩展 · agentsim</title>
+  <link rel="stylesheet" href="community/site.css">
+  <script src="community/site.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#extensions">跳到扩展目录</a>
+  <header class="top">
+    <div class="shell top-inner">
+      <a class="brand" href="./"><span class="mark" aria-hidden="true"></span>agentsim<span>社区扩展</span></a>
+      <nav aria-label="网站导航">
+        <a href="#extensions">扩展库</a>
+        <a href="#contribute">参与贡献</a>
+        <a href="https://github.com/zx1414/adaptive-orbit-ecosystem/releases/latest">下载游戏</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="shell">
+    <section class="hero" aria-labelledby="title">
+      <div>
+        <h1 id="title">生态扩展库</h1>
+        <p>为你的 agentsim 世界加入新场景、决策模型或地图配色。也欢迎分享实验发现，一起改进生态规则。</p>
+        <div class="actions">
+          <a class="button primary" href="#extensions">浏览扩展</a>
+          <a class="button secondary" href="#contribute">分享我的想法</a>
+        </div>
+      </div>
+      <figure>
+        <img src="community/river-silt-preview.png" alt="河床淤泥材质下的生态地图，核与不同形状的器官围绕绿色蓝细菌和橙色孢子分布" width="1120" height="560">
+        <figcaption><span>agentsim 实机画面</span><a href="#river_silt">河床淤泥材质</a></figcaption>
+      </figure>
+    </section>
+
+    <section id="extensions" aria-labelledby="extensions-title">
+      <div class="section-head">
+        <h2 id="extensions-title">可下载扩展</h2>
+        <div class="filters" role="group" aria-label="按类别筛选" hidden>
+          <button type="button" data-kind="all" aria-pressed="true">全部</button>
+          <button type="button" data-kind="mechanism" aria-pressed="false">机制 Mod</button>
+          <button type="button" data-kind="decision" aria-pressed="false">决策模型</button>
+          <button type="button" data-kind="material" aria-pressed="false">材质包</button>
+        </div>
+      </div>
+      <p class="sr-only" id="result" role="status"></p>
+      <div class="cards" id="catalog"></div>
+      <p id="loading">正在读取扩展目录…</p>
+      <noscript><p><a href="https://github.com/zx1414/adaptive-orbit-ecosystem/tree/main/docs/community/extensions">在 GitHub 浏览扩展文件</a></p></noscript>
+      <details class="install-help">
+        <summary>安装目录在哪里？</summary>
+        <div>
+          <p>ZIP 版使用解压后的游戏目录。单文件版默认用 <code>%LOCALAPPDATA%\agentsim\portable\3.2.1\</code>，该位置无法写入时使用 EXE 旁的 <code>.agentsim\3.2.1\</code>。</p>
+          <p>按扩展卡片的说明放好文件，目录缺失时可新建。先保存进度并关闭游戏窗口，再从任务管理器结束当前游戏的后台 <code>agentsim.exe</code>，然后重新启动游戏以发现新扩展。</p>
+        </div>
+      </details>
+    </section>
+
+    <section class="contribute" id="contribute" aria-labelledby="contribute-title">
+      <div>
+        <h2 id="contribute-title">参与贡献</h2>
+        <p>有规则构想、种群观察、可复现的对照实验，或想分享自己做的扩展，都可以参与。</p>
+      </div>
+      <div class="contribution-grid">
+        <article>
+          <h3>交流想法</h3>
+          <p>分享生态现象、机制设想或算法实验。在讨论里补充种子、场景和观察结果，方便别人复现。</p>
+          <a class="button secondary" href="https://github.com/zx1414/adaptive-orbit-ecosystem/discussions">进入 GitHub 讨论</a>
+        </article>
+        <article>
+          <h3>提交作品</h3>
+          <p>提交 Mod、决策模型、材质包或研究代码。准备好版本、文件链接、安装方法和授权说明。</p>
+          <a class="button secondary" href="https://github.com/zx1414/adaptive-orbit-ecosystem/issues/new?template=extension.yml">填写扩展投稿</a>
+          <a class="text-link" href="https://github.com/zx1414/adaptive-orbit-ecosystem/blob/main/CONTRIBUTING.md">查看贡献指南</a>
+        </article>
+      </div>
+    </section>
+  </main>
+  <footer class="shell footer">
+    <a href="https://github.com/zx1414/adaptive-orbit-ecosystem">agentsim 源码</a>
+    <a href="https://github.com/zx1414/adaptive-orbit-ecosystem/blob/main/docs/ARCHITECTURE.md">游戏架构</a>
+    <a href="https://github.com/zx1414/adaptive-orbit-ecosystem/blob/main/LICENSE">MIT 许可证</a>
+  </footer>
+</body>
+</html>

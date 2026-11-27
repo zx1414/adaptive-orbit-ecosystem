@@ -36,6 +36,8 @@
 
 ## 扩展与实验
 
+[社区扩展库](https://zx1414.github.io/adaptive-orbit-ecosystem/) 提供机制 Mod、决策模型和材质包下载。欢迎分享想法、对照实验或自己的扩展。 [贡献指南](CONTRIBUTING.md)
+
 | 想做什么 | 入口 |
 | --- | --- |
 | 增加场景或改变养分运输 | [生态 Mod 开发](docs/MODS.md) |

@@ -1,0 +1,35 @@
+name: 投稿社区扩展
+description: 分享机制 Mod、决策算法或材质包
+title: "[扩展投稿] "
+body:
+  - type: dropdown
+    id: kind
+    attributes:
+      label: 扩展类别
+      options:
+        - 机制 Mod
+        - 决策模型或研究算法
+        - 材质包
+    validations:
+      required: true
+  - type: input
+    id: game-version
+    attributes:
+      label: 已试用的游戏版本
+      placeholder: "例如 3.2.1"
+    validations:
+      required: true
+  - type: textarea
+    id: submission
+    attributes:
+      label: 作品介绍与下载
+      description: 写下扩展名称、用途、版本和作者。附上源码、发布链接或文件，并说明授权方式。
+    validations:
+      required: true
+  - type: textarea
+    id: usage
+    attributes:
+      label: 安装或复现方法
+      description: 说明文件放在哪里、如何启用。实验结果可附种子、场景及观察到的变化。
+    validations:
+      required: true

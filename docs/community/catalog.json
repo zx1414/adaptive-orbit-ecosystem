@@ -1,0 +1,41 @@
+[
+  {
+    "id": "shallow_water",
+    "kind": "mechanism",
+    "title": "浅水养分扩散",
+    "summary": "初始养分为标准生态的 1.5 倍，每帧向相邻区扩散 8% 的可吸收养分。用同一种子与标准生态对照，观察局部资源如何重新分布。",
+    "author": "agentsim",
+    "version": "1.0",
+    "gameVersion": "3.2.1",
+    "license": "MIT",
+    "download": "community/extensions/shallow_water.txt",
+    "install": "放入 mods/，重启游戏，在「生态 Mod」选择「浅水养分扩散」。",
+    "source": "https://github.com/zx1414/adaptive-orbit-ecosystem/blob/main/docs/community/extensions/shallow_water.txt"
+  },
+  {
+    "id": "nearest_food",
+    "kind": "decision",
+    "title": "最近食物导航",
+    "summary": "示例线性模型根据局部感知预测移动方向。可与默认觅食策略比较，观察两种决策在同一场景下的种群变化。",
+    "author": "agentsim",
+    "version": "1.0",
+    "gameVersion": "3.2.1",
+    "license": "MIT",
+    "download": "community/extensions/nearest_food.txt",
+    "install": "放入 models/，重启游戏，在「决策策略」选择 nearest_food。",
+    "source": "https://github.com/zx1414/adaptive-orbit-ecosystem/blob/main/docs/community/extensions/nearest_food.txt"
+  },
+  {
+    "id": "river_silt",
+    "kind": "material",
+    "title": "河床淤泥",
+    "summary": "暖灰地图底色，搭配墨绿资源球、雾蓝侦察球和陶橙护盾球。",
+    "author": "agentsim",
+    "version": "1.0",
+    "gameVersion": "3.2.1",
+    "license": "MIT",
+    "download": "community/extensions/river_silt.zip",
+    "install": "解压到 resourcepacks/，保留 river_silt/ 子目录，重启后在「材质包」勾选 river_silt。",
+    "source": "https://github.com/zx1414/adaptive-orbit-ecosystem/tree/main/docs/community/extensions/river_silt"
+  }
+]

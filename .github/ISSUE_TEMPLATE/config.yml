@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 分享想法和实验结果
+    url: https://github.com/zx1414/adaptive-orbit-ecosystem/discussions
+    about: 讨论生态机理、算法表现、实验设计和未来改进。
