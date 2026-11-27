@@ -46,12 +46,16 @@ figure { padding: .5rem; border: 1px solid #cbd3c4; border-radius: var(--round);
 figure img { display: block; width: 100%; height: auto; border-radius: 8px; background: #e0ddc7; }
 figcaption { display: flex; justify-content: space-between; gap: .5rem; padding: .45rem .3rem .1rem; color: var(--muted); font-size: .875rem; }
 .section-head { display: flex; align-items: center; justify-content: space-between; gap: .8rem 1.2rem; flex-wrap: wrap; margin-bottom: 1.1rem; }
+.players { margin-bottom: 3rem; }
+.players .section-head { margin-bottom: .45rem; }
+.section-description { margin-bottom: .9rem; }
+.player-status { padding: .85rem 1rem; border: 1px solid var(--line); border-radius: 9px; background: var(--paper); }
 .filters { display: flex; gap: .3rem; flex-wrap: wrap; padding: .25rem; border: 1px solid var(--line); border-radius: 9px; background: var(--paper); }
 .filters button { min-height: 2.15rem; padding: .25rem .7rem; border: 1px solid transparent; border-radius: 6px; background: none; color: var(--muted); cursor: pointer; font: inherit; font-size: .875rem; }
 .filters button:hover { border-color: var(--line); }
 .filters button[aria-pressed="true"] { color: var(--green); background: var(--green-light); border-color: #c6d5c4; font-weight: 700; }
 .cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; }
-.card { min-width: 0; display: flex; flex-direction: column; gap: .7rem; border: 1px solid var(--line); border-radius: var(--round); background: var(--paper); padding: 1.25rem; scroll-margin-top: .75rem; }
+.card { min-width: 0; display: flex; flex-direction: column; gap: .7rem; border: 1px solid var(--line); border-radius: var(--round); background: var(--paper); padding: 1.25rem; scroll-margin-top: .75rem; overflow-wrap: anywhere; }
 .kind { align-self: flex-start; color: var(--green); font-size: .875rem; font-weight: 650; }
 .card[data-kind="decision"] .kind { color: #3d5670; }
 .card[data-kind="material"] .kind { color: #865131; }
@@ -67,7 +71,6 @@ code { overflow-wrap: anywhere; background: #edf0e5; padding: .07em .3em; border
 .contribute { margin-top: 3rem; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 1rem 2rem; padding: clamp(1rem, 4vw, 2rem); border-radius: var(--round); background: #eaf0e6; }
 .contribute p { margin-block: .65rem .9rem; }
 .contribution-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
-.contribution-grid .text-link { display: inline-block; margin: .65rem 0 0 .55rem; }
 .footer { display: flex; flex-wrap: wrap; gap: .5rem 1.25rem; padding-block: 2rem; font-size: .875rem; }
 .sr-only { clip-path: inset(50%); width: 1px; height: 1px; overflow: hidden; position: absolute; white-space: nowrap; }
 @media (max-width: 54rem) {

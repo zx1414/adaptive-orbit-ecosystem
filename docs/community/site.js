@@ -1,4 +1,5 @@
 const repository = "https://github.com/zx1414/adaptive-orbit-ecosystem";
+const playerFeed = "https://api.github.com/repos/zx1414/adaptive-orbit-ecosystem/issues?state=open&labels=community-extension&sort=created&direction=desc&per_page=12";
 const types = {
   mechanism: { label: "机制 Mod", guide: "MODS.md" },
   decision: { label: "决策模型", guide: "RESEARCH.md" },
@@ -59,6 +60,69 @@ function renderCard(entry) {
   return article;
 }
 
+function playerFields(body) {
+  const sections = (body ?? "").split(/^### ([^\r\n]+)\r?\n/m);
+  const fields = new Map();
+  for (let i = 1; i < sections.length; i += 2) {
+    const label = sections[i].trim();
+    if (!fields.has(label)) fields.set(label, sections[i + 1].trim());
+  }
+  return fields;
+}
+
+function publicDownload(field) {
+  for (const match of (field ?? "").matchAll(/https:\/\/[^\s<>()[\]]+/gi)) {
+    try {
+      const url = new URL(match[0]);
+      if (!url.username && !url.password) return url;
+    } catch {
+      // The work's original post remains available when a link is malformed.
+    }
+  }
+  return null;
+}
+
+function renderPlayerCard(issue) {
+  const fields = playerFields(issue.body);
+  const title = issue.title.replace(/^\[玩家扩展\]\s*/, "").trim() || `作品 #${issue.number}`;
+  const category = fields.get("扩展类别") || "玩家扩展";
+  const author = issue.user?.login ?? "GitHub 玩家";
+  const version = fields.get("已试用的游戏版本");
+  const summary = fields.get("作品介绍")?.replace(/\s+/g, " ");
+  const article = node("article", null, "card");
+  article.append(node("span", category, "kind"), node("h3", title));
+  if (summary) article.append(node("p", summary.length > 200 ? `${summary.slice(0, 200)}…` : summary));
+  article.append(node("p", version ? `${author} · 作者试用版本 ${version}` : author, "meta"));
+
+  const actions = node("div", null, "card-actions");
+  const downloadUrl = publicDownload(fields.get("下载地址"));
+  if (downloadUrl) {
+    const download = link("下载", downloadUrl, "button primary");
+    download.setAttribute("aria-label", `下载${title}`);
+    download.rel = "ugc nofollow";
+    actions.append(download);
+  }
+  actions.append(link("查看发布与安装说明", `${repository}/issues/${issue.number}`, "text-link"));
+  article.append(actions);
+  return article;
+}
+
+async function loadPlayers() {
+  const cards = document.querySelector("#player-cards");
+  const status = document.querySelector("#player-status");
+  status.textContent = "正在读取最新作品…";
+  try {
+    const response = await fetch(playerFeed, { cache: "no-store" });
+    if (!response.ok) throw new Error("Player releases request failed");
+    const issues = (await response.json()).filter((issue) => !issue.pull_request);
+    cards.append(...issues.map(renderPlayerCard));
+    status.hidden = issues.length > 0;
+    status.textContent = "暂时还没有玩家作品。";
+  } catch {
+    status.textContent = "暂时无法加载玩家作品，请使用上方的 GitHub 列表。";
+  }
+}
+
 function filter(kind) {
   let count = 0;
   for (const card of catalog.children) {
@@ -103,3 +167,4 @@ async function loadCatalog() {
 }
 
 loadCatalog();
+loadPlayers();

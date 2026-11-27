@@ -1,7 +1,11 @@
-name: 投稿社区扩展
-description: 分享机制 Mod、决策算法或材质包
-title: "[扩展投稿] "
+name: 发布社区扩展
+description: 自助公开发布机制 Mod、决策算法或材质包
+title: "[玩家扩展] "
+labels: [community-extension]
 body:
+  - type: markdown
+    attributes:
+      value: 在标题写上作品名称。提交后，作品和下载地址会出现在扩展库的玩家发布区。
   - type: dropdown
     id: kind
     attributes:
@@ -20,10 +24,17 @@ body:
     validations:
       required: true
   - type: textarea
+    id: download
+    attributes:
+      label: 下载地址
+      description: 粘贴无需登录即可打开的 HTTPS 下载链接，或把 ZIP 文件拖到这里上传。
+    validations:
+      required: true
+  - type: textarea
     id: submission
     attributes:
-      label: 作品介绍与下载
-      description: 写下扩展名称、用途、版本和作者。附上源码、发布链接或文件，并说明授权方式。
+      label: 作品介绍
+      description: 写下作品用途、扩展版本和授权方式。有源码的话可以附上链接。
     validations:
       required: true
   - type: textarea
